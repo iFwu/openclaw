@@ -197,7 +197,7 @@ Provider and channel execution paths must use the active runtime config snapshot
     media-understanding helper is the narrower provider-owned image/media lane.
 
     <Warning>
-    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`. Auth-profile selection for `completeStructured(...)` requires `plugins.entries.<id>.llm.allowProfileOverride: true`. The same host-owned trust gate applies across runtime LLM surfaces.
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`. Auth-profile selection through either the `profile` field or a `provider/model@profile` model ref requires `plugins.entries.<id>.llm.allowProfileOverride: true`. The same host-owned trust gate applies across runtime LLM surfaces.
     </Warning>
 
   </Accordion>

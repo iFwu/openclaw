@@ -215,7 +215,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete` and `api.runtime.llm.completeStructured`.
 - `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin runtime LLM overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` / `completeStructured` against a non-default agent id.
-- `plugins.entries.<id>.llm.allowProfileOverride`: explicitly trust this plugin to select a non-default auth profile for `api.runtime.llm.completeStructured`.
+- `plugins.entries.<id>.llm.allowProfileOverride`: explicitly trust this plugin to select a non-default auth profile for runtime LLM completions through either a `profile` field or a `provider/model@profile` model ref.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
 
