@@ -159,6 +159,7 @@ type CoreCodingToolsOptions = {
   abortSignal?: AbortSignal;
   attachmentReadRoot?: string;
   codingRoot: string;
+  workspaceRoot?: string;
   containmentRoot: string;
   includeBaseCodingTools: boolean;
   shellTools: "disabled" | "patch-only" | "full";
@@ -344,6 +345,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       for (const createTool of [createHostWorkspaceEditTool, createHostWorkspaceWriteTool]) {
         const tool = createTool(options.codingRoot, {
           containmentRoot: options.containmentRoot,
+          protectedMemoryRoot: options.workspaceRoot ?? options.codingRoot,
           workspaceOnly: options.workspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
           abortSignal: options.abortSignal,

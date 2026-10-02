@@ -318,6 +318,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Per-agent override for workspace bootstrap-file injection in the embedded runtime. Omit to inherit agents.defaults.contextInjection. Does not control CLI-backed prompt preparation.",
   "agents.entries.*.cwd":
     "Working directory for this agent's reply runs. Overrides agents.defaults.cwd but not session-spawned cwd; bootstrap and memory files stay in workspace. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
+  "agents.entries.*.bootstrapMemoryInGroups":
+    "Per-agent opt-in to root MEMORY.md bootstrap in group and channel sessions. Omit to inherit agents.defaults.bootstrapMemoryInGroups. Enable only for trusted personal groups; cron and subagent sessions still exclude root memory.",
   "agents.entries.*.bootstrapMaxChars":
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
   "agents.entries.*.bootstrapTotalMaxChars":

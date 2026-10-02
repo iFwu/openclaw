@@ -13,6 +13,20 @@ const expected = JSON.parse(process.argv[1]);
 const syncRoot = process.cwd();
 const cwd = process.argv[2] ?? syncRoot;
 let temporary;
+let activePhase;
+function finishPhase(status = "completed") {
+  if (!activePhase) return;
+  process.stderr.write("OPENCLAW_SOURCE_PHASE " + JSON.stringify({
+    name: activePhase.name, status, elapsedMs: Math.round(performance.now() - activePhase.started),
+  }) + "\n");
+  activePhase = undefined;
+}
+function phase(name) {
+  if (!expected.publicBaseCacheRoot) return;
+  finishPhase();
+  activePhase = { name, started: performance.now() };
+  process.stderr.write("OPENCLAW_SOURCE_PHASE " + JSON.stringify({ name, status: "started", elapsedMs: 0 }) + "\n");
+}
 function fail(message) { throw new Error(message); }
 function stat(file) {
   try { return fs.lstatSync(file); } catch (error) {
@@ -74,7 +88,36 @@ try {
   // Native cleanup owns only syncRoot. Source application and the payload share
   // the prepared workspace, so ignored runtime never enters the native delete walk.
   process.chdir(cwd);
-  temporary = fs.mkdtempSync(path.join(cwd, ".openclaw-source-"));
+  // A killed receiver must not leave staging inside the next job's source inventory.
+  // The sibling stays on the workspace filesystem so publishing .git remains a rename.
+  const temporaryParent = path.dirname(cwd);
+  let parentInfo = stat(temporaryParent);
+  if (!parentInfo?.isDirectory() || temporaryParent === cwd || parentInfo.dev !== fs.statSync(cwd).dev)
+    fail("source staging requires a separate parent on the workspace filesystem");
+  if (expected.ownedStagingParent !== undefined) {
+    if (process.platform !== "linux" || expected.ownedStagingParent !== temporaryParent ||
+        fs.realpathSync(temporaryParent) !== temporaryParent || parentInfo.uid !== process.getuid())
+      fail("source staging parent does not match the owned SSH lane");
+    const parent = fs.openSync(temporaryParent,
+      fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+    try {
+      const opened = fs.fstatSync(parent);
+      if (opened.dev !== parentInfo.dev || opened.ino !== parentInfo.ino || opened.uid !== process.getuid())
+        fail("source staging parent changed before private preparation");
+      fs.fchmodSync(parent, 0o700);
+      parentInfo = stat(temporaryParent);
+      if (!parentInfo?.isDirectory() || parentInfo.dev !== opened.dev || parentInfo.ino !== opened.ino ||
+          (parentInfo.mode & 0o777) !== 0o700)
+        fail("source staging parent changed during private preparation");
+    } finally { fs.closeSync(parent); }
+  }
+  if (
+    process.platform !== "win32" &&
+    (parentInfo.mode & 0o022) &&
+    !(parentInfo.mode & 0o1000)
+  )
+    fail("source staging parent allows shared writers without sticky protection");
+  temporary = fs.mkdtempSync(path.join(temporaryParent, ".openclaw-source-"));
   const bundle = path.join(temporary, "source.bundle");
   fs.copyFileSync(capsule, bundle);
   if (hashFile(bundle, "sha256") !== expected.digest) fail("source capsule changed during import");
@@ -85,9 +128,18 @@ try {
   delete env.GIT_OBJECT_DIRECTORY;
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
   delete env.GIT_SHALLOW_FILE;
+  if (expected.publicBaseCacheRoot) {
+    for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+    Object.assign(env, {
+      GIT_DIR: gitDir, GIT_WORK_TREE: cwd, GIT_INDEX_FILE: path.join(gitDir, "index"),
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0",
+      GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false", GIT_OPTIONAL_LOCKS: "0",
+      GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "https:file",
+    });
+  }
   function git(args, options = {}) {
-    const { encoding, phase = args[0], ...spawnOptions } = options;
-    const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args],
+    const { encoding, phase = args[0], config = [], ...spawnOptions } = options;
+    const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...config, ...args],
       { cwd, env, maxBuffer: 64 * 1024 * 1024, ...spawnOptions });
     if (result.status !== 0) fail("source Git operation failed: " + JSON.stringify(gitFailure(phase, result)));
     if (encoding === "buffer") return result.stdout;
@@ -95,12 +147,142 @@ try {
     if (!isUtf8(result.stdout)) fail("unsupported non-UTF-8 Git metadata");
     return result.stdout.toString("utf8");
   }
-  git(["init", "-q"]);
-  git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"],
+  const canonical = "https://github.com/openclaw/openclaw.git";
+  function publicGit(directory, args) {
+    const publicEnv = { ...env, GIT_DIR: directory };
+    delete publicEnv.GIT_WORK_TREE;
+    delete publicEnv.GIT_INDEX_FILE;
+    const previousUmask = process.umask(0o077);
+    try {
+      return git(args, { env: publicEnv, config: [
+        "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "fetch.writeCommitGraph=false",
+        "-c", "pack.writeReverseIndex=false",
+      ] });
+    } finally {
+      process.umask(previousUmask);
+    }
+  }
+  function publicDirectory(file) {
+    const info = stat(file);
+    if (!info?.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o022))
+      fail("public base cache requires an owned directory without symlinks or shared writers");
+  }
+  function copyPublicFile(source, destination) {
+    const before = stat(source);
+    if (!before?.isFile() || before.nlink !== 1 || before.uid !== process.getuid() || (before.mode & 0o022))
+      fail("public base cache requires owned regular files without symlinks, hardlinks, or shared writers");
+    const input = fs.openSync(source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    let output;
+    try {
+      const opened = fs.fstatSync(input);
+      if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino)
+        fail("public base cache changed while opening a file");
+      output = fs.openSync(destination, "wx", 0o600);
+      const buffer = Buffer.alloc(65536);
+      let count;
+      while ((count = fs.readSync(input, buffer)) > 0) {
+        let written = 0;
+        while (written < count) written += fs.writeSync(output, buffer, written, count - written);
+      }
+      const after = fs.fstatSync(input);
+      if (after.nlink !== 1 || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs)
+        fail("public base cache changed while copying a file");
+      fs.fchmodSync(output, 0o444);
+    } finally {
+      fs.closeSync(input);
+      if (output !== undefined) fs.closeSync(output);
+    }
+  }
+  function copyPublicObjects(source, destination, relative = "objects") {
+    publicDirectory(source);
+    if (!stat(destination)) fs.mkdirSync(destination, { mode: 0o700 });
+    for (const name of fs.readdirSync(source)) {
+      const entry = relative + "/" + name;
+      const from = path.join(source, name), to = path.join(destination, name);
+      if (/^objects\/(info|pack|[a-f0-9]{2})$/.test(entry)) {
+        copyPublicObjects(from, to, entry);
+      } else if (/^objects\/[a-f0-9]{2}\/[a-f0-9]{38}$/.test(entry) ||
+          /^objects\/pack\/pack-[a-f0-9]{40}\.(pack|idx)$/.test(entry)) {
+        copyPublicFile(from, to);
+      } else {
+        fail("public base cache contains unsupported object metadata: " + entry);
+      }
+    }
+  }
+  function copyPublicStore(source, destination, published) {
+    publicDirectory(source);
+    if (published && fs.readdirSync(source).some(name => name !== "objects" && name !== "shallow"))
+      fail("public base cache contains unexpected metadata");
+    copyPublicObjects(path.join(source, "objects"), path.join(destination, "objects"));
+    if (stat(path.join(source, "shallow"))) copyPublicFile(path.join(source, "shallow"), path.join(destination, "shallow"));
+  }
+  function verifyPublicBase(directory) {
+    phase("public-base.verify");
+    if (publicGit(directory, ["cat-file", "-t", expected.baseSha]).trim() !== "commit")
+      fail("public base cache does not contain the requested commit");
+    const header = publicGit(directory, ["cat-file", "commit", expected.baseSha]).split("\n\n", 1)[0];
+    const parents = new Set(header.split("\n").filter(line => line.startsWith("parent ")).map(line => line.slice(7)));
+    const shallow = stat(path.join(directory, "shallow"))
+      ? fs.readFileSync(path.join(directory, "shallow"), "utf8").trim().split("\n") : [];
+    if (shallow.some(oid => !parents.has(oid))) fail("public base cache has an invalid shallow boundary");
+    const commits = publicGit(directory, ["rev-list", expected.baseSha]).trim().split("\n").sort();
+    const expectedCommits = [...new Set([expected.baseSha, ...parents])].sort();
+    if (JSON.stringify(commits) !== JSON.stringify(expectedCommits))
+      fail("public base cache does not match the requested depth-2 history");
+    if (publicGit(directory, ["fsck", "--full", "--strict", "--no-reflogs", "--unreachable", expected.baseSha]).trim())
+      fail("public base cache contains unrelated objects");
+  }
+  function acquirePublicBase() {
+    if (process.platform !== "linux" || !path.isAbsolute(expected.publicBaseCacheRoot) ||
+        !/^[a-f0-9]{40}$/.test(expected.baseSha)) fail("invalid trusted SSH public base cache request");
+    const cacheRoot = path.resolve(expected.publicBaseCacheRoot);
+    for (const workspace of [syncRoot, cwd]) {
+      if (cacheRoot === workspace || cacheRoot.startsWith(workspace + path.sep) || workspace.startsWith(cacheRoot + path.sep))
+        fail("public base cache and source workspaces must not overlap");
+    }
+    const parent = path.join(cacheRoot, createHash("sha256").update(canonical).digest("hex"), "depth-2");
+    let ancestor = path.parse(parent).root;
+    for (const segment of parent.slice(ancestor.length).split(path.sep)) {
+      ancestor = path.join(ancestor, segment);
+      if (!stat(ancestor)) {
+        try { fs.mkdirSync(ancestor, { mode: 0o700 }); } catch (error) { if (error.code !== "EEXIST") throw error; }
+      }
+      if (!stat(ancestor)?.isDirectory()) fail("public base cache path contains a symlink or non-directory");
+      if (ancestor === cacheRoot || ancestor.startsWith(cacheRoot + path.sep)) publicDirectory(ancestor);
+    }
+    const seed = path.join(parent, expected.baseSha);
+    if (!stat(seed)) {
+      const building = fs.mkdtempSync(path.join(parent, "." + expected.baseSha + "-"));
+      try {
+        const fetched = path.join(building, "git");
+        publicGit(fetched, ["init", "-q", "--bare", "--template="]);
+        phase("public-base.fetch");
+        publicGit(fetched, ["fetch", "-q", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+          "--depth=2", canonical, expected.baseSha + ":refs/heads/base"]);
+        verifyPublicBase(fetched);
+        phase("public-base.publish");
+        const ready = path.join(building, "seed");
+        fs.mkdirSync(ready, { mode: 0o700 });
+        copyPublicStore(fetched, ready, false);
+        try { fs.renameSync(ready, seed); } catch (error) {
+          if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
+          // A concurrent builder published first. Its complete seed is verified below.
+        }
+      } finally { fs.rmSync(building, { recursive: true, force: true }); }
+    }
+    phase("public-base.copy");
+    copyPublicStore(seed, gitDir, true);
+    verifyPublicBase(gitDir);
+    git(["update-ref", "refs/remotes/origin/main", expected.baseSha]);
+  }
+  git(["init", "-q", ...(expected.publicBaseCacheRoot ? ["--template="] : [])]);
+  git(["remote", "add", "origin", canonical]);
+  if (expected.publicBaseCacheRoot) acquirePublicBase();
+  else git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"],
     { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
+  phase("source.materialize");
   git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
     { phase: "capsule-fetch" });
   for (const [ref, value] of [
@@ -211,7 +393,7 @@ try {
   fs.rmSync(capsule);
   for (;;) {
     const extras = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0")
-      .filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
+      .filter(Boolean);
     if (extras.length === 0) break;
     // Settle ancestor ignore rules first: removing a negated rule can protect
     // descendant rules already listed, while removing an exclusion can reveal more.
@@ -232,6 +414,7 @@ try {
   for (const file of deleted) {
     if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
   }
+  phase("source.verify");
   // Verify filesystem bytes, kind, and executable bit independently of either index.
   function verify({ file, mode, oid }) {
     if (!reachable(file)) fail("source parent mismatch: " + file);
@@ -277,11 +460,11 @@ try {
       ...(expected.alias ? [[expected.alias, expected.baseSha]] : []),
     ]) if (git(["rev-parse", ref]).trim() !== value) fail("source comparison ref mismatch: " + ref);
     const extras = git(["ls-files", "--others", "--exclude-standard", "-z"])
-      .split("\0").filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
+      .split("\0").filter(Boolean);
     if (extras.length) fail("unexpected source entry: " + extras[0]);
   }
   verifySource();
-  if (selected.has("pnpm-lock.yaml")) {
+  if (expected.install !== "none" && selected.has("pnpm-lock.yaml")) {
     const installer = ".github/actions/setup-node-env/install-dependencies.sh";
     if (!selected.has(installer) || !stat(installer)?.isFile())
       fail("selected source lacks a regular dependency install owner");
@@ -296,8 +479,20 @@ try {
     if (install.status !== 0) fail("selected-source frozen install failed; payload was not run");
     verifySource();
   }
+  if (expected.command) {
+    phase("payload");
+    const result = spawnSync(expected.command[0], expected.command.slice(1), {
+      cwd, env: process.env, stdio: "inherit",
+    });
+    finishPhase(result.status === 0 ? "completed" : "failed");
+    phase("source.verify");
+    verifySource();
+    process.exitCode = result.status ?? 1;
+  }
+  finishPhase();
   process.stderr.write("[crabbox] verified source=" + expected.sourceSha + " tree=" + expected.tree + " carrier=" + expected.carrier + "\n");
 } catch (error) {
+  finishPhase("failed");
   process.stderr.write("[crabbox] source verification failed: " + error.message + "\n");
   process.exitCode = 2;
 } finally {
@@ -309,10 +504,22 @@ export function remoteSourceBootstrap(
   capsule: CrabboxSourceCapsule,
   alias: string,
   testboxWorkspace: boolean,
+  options: {
+    install?: "default" | "none";
+    command?: string[];
+    publicBaseCacheRoot?: string;
+    ownedStagingParent?: string;
+  } = {},
 ) {
+  if (testboxWorkspace && options.ownedStagingParent !== undefined) {
+    throw new Error("private staging preparation is limited to owned SSH lanes");
+  }
+  if (testboxWorkspace && options.publicBaseCacheRoot) {
+    throw new Error("public base caching is limited to trusted SSH remote checks");
+  }
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const { sourceSha, baseSha, tree, carrier, digest } = capsule;
-  const command = `node -e ${quote(receiver)} ${quote(JSON.stringify({ sourceSha, baseSha, tree, carrier, digest, alias }))}`;
+  const command = `node -e ${quote(receiver)} ${quote(JSON.stringify({ sourceSha, baseSha, tree, carrier, digest, alias, ...options }))}`;
   if (!testboxWorkspace) {
     return command;
   }

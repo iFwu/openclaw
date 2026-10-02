@@ -26,6 +26,7 @@ import {
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
   filterBootstrapFilesForSession,
+  type BootstrapSessionContext,
   getWorkspaceFileSourceRelativePath,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
@@ -181,11 +182,7 @@ async function isWorkspaceSetupCompletedForContext(
 
 function filterBootstrapFilesAfterHooks(params: {
   files: WorkspaceBootstrapFile[];
-  session: {
-    sessionKey?: string;
-    chatType?: ChatType;
-    workspaceDir: string;
-  };
+  session: BootstrapSessionContext;
   protectedFiles?: WorkspaceBootstrapFile[];
 }): WorkspaceBootstrapFile[] {
   const sessionFiltered = filterBootstrapFilesForSession(params.files, params.session);
@@ -314,10 +311,16 @@ async function resolveBootstrapFiles(
 ): Promise<WorkspaceBootstrapFile[]> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   const sessionKey = params.sessionKey ?? params.sessionId;
+  const agentConfig =
+    params.config && params.agentId ? resolveAgentConfig(params.config, params.agentId) : undefined;
   const session = {
     sessionKey,
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
+    bootstrapMemoryInGroups:
+      agentConfig?.bootstrapMemoryInGroups ??
+      params.config?.agents?.defaults?.bootstrapMemoryInGroups ??
+      false,
   };
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
     params.workspaceDir,

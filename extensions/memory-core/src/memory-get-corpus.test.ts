@@ -8,6 +8,7 @@ import {
   resetMemoryToolMockState,
   setMemoryReadFileImpl,
 } from "./memory-tool-manager.test-mocks.js";
+import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 import { createMemoryGetTool } from "./tools.js";
 import { asOpenClawConfig, createMemoryGetToolOrThrow } from "./tools.test-helpers.js";
 
@@ -316,7 +317,7 @@ describe("memory_get corpus outcomes", () => {
       path: lookup,
       corpus: "all",
     });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
 
     await expect(pending).resolves.toMatchObject({
       details: {
@@ -326,7 +327,7 @@ describe("memory_get corpus outcomes", () => {
           {
             corpus: "wiki",
             outcome: "unavailable",
-            error: "memory_get timed out after 30s",
+            error: `memory_get timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
           },
         ],
       },

@@ -211,7 +211,9 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
         agentId: sessionAgentId,
       }) !== scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId })
     ) {
-      throw new Error("sessionId does not belong to sessionKey");
+      throw new Error(
+        "sessionId does not belong to sessionKey. Do not retry the same arguments. For recent history omit sessionId/messageId; to anchor an old message, search first and use the returned messageId/sessionId pair.",
+      );
     }
   }
   const sessionId = requestedSessionId ?? entry?.sessionId;

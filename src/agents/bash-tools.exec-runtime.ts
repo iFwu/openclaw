@@ -307,8 +307,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${status} (${session.id}, ${exitLabel}) :: ${output}`
+    : `Exec ${status} (${session.id}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);

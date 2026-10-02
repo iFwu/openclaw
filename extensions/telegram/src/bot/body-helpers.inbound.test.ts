@@ -1,12 +1,137 @@
-import type { Message, MessageEntity } from "grammy/types";
+import type { Message, MessageEntity, RichText } from "grammy/types";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { describe, expect, it } from "vitest";
-import { getTelegramTextParts, joinTelegramTextParts } from "./body-helpers.js";
+import {
+  getTelegramTextParts,
+  joinTelegramTextParts,
+  resolveTelegramRichMessageBody,
+} from "./body-helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 function asTelegramMessage(message: unknown): Message {
   return message as Message;
 }
+
+describe("native rich message bodies", () => {
+  it.each([
+    { name: "embedded backticks", text: "a`b", expected: "a`b" },
+    { name: "padded backticks", text: " `npm` ", expected: " `npm` " },
+    {
+      name: "nested rich children",
+      text: [
+        "call ",
+        { type: "code", text: "`arg`" },
+        " ",
+        { type: "url", text: "docs]", url: "https://example.com/report)final" },
+      ],
+      expected: "call `arg` docs]",
+    },
+  ] satisfies { name: string; text: RichText; expected: string }[])(
+    "preserves literal native inline code with $name",
+    ({ text, expected }) => {
+      const body = resolveTelegramRichMessageBody({
+        rich_message: {
+          blocks: [{ type: "paragraph", text: ["Code: ", { type: "code", text }, " end"] }],
+        },
+      });
+      const parsed = markdownToIR(body ?? "");
+
+      expect(parsed.text).toBe(`Code: ${expected} end`);
+      expect(
+        parsed.styles
+          .filter((span) => span.style === "code")
+          .map((span) => parsed.text.slice(span.start, span.end)),
+      ).toEqual([expected]);
+      expect(parsed.links).toEqual([]);
+    },
+  );
+
+  it("preserves adjacent native code nodes as one continuous code span", () => {
+    const body = resolveTelegramRichMessageBody({
+      rich_message: {
+        blocks: [
+          {
+            type: "paragraph",
+            text: [
+              { type: "code", text: "a" },
+              { type: "code", text: "b" },
+            ],
+          },
+        ],
+      },
+    });
+    const parsed = markdownToIR(body ?? "");
+
+    expect(parsed.text).toBe("ab");
+    expect(
+      parsed.styles
+        .filter((span) => span.style === "code")
+        .map((span) => parsed.text.slice(span.start, span.end)),
+    ).toEqual(["ab"]);
+  });
+
+  it("preserves native pre content, indentation and blank lines inside nested blocks", () => {
+    const code = "\n  if ready:\n    print(`value`)\n\n    finish()\n\n";
+    const body = resolveTelegramRichMessageBody({
+      rich_message: {
+        blocks: [
+          {
+            type: "details",
+            summary: "Example",
+            blocks: [
+              {
+                type: "pre",
+                language: "python",
+                text: [
+                  "\n  if ",
+                  { type: "code", text: "ready" },
+                  ":\n    print(`value`)\n\n    finish()\n\n",
+                ],
+              },
+            ],
+          },
+          { type: "paragraph", text: "After" },
+        ],
+      },
+    });
+    const parsed = markdownToIR(body ?? "");
+
+    expect(
+      parsed.styles
+        .filter((span) => span.style === "code_block")
+        .map((span) => ({
+          text: parsed.text.slice(span.start, span.end),
+          language: span.language,
+        })),
+    ).toEqual([{ text: code, language: "python" }]);
+    expect(parsed.text).toContain("Example");
+    expect(parsed.text).toContain("After");
+  });
+
+  it("preserves native URL labels and escaped destinations through Markdown parsing", () => {
+    const label = String.raw`😀 docs\]more`;
+    const url = "https://example.com/report(a)b)";
+    const body = resolveTelegramRichMessageBody({
+      rich_message: {
+        blocks: [{ type: "paragraph", text: ["Read ", { type: "url", text: label, url }, " now"] }],
+      },
+    });
+    const parsed = markdownToIR(body ?? "");
+
+    expect(parsed.text).toBe(`Read ${label} now`);
+    expect(parsed.links).toEqual([{ start: 5, end: 5 + label.length, href: url }]);
+  });
+
+  it("preserves internal rich text whitespace while trimming the body boundary", () => {
+    const body = resolveTelegramRichMessageBody({
+      rich_message: {
+        blocks: [{ type: "paragraph", text: "  First\n  second\n\nthird  " }],
+      },
+    });
+
+    expect(body).toBe("First\n  second\n\nthird");
+  });
+});
 
 describe("getTelegramTextParts", () => {
   it("projects native Telegram polls into bounded, accurate inbound text", () => {

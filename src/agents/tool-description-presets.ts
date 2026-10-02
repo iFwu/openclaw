@@ -83,7 +83,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
 export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
-    "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
+    "Before reply/debug/resume. Use only sessionKey (+limit) for the latest tail. Anchored history requires messageId from search/history results; never guess ids, and no last anchor exists. sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
     "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");

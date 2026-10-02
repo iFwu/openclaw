@@ -80,6 +80,8 @@ const defaultWriteOperations: WriteOperations = {
 export interface WriteToolOptions {
   /** Custom operations for file writing. Default: local filesystem */
   operations?: WriteOperations;
+  /** Checked inside the mutation queue before replacing an existing file. */
+  canOverwrite?: (absolutePath: string) => Promise<boolean>;
 }
 
 type WriteToolPrecheck = {
@@ -431,6 +433,16 @@ export function createWriteToolDefinition(
             changed: false,
           } satisfies WriteToolDetails);
         }
+        if (
+          precheck.beforeStat !== null &&
+          options?.canOverwrite &&
+          !(await options.canOverwrite(absolutePath))
+        ) {
+          throw new Error(
+            `Refusing to overwrite protected existing file ${path}; use edit for targeted changes.`,
+          );
+        }
+        assertCurrent();
         const details = await resolveWriteDetails({
           absolutePath,
           content,

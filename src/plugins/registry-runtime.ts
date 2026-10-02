@@ -199,6 +199,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       (module) => module.createPluginSessionOwnership(state, pluginId, currentRegistry),
     );
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
+    let scopedLocalService:
+      | {
+          llm: PluginRuntime["llm"];
+          acquire: PluginRuntime["llm"]["acquireLocalService"];
+          scopedAcquire: PluginRuntime["llm"]["acquireLocalService"];
+        }
+      | undefined;
     const assertTrustedPluginRuntime = (
       methodName:
         | "dispatchHookAgentTurn"
@@ -361,10 +368,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["decisions"];
         }
         if (prop === "llm") {
-          const llm = getRuntimeProperty();
+          const llm: PluginRuntime["llm"] = getRuntimeProperty();
+          const acquire = llm.acquireLocalService;
+          if (
+            !scopedLocalService ||
+            scopedLocalService.llm !== llm ||
+            scopedLocalService.acquire !== acquire
+          ) {
+            scopedLocalService = {
+              llm,
+              acquire,
+              scopedAcquire: (...args) => runWithPluginScope(() => acquire.apply(llm, args)),
+            };
+          }
           return {
-            acquireLocalService: (...args) =>
-              runWithPluginScope(() => llm.acquireLocalService(...args)),
+            acquireLocalService: scopedLocalService.scopedAcquire,
             complete: (params) => runWithPluginScope(() => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
         }

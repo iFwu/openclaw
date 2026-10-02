@@ -18,6 +18,7 @@ import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./memory/manager-index.test-support.js";
+import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 import { createMemoryGetTool, createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
@@ -749,18 +750,18 @@ describe("memory_search real manager", () => {
     const execution = tool.execute("keyword-deadline", { query: "zebra", corpus: "memory" });
     try {
       await queryEntered.promise;
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
       const result = await execution;
       expect(result.details).toMatchObject({
         results: [expect.objectContaining({ path: "memory/2026-01-12.md", source: "memory" })],
         partial: true,
         timedOut: true,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
         mode: "keyword-only",
         warning: expect.stringContaining("Only memory-file keyword matches"),
-        error: "memory_search timed out after 30s",
+        error: `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
         corpora: [{ corpus: "memory", outcome: "partial" }],
-        debug: { searchMs: 30_000 },
+        debug: { searchMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS },
       });
       expect(result.details).not.toHaveProperty("unavailable");
     } finally {
@@ -951,7 +952,7 @@ describe("memory_search real manager", () => {
     });
     try {
       await searchStarted.promise;
-      await vi.advanceTimersByTimeAsync(30_100);
+      await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS + 100);
       expect(executionSettled).toBe(true);
       await cleanupStarted.promise;
       await expect(execution).resolves.toMatchObject({

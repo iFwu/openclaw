@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "targets": [
+    {
+      "id": "linux-checks",
+      "host": "linux-build-host",
+      "user": "build-user",
+      "port": 22,
+      "workRoot": "/home/build-user/crabbox"
+    }
+  ]
+}

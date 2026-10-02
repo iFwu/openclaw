@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager.test-mocks.js";
+import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 import { testing } from "./tools.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
 
@@ -57,7 +58,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([20_000, 40_000])(
+it.each([DEFAULT_MEMORY_SEARCH_TIMEOUT_MS - 10_000, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS + 10_000])(
   "keeps the wiki deadline independent of managed memory readiness (wiki=%i ms)",
   async (wikiDelayMs) => {
     vi.useFakeTimers();
@@ -104,22 +105,25 @@ it.each([20_000, 40_000])(
     const result = await pending;
     expect(result.details).toMatchObject({
       results: expect.arrayContaining(
-        (wikiDelayMs < 30_000 ? [wikiHit, memoryHit] : [memoryHit]).map((hit) =>
-          expect.objectContaining({ path: hit.path, snippet: hit.snippet }),
+        (wikiDelayMs < DEFAULT_MEMORY_SEARCH_TIMEOUT_MS ? [wikiHit, memoryHit] : [memoryHit]).map(
+          (hit) => expect.objectContaining({ path: hit.path, snippet: hit.snippet }),
         ),
       ),
       corpora: [
         { corpus: "memory", outcome: "ok" },
-        wikiDelayMs < 30_000
+        wikiDelayMs < DEFAULT_MEMORY_SEARCH_TIMEOUT_MS
           ? { corpus: "wiki", outcome: "ok" }
           : {
               corpus: "wiki",
               outcome: "unavailable",
-              error: "memory_search timed out after 30s",
+              error: `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
             },
       ],
     });
-    expect(result.details).toHaveProperty("results.length", wikiDelayMs < 30_000 ? 2 : 1);
+    expect(result.details).toHaveProperty(
+      "results.length",
+      wikiDelayMs < DEFAULT_MEMORY_SEARCH_TIMEOUT_MS ? 2 : 1,
+    );
   },
 );
 

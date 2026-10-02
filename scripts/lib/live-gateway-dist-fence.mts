@@ -282,6 +282,36 @@ export async function resolveLiveManagedGatewayDistFence(
     message:
       "[openclaw] Cannot verify that test preparation is separate from managed Gateway artifacts. Use the existing isolated test runner; no checkout artifacts were rebuilt.",
   } as const;
+  if (process.platform === "linux") {
+    try {
+      const cgroup = await fs.readFile("/proc/self/cgroup", "utf8");
+      const { resolveSystemdServiceName } =
+        await import("../../src/daemon/systemd-service-files.ts");
+      const units = new Set([
+        "openclaw-gateway.service",
+        `${resolveSystemdServiceName(env)}.service`,
+      ]);
+      const insideGateway = cgroup.split("\n").some((line) =>
+        line
+          .split(":")
+          .slice(2)
+          .join(":")
+          .split("/")
+          .some((part) => units.has(part)),
+      );
+      if (insideGateway) {
+        return {
+          refuse: true,
+          message:
+            "[openclaw] Refusing artifact preparation inside the Gateway service cgroup. Run the existing bounded wrapper from an isolated checkout so the command has its own resource and lifecycle owner.",
+        };
+      }
+    } catch {
+      if (options.requireVerified) {
+        return unknown;
+      }
+    }
+  }
   const bindings = await resolveFenceBindings(env, options.requireVerified);
   if (!bindings) {
     return options.requireVerified ? unknown : { refuse: false };

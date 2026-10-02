@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { attemptMemoryCorpus, runMemoryCorpusDeadline } from "./memory-corpus.js";
+import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -29,16 +30,18 @@ it.each(["timer", "event-loop"] as const)(
       },
     });
     if (clock === "timer") {
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
     } else {
-      vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_001);
+      vi.spyOn(performance, "now").mockReturnValue(
+        startedAt + (DEFAULT_MEMORY_SEARCH_TIMEOUT_MS + 1),
+      );
       pending.resolve(["late semantic result"]);
     }
     expect(await result).toMatchObject({
       outcome: "partial",
       value: partial,
       deadline: true,
-      error: "memory_search timed out after 30s",
+      error: `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
     });
     expect(signal?.aborted).toBe(true);
     pending.resolve([]);
@@ -49,7 +52,9 @@ it.each(["provider", "caller"] as const)(
   "does not replace a %s failure with partial results",
   async (source) => {
     const parent = new AbortController();
-    const failure = new Error("memory_search timed out after 30s");
+    const failure = new Error(
+      `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+    );
     const result = runMemoryCorpusDeadline({
       operation: "memory_search",
       parentSignal: parent.signal,
@@ -103,15 +108,17 @@ it("re-arms the banked budget when an owned phase completes", async () => {
       control.report("pause");
       await vi.advanceTimersByTimeAsync(60_000);
       control.report("resume");
-      // Only the 25s banked before the pause remains for post-readiness work.
-      await vi.advanceTimersByTimeAsync(24_999);
+      // Only the budget banked before the pause remains for post-readiness work.
+      await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS - 5_001);
       expect(currentSignal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(2);
       currentSignal.throwIfAborted();
       return "late";
     },
   });
-  await expect(result).rejects.toThrow("memory_search timed out after 30s");
+  await expect(result).rejects.toThrow(
+    `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+  );
   expect(signal?.aborted).toBe(true);
 });
 
@@ -124,13 +131,15 @@ it("expires immediately when the budget is already consumed at pause time", asyn
     run: async (currentSignal, control) => {
       signal = currentSignal;
       // The overdue timer may not be serviced yet when the owned phase starts.
-      vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_000);
+      vi.spyOn(performance, "now").mockReturnValue(startedAt + DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
       control.report("pause");
       currentSignal.throwIfAborted();
       return "unreachable";
     },
   });
-  await expect(result).rejects.toThrow("memory_search timed out after 30s");
+  await expect(result).rejects.toThrow(
+    `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+  );
   expect(signal?.aborted).toBe(true);
 });
 

@@ -1,0 +1,16 @@
+provider: ssh
+target: linux
+profile: openclaw-remote
+sync:
+  delete: true
+  gitSeed: false
+  fingerprint: true
+  exclude:
+    - .artifacts
+    - .codex
+    - .local
+    - playwright-report
+    - test-results
+env:
+  allow:
+    - CI

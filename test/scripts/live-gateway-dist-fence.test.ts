@@ -80,6 +80,88 @@ function stateForPackage(root: string, overrides: Partial<GatewayServiceState> =
   });
 }
 
+describe.skipIf(process.platform !== "linux")("live-gateway-dist-fence process ownership", () => {
+  it.each([
+    { group: "/user.slice/app.slice/openclaw-gateway.service", unit: undefined },
+    { group: "/user.slice/app.slice/openclaw-gateway.service/child.scope", unit: undefined },
+    { group: "/user.slice/app.slice/openclaw-private.service", unit: "openclaw-private.service" },
+    { group: "/user.slice/app.slice/openclaw-private.service", unit: "openclaw-private" },
+    {
+      group: "/user.slice/app.slice/openclaw-private.service/child.scope",
+      unit: "openclaw-private",
+    },
+  ])("refuses artifact preparation inside the Gateway cgroup $group", async ({ group, unit }) => {
+    const readFile = fs.readFile.bind(fs);
+    const read = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation((...args) =>
+        args[0] === "/proc/self/cgroup"
+          ? (Promise.resolve(`0::${group}\n`) as ReturnType<typeof fs.readFile>)
+          : readFile(...args),
+      );
+    onTestFinished(() => read.mockRestore());
+    const result = await resolveLiveManagedGatewayDistFence("/isolated/candidate", {
+      env: { OPENCLAW_SYSTEMD_UNIT: unit },
+    });
+    expect(result.refuse).toBe(true);
+    if (result.refuse) {
+      expect(result.message).toContain("Gateway service cgroup");
+    }
+  });
+
+  it.each([
+    { group: "/user.slice/app.slice/openclaw-check-123.scope", running: false, unit: undefined },
+    { group: "/openclaw-gateway.service-other", running: false, unit: undefined },
+    { group: "/user.slice/app.slice/openclaw-check-123.scope", running: true, unit: undefined },
+    { group: "/user.slice/app.slice/openclaw-check-123.scope", running: false, unit: "" },
+    { group: "/user.slice/app.slice/openclaw-check-123.scope", running: false, unit: "  " },
+  ])(
+    "keeps the managed artifact owner for $group with running=$running",
+    async ({ group, running, unit }) => {
+      const readFile = fs.readFile.bind(fs);
+      const read = vi
+        .spyOn(fs, "readFile")
+        .mockImplementation((...args) =>
+          args[0] === "/proc/self/cgroup"
+            ? (Promise.resolve(`0::${group}\n`) as ReturnType<typeof fs.readFile>)
+            : readFile(...args),
+        );
+      onTestFinished(() => read.mockRestore());
+      await withTestDir({ prefix: "openclaw-dist-bounded-" }, async (tmp) => {
+        await writeOpenClawPackage(tmp);
+        expect(
+          await inspectFixtureGateway(tmp, {
+            env: { OPENCLAW_SYSTEMD_UNIT: unit },
+            readState: async () => stateForPackage(tmp, { running }),
+          }),
+        ).toMatchObject({ refuse: running });
+      });
+    },
+  );
+});
+
+describe.skipIf(process.platform !== "linux")(
+  "live-gateway-dist-fence process custody inspection",
+  () => {
+    it("refuses required verification when its process cgroup cannot be read", async () => {
+      const readFile = fs.readFile.bind(fs);
+      const read = vi
+        .spyOn(fs, "readFile")
+        .mockImplementation((...args) =>
+          args[0] === "/proc/self/cgroup"
+            ? Promise.reject(new Error("unavailable process cgroup"))
+            : readFile(...args),
+        );
+      onTestFinished(() => read.mockRestore());
+      const result = await resolveLiveManagedGatewayDistFence("/isolated/candidate", {
+        env: {},
+        requireVerified: true,
+      });
+      expect(result).toMatchObject({ refuse: true });
+    });
+  },
+);
+
 describe("live-gateway-dist-fence", () => {
   it.each([
     { name: "running", state: { running: true } },

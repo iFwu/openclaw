@@ -31,6 +31,7 @@ import {
 } from "./crabbox-source-mirror.mts";
 import { captureSourceWitness } from "./crabbox-staging-witness.mts";
 import { createMirrorStaging, createStaging, type StagingHandle } from "./crabbox-staging.mts";
+import { gitSourceEnvironment } from "./lib/git-source-environment.mts";
 
 const bundleFile = ".openclaw-crabbox-changed-gate.bundle";
 const capsuleRef = "refs/openclaw/source-capsule";
@@ -51,27 +52,6 @@ export type CrabboxSourceCapsule = {
   staging: StagingHandle;
   configPath?: string;
 };
-
-function sourceGitEnvironment() {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_OPTIONAL_LOCKS: "0",
-  };
-  // Repository routing belongs to the selected checkout. Keep Git configuration
-  // here: the invoking user's global excludes are part of source selection.
-  for (const key of [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_SHALLOW_FILE",
-  ]) {
-    delete env[key];
-  }
-  return env;
-}
 
 function capsulePath(path: string) {
   const parts = path.split("/");
@@ -208,6 +188,7 @@ function hasUnverifiedGitPreparation(
 
 export function prepareCrabboxSourceCapsule(options: {
   repoRoot: string;
+  env?: NodeJS.ProcessEnv;
   syncRoot: string;
   base: string;
   reuseMirror?: boolean;
@@ -215,7 +196,7 @@ export function prepareCrabboxSourceCapsule(options: {
 }): CrabboxSourceCapsule {
   const startedAt = Date.now();
   const repoRoot = realpathSync(options.repoRoot);
-  const sourceEnv = sourceGitEnvironment();
+  const sourceEnv = gitSourceEnvironment(options.env);
   function git(cwd: string, args: string[], env = sourceEnv, input?: string) {
     let output: Buffer;
     try {

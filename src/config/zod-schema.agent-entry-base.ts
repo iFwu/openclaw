@@ -120,6 +120,8 @@ export const AgentEntryBaseSchema = z
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
+    /** Explicit opt-in to root memory in group/channel bootstrap; defaults to false. */
+    bootstrapMemoryInGroups: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     experimental: z

@@ -161,6 +161,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":
     'Controls workspace bootstrap-file injection in the embedded runtime: "always" uses normal injection (default), "continuation-skip" skips eligible continuation turns after a recorded full-bootstrap turn, and "never" disables injection. Does not control CLI-backed prompt preparation.',
+  "agents.defaults.bootstrapMemoryInGroups":
+    "Include root MEMORY.md in group and channel bootstrap when explicitly enabled (default: false). Use only for trusted personal groups; cron and subagent sessions still exclude root memory, and normal context modes and budgets remain enforced.",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

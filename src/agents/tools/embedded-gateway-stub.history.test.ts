@@ -229,7 +229,7 @@ describe("embedded session history anchors", () => {
         });
       }
       await expect(history({ ...selector, sessionId: binding, limit: 1 })).rejects.toThrow(
-        "sessionId does not belong to sessionKey",
+        "sessionId does not belong to sessionKey. Do not retry the same arguments. For recent history omit sessionId/messageId; to anchor an old message, search first and use the returned messageId/sessionId pair.",
       );
     },
   );

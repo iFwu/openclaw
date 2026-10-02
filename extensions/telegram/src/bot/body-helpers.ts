@@ -95,19 +95,11 @@ type TelegramTextMessage = Pick<
   "text" | "caption" | "entities" | "caption_entities" | "poll"
 > & { rich_message?: Message.RichMessageMessage["rich_message"] };
 
-function compactRichText(value: string): string {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
 function joinRichText(parts: string[], separator: string): string {
-  return parts.map(compactRichText).filter(Boolean).join(separator);
+  return parts.filter((part) => part.trim()).join(separator);
 }
 
-function renderRichInlineText(value: RichText | undefined): string {
+function renderRichInlineText(value: RichText | undefined, literal = false): string {
   if (value === undefined) {
     return "";
   }
@@ -115,19 +107,50 @@ function renderRichInlineText(value: RichText | undefined): string {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(renderRichInlineText).filter(Boolean).join("");
+    const parts: string[] = [];
+    let pendingCode: string | undefined;
+    for (const part of value) {
+      if (!literal && typeof part === "object" && !Array.isArray(part) && part.type === "code") {
+        // Adjacent code nodes share one span; separate Markdown delimiters can collide.
+        pendingCode = (pendingCode ?? "") + renderRichInlineText(part.text, true);
+        continue;
+      }
+      if (pendingCode !== undefined) {
+        parts.push(renderRichInlineText({ type: "code", text: pendingCode }));
+        pendingCode = undefined;
+      }
+      parts.push(renderRichInlineText(part, literal));
+    }
+    if (pendingCode !== undefined) {
+      parts.push(renderRichInlineText({ type: "code", text: pendingCode }));
+    }
+    return parts.join("");
   }
   switch (value.type) {
     case "anchor":
       return "";
     case "button":
-      return renderRichInlineText(value.button.text);
+      return renderRichInlineText(value.button.text, literal);
     case "custom_emoji":
       return value.alternative_text;
     case "mathematical_expression":
       return value.expression;
+    case "code": {
+      const text = renderRichInlineText(value.text, true);
+      return literal
+        ? text
+        : renderTelegramTextEntities(text, [{ type: "code", offset: 0, length: text.length }]);
+    }
+    case "url": {
+      const text = renderRichInlineText(value.text, true);
+      return literal
+        ? text
+        : renderTelegramTextEntities(text, [
+            { type: "text_link", offset: 0, length: text.length, url: value.url },
+          ]);
+    }
     default:
-      return renderRichInlineText(value.text);
+      return renderRichInlineText(value.text, literal);
   }
 }
 
@@ -144,10 +167,15 @@ function renderRichBlock(block: RichBlock): string {
   switch (block.type) {
     case "paragraph":
     case "heading":
-    case "pre":
     case "footer":
     case "thinking":
       return renderRichInlineText(block.text);
+    case "pre": {
+      const text = renderRichInlineText(block.text, true);
+      return renderTelegramTextEntities(text, [
+        { type: "pre", offset: 0, length: text.length, language: block.language },
+      ]);
+    }
     case "expandable_blockquote":
     case "pullquote":
       return joinRichText(
@@ -217,7 +245,7 @@ export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string
   if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
+  return renderRichBlocks(msg.rich_message.blocks).trim() || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {

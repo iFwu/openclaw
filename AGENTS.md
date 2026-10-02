@@ -106,6 +106,24 @@ not authorize local execution or a broader test plan.
 - Run the CLI through `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`; the supported wrappers own build freshness and process setup.
 - Use installed `oxfmt` for formatting and the repository's `tsgo` lanes for typechecking. Inspect scope with `pnpm changed:lanes --json`; use targeted tests/checks. When avoiding worktree reconciliation, use `node scripts/check-changed.mjs` or `node scripts/run-vitest.mjs` with ready dependencies. Host restrictions still apply.
 
+### Local Fork Resource Limits
+
+- Trusted private-fork checks use an isolated candidate, never the live Gateway checkout. On shared Linux/systemd hosts, use `scripts/run-bounded.sh` for heavy builds, type-aware lint, typechecks, and tests. It verifies a task-owned cgroup v2 limit for the entire command tree; process heap settings alone are not containment.
+- Shared-host budget: the smaller of 10 GiB and available memory minus 4 GiB, rounded down. The wrapper owns the host-user lock, checks headroom after acquiring it, sets task swap to zero, and retains ownership until descendants settle. Keep one test worker/project and one type graph per command. Missing prerequisites or inconclusive cleanup do not permit an uncapped retry.
+- Node/Go soft budgets are half the task budget; Go runtime concurrency is at most 2 with at least 6 GiB, otherwise 1. The existing tsgo policy remains serial until separately measured. tsdown owns its child heap budget and can override inherited `NODE_OPTIONS`; the wrapper still owns the hard cap, not the tsdown heap.
+- Dedicated remote checks require a configured 16 GiB/no-swap/1200% CPU parent slice: two separate 6 GiB test lanes or one exclusive 14 GiB job for install/build/full type graphs. Source synchronization, dependencies, and final source verification share the validation-checkout lock. Read [trusted SSH checks](scripts/TRUSTED-SSH-CHECKS.md) before remote execution; resolve operator-specific host instructions with `git config --path --get openclaw.operatorDocs` when configured. [Remote checks](scripts/REMOTE-CHECKS.md) owns frozen WIP/multi-lane batches.
+- After OOM or interruption, inspect the exact owned scope and descendants. Preserve failed/unknown receipts; do not stop unrelated workloads, change swap, weaken limits, or count an interrupted check as passed. Narrow the same check or use the authorized WSL boundary while retaining its rules and coverage accounting.
+
+Use the repository's existing selectors and check planner through the bounded entrypoints:
+
+```bash
+pnpm test:bounded test/scripts/run-bounded.test.ts
+pnpm check:bounded --staged
+pnpm bounded pnpm build
+```
+
+In dependency-ready candidates, `bash scripts/run-bounded.sh node scripts/run-vitest.mjs <tests...>` avoids package-manager reconciliation. Inspect source, active workloads, and matching dependency inputs before running. Explicit lower shared-host budgets need workload-specific evidence; do not copy them as general defaults.
+
 ## Authority and safety
 
 - Review/triage is read-only; mutations require task authority. Existing approval carries through the same scoped work and recovery. When new approval is required, complete the already-authorized preparation first and present a concrete, reviewable result; pause only the gated action. Product rejection remains maintainer judgment. Bulk close/reopen above 50 items needs explicit count and scope.

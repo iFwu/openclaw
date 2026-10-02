@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createCoreCodingTools } from "./core-coding-tools.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 describe("unrestricted host tool writes", () => {
@@ -252,6 +253,77 @@ describe("unrestricted host tool writes", () => {
 
     expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("replacement");
+  });
+
+  it.runIf(process.platform !== "win32").each(["directory", "alias", "file"] as const)(
+    "protects existing memory Markdown through a %s symlink",
+    async (kind) => {
+      await createFile("existing");
+      const memoryDir = path.join(tempDir, "memory");
+      const notesDir = path.join(tempDir, "notes");
+      await fs.mkdir(notesDir);
+      if (kind === "file") {
+        await fs.mkdir(memoryDir);
+        await fs.writeFile(path.join(notesDir, "entry.md"), "original\n");
+        await fs.symlink(path.join(notesDir, "entry.md"), path.join(memoryDir, "entry.md"));
+      } else {
+        await fs.symlink(notesDir, memoryDir);
+        await fs.writeFile(path.join(notesDir, "entry.md"), "original\n");
+      }
+      const target = path.join(kind === "alias" ? notesDir : memoryDir, "entry.md");
+      const write = createHostWorkspaceWriteTool(tempDir);
+
+      await expect(
+        write.execute("replace-memory", { path: target, content: "replacement\n" }),
+      ).rejects.toThrow(/protected existing file.*use edit/);
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("original\n");
+      await createHostWorkspaceEditTool(tempDir).execute("edit-memory", {
+        path: target,
+        edits: [{ oldText: "original", newText: "updated" }],
+      });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("updated\n");
+    },
+  );
+
+  it("protects workspace memory when coding tools use a different working directory", async () => {
+    await createFile("existing");
+    const codingRoot = path.join(tempDir, "project");
+    const memoryRoot = path.join(tempDir, "memory");
+    await fs.mkdir(codingRoot);
+    await fs.mkdir(memoryRoot);
+    const filePath = path.join(memoryRoot, "entry.md");
+    await fs.writeFile(filePath, "original\n");
+    const tools = createCoreCodingTools({
+      codingRoot,
+      workspaceRoot: tempDir,
+      containmentRoot: tempDir,
+      includeBaseCodingTools: true,
+      shellTools: "disabled",
+      workspaceOnly: false,
+      readOnly: false,
+      applyPatchEnabled: false,
+      applyPatchWorkspaceOnly: true,
+      execDefaults: {},
+      processDefaults: {},
+    });
+    const write = tools.find((tool) => tool.name === "write");
+    const edit = tools.find((tool) => tool.name === "edit");
+    if (!write || !edit) {
+      throw new Error("Expected the assembled filesystem tools");
+    }
+    await write.execute("same-memory", { path: filePath, content: "original\n" });
+    await expect(
+      write.execute("replace-memory", { path: filePath, content: "replacement\n" }),
+    ).rejects.toThrow(/protected existing file.*use edit/);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("original\n");
+    await edit.execute("edit-memory", {
+      path: filePath,
+      edits: [{ oldText: "original", newText: "updated" }],
+    });
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("updated\n");
+    const newFile = path.join(memoryRoot, "new.md");
+    await write.execute("new-memory", { path: newFile, content: "new note\n" });
+    await expect(fs.readFile(newFile, "utf8")).resolves.toBe("new note\n");
   });
 
   const asUnprivilegedUser = process.platform !== "win32" && process.getuid?.() !== 0;

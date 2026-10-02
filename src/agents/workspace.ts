@@ -1091,10 +1091,11 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
-type BootstrapSessionContext = {
+export type BootstrapSessionContext = {
   sessionKey?: string;
   chatType?: ChatType;
   workspaceDir?: string;
+  bootstrapMemoryInGroups?: boolean;
 };
 
 function resolveBootstrapSessionContext(
@@ -1129,13 +1130,17 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+  const { sessionKey, chatType, workspaceDir, bootstrapMemoryInGroups } =
+    resolveBootstrapSessionContext(session);
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isNonPrivate =
-    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
-  const privacyFilteredFiles = isNonPrivate
+  const excludesRootMemory =
+    isSubagent ||
+    isCron ||
+    (!bootstrapMemoryInGroups &&
+      (effectiveChatType === "group" || effectiveChatType === "channel"));
+  const privacyFilteredFiles = excludesRootMemory
     ? filterRootMemoryBootstrapFiles(files, workspaceDir)
     : files;
   if (isSubagent) {

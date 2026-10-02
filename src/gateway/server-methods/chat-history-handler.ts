@@ -160,7 +160,10 @@ export async function handleChatHistoryRequest({
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "sessionId does not belong to sessionKey"),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "sessionId does not belong to sessionKey. Do not retry the same arguments. For recent history omit sessionId/messageId; to anchor an old message, search first and use the returned messageId/sessionId pair.",
+          ),
         );
       }
       return;

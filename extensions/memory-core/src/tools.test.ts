@@ -1,5 +1,5 @@
-import "./tools.session-catalog.test-mocks.js";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import "./tools.session-catalog.test-mocks.js";
 // Memory Core tests cover tools plugin behavior.
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
 import { Value } from "typebox/value";
@@ -20,6 +20,7 @@ import {
   setMemoryStatusDirty,
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking, prepareActiveProjectKeys } from "./memory/project-ranking.js";
+import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 import {
@@ -328,15 +329,18 @@ describe("memory_search unavailable payloads", () => {
       const tool = createMemorySearchToolOrThrow();
 
       const resultPromise = tool.execute("search-timeout", { query: "hello" });
-      await vi.advanceTimersByTimeAsync(29_999);
+      await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS - 1);
       expect(searchSignal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
 
       const result = await resultPromise;
-      expect(result.details).toMatchObject({ timedOut: true, timeoutMs: 30_000 });
+      expect(result.details).toMatchObject({
+        timedOut: true,
+        timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      });
       expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 30s",
-        timeoutMs: 30_000,
+        error: `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+        timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
         warning: "Memory search did not finish within its time limit.",
         action:
           "Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent main, and rebuild with openclaw memory index --force --agent main only if it reports the index dirty or incomplete",
@@ -345,8 +349,8 @@ describe("memory_search unavailable payloads", () => {
       expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
-        error: "memory_search timed out after 30s",
-        timeoutMs: 30_000,
+        error: `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+        timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
         warning: "Memory search did not finish within its time limit.",
         action:
           "Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent main, and rebuild with openclaw memory index --force --agent main only if it reports the index dirty or incomplete",
@@ -386,12 +390,12 @@ describe("memory_search unavailable payloads", () => {
       const tool = createMemorySearchToolOrThrow();
 
       const resultPromise = tool.execute("abort-aware-timeout", { query: "hello" });
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
 
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 30s",
-        timeoutMs: 30_000,
+        error: `memory_search timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+        timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
         warning: "Memory search did not finish within its time limit.",
         action:
           "Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent main, and rebuild with openclaw memory index --force --agent main only if it reports the index dirty or incomplete",

@@ -47,7 +47,10 @@ import {
 import { resolveSandboxPathMapping, toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath, normalizeFileReferencePrefix } from "./sandbox-paths.js";
-import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
+import {
+  resolveSandboxFileIdentity,
+  resolveSandboxFileMutationQueueKey,
+} from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   createEditTool,
@@ -1029,12 +1032,46 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createWriteTool(params.root, {
       operations: createSandboxMutationOperations(params),
+      canOverwrite: (absolutePath) =>
+        canOverwriteMemoryMarkdown(absolutePath, params.root, params.bridge),
     }),
   );
+  base.description += " Existing memory/ Markdown files require edit for targeted changes.";
   return wrapToolParamValidation(
     wrapSandboxFileToolPath(base, params),
     REQUIRED_PARAM_GROUPS.write,
   );
+}
+
+async function canOverwriteMemoryMarkdown(
+  absolutePath: string,
+  root: string,
+  bridge?: SandboxFsBridge,
+): Promise<boolean> {
+  const isMemoryMarkdown = (memoryRoot: string, target: string) => {
+    const relative = path.relative(memoryRoot, target);
+    return (
+      relative.length > 0 &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative) &&
+      path.extname(relative).toLowerCase() === ".md"
+    );
+  };
+  const memoryRoot = path.join(root, "memory");
+  if (isMemoryMarkdown(memoryRoot, absolutePath)) {
+    return false;
+  }
+  const resolveIdentity = (filePath: string) =>
+    bridge
+      ? resolveSandboxFileIdentity({ bridge, filePath, cwd: root })
+      : canonicalPathFromExistingAncestor(filePath);
+  // Resolve memory itself: it may be a symlink to the workspace's real notes directory.
+  const [canonicalMemoryRoot, target] = await Promise.all([
+    resolveIdentity(memoryRoot),
+    resolveIdentity(absolutePath),
+  ]);
+  return !isMemoryMarkdown(canonicalMemoryRoot, target);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -1052,6 +1089,7 @@ export function createHostWorkspaceWriteTool(
   root: string,
   options?: {
     containmentRoot?: string;
+    protectedMemoryRoot?: string;
     workspaceOnly?: boolean;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -1060,8 +1098,11 @@ export function createHostWorkspaceWriteTool(
   const base = eraseSessionFileTool(
     createWriteTool(root, {
       operations: createHostMutationOperations(options?.containmentRoot ?? root, options),
+      canOverwrite: (absolutePath) =>
+        canOverwriteMemoryMarkdown(absolutePath, options?.protectedMemoryRoot ?? root),
     }),
   );
+  base.description += " Existing memory/ Markdown files require edit for targeted changes.";
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
 }
 

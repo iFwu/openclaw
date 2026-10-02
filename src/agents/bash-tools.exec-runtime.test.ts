@@ -631,6 +631,10 @@ describe("sandbox exec finalization suspension", () => {
       );
       expect(requireSystemEventCall()[0]).toContain("during cleanup");
       const retained = getFinishedSession(run.session.id);
+      expect(run.session.id.length).toBeGreaterThan(8);
+      expect(retained?.id).toBe(run.session.id);
+      expect(getFinishedSession(run.session.id.slice(0, 8))).toBeUndefined();
+      expect(requireSystemEventCall()[0]).toContain(`(${run.session.id}, `);
       const outputBeforeLateCallback = {
         aggregated: retained?.aggregated,
         tail: retained?.tail,

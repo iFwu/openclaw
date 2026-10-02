@@ -6003,7 +6003,7 @@ describe("gateway server chat", () => {
 
       expect(history.ok).toBe(false);
       expect((history.error as { message?: string } | undefined)?.message).toContain(
-        "sessionId does not belong to sessionKey",
+        "sessionId does not belong to sessionKey. Do not retry the same arguments. For recent history omit sessionId/messageId; to anchor an old message, search first and use the returned messageId/sessionId pair.",
       );
     });
   });

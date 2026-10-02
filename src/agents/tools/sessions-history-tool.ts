@@ -56,7 +56,8 @@ const SessionsHistoryToolSchema = Type.Object({
   }),
   pendingBefore: ChatHistoryParamsSchema.properties.pendingBefore,
   messageId: Type.With(ChatHistoryParamsSchema.properties.messageId, {
-    description: "Return history around this message id. Ignores offset; limit bounds the window.",
+    description:
+      "Return history around a real message id from search/history results; never guess ids. Ignores offset; limit bounds the window.",
   }),
   sessionId: Type.With(ChatHistoryParamsSchema.properties.sessionId, {
     description:

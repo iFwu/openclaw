@@ -119,6 +119,21 @@ Controls workspace bootstrap-file injection in the embedded runtime. Default: `"
 Per-agent override: `agents.entries.*.contextInjection`. Omitted values inherit
 `agents.defaults.contextInjection`.
 
+## `agents.defaults.bootstrapMemoryInGroups`
+
+Explicitly include root `MEMORY.md` in group and channel bootstrap. Default: `false`.
+Enable this only for trusted personal groups. Per-agent
+`agents.entries.*.bootstrapMemoryInGroups` overrides the default, including an
+explicit `false` opt-out. Direct-session behavior is unchanged; cron and subagent
+sessions always exclude root memory. Context modes, file-source protections, and
+bootstrap character budgets still apply.
+
+```json5
+{
+  agents: { defaults: { bootstrapMemoryInGroups: true } },
+}
+```
+
 ## `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
