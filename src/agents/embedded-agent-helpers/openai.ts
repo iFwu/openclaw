@@ -8,6 +8,8 @@ import {
   splitOpenAIFunctionCallPairing,
 } from "@openclaw/ai/transports";
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { createToolCallOccurrenceQueue } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { rewriteToolResultIds } from "../tool-call-id.js";
 
@@ -67,20 +69,30 @@ function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
-  const rewrittenByOriginalId = new Map<string, string>();
+function createOpenAIResponsesToolCallIdResolver() {
+  const usedCallIds = new Set<string>();
+  const occurrences = new Map<string, number>();
+  const pendingByOriginalId = createToolCallOccurrenceQueue<string>();
+  const normalizeId = (id: string) =>
+    shouldNormalizeOpenAIResponsesToolCallId(id) ? normalizeOpenAIResponsesFunctionCallId(id) : id;
 
-  return (id) => {
-    const rewritten = rewrittenByOriginalId.get(id);
-    if (rewritten) {
+  return {
+    resolveAssistantId(id: string): string {
+      let rewritten = normalizeId(id);
+      const { itemId } = splitOpenAIFunctionCallPairing(rewritten);
+      let occurrence = occurrences.get(id) ?? 0;
+      while (usedCallIds.has(splitOpenAIFunctionCallPairing(rewritten).callId)) {
+        occurrence += 1;
+        const suffix = sha256HexPrefixCore(`${id}:${occurrence}`, 24);
+        rewritten = `call_${suffix}${itemId ? `|fc_${suffix}` : ""}`;
+      }
+      occurrences.set(id, occurrence);
+      usedCallIds.add(splitOpenAIFunctionCallPairing(rewritten).callId);
+      pendingByOriginalId.add(id, rewritten);
       return rewritten;
-    }
-    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-      return id;
-    }
-    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-    rewrittenByOriginalId.set(id, normalized);
-    return normalized;
+    },
+    // The canonical result rewriter calls this once before synchronizing aliases.
+    resolveToolResultId: (id: string): string => pendingByOriginalId.claim(id) ?? normalizeId(id),
   };
 }
 
@@ -93,7 +105,7 @@ function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
-  const resolveId = createOpenAIResponsesToolCallIdResolver();
+  const resolver = createOpenAIResponsesToolCallIdResolver();
   const rewrittenMessages: AgentMessage[] = [];
 
   for (const msg of messages) {
@@ -120,7 +132,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
           return block;
         }
 
-        const nextId = resolveId(toolCallBlock.id);
+        const nextId = resolver.resolveAssistantId(toolCallBlock.id);
         if (nextId === toolCallBlock.id) {
           return block;
         }
@@ -143,7 +155,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
     if (role === "toolResult") {
       const next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
-        resolveId,
+        resolveId: resolver.resolveToolResultId,
       });
       if (next !== msg) {
         changed = true;
@@ -234,37 +246,15 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
     }
 
     if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      let toolResultChanged = false;
-      const updates: Record<string, string> = {};
-
-      if (typeof toolResult.toolCallId === "string") {
-        const nextToolCallId = pendingRewrittenIds.get(toolResult.toolCallId);
-        if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
-          updates.toolCallId = nextToolCallId;
-          toolResultChanged = true;
-        }
+      const localRewrittenIds = pendingRewrittenIds;
+      const next = rewriteToolResultIds({
+        message: msg as Extract<AgentMessage, { role: "toolResult" }>,
+        resolveId: (id) => localRewrittenIds.get(id) ?? id,
+      });
+      if (next !== msg) {
+        changed = true;
       }
-
-      if (typeof toolResult.toolUseId === "string") {
-        const nextToolUseId = pendingRewrittenIds.get(toolResult.toolUseId);
-        if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
-          updates.toolUseId = nextToolUseId;
-          toolResultChanged = true;
-        }
-      }
-
-      if (!toolResultChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({
-        ...toolResult,
-        ...updates,
-      } as AgentMessage);
+      rewrittenMessages.push(next);
       continue;
     }
 

@@ -23,6 +23,18 @@ function expectFields(actual: unknown, expected: Record<string, unknown>): void 
 }
 
 describe("provider replay helpers", () => {
+  it.each(["openai-responses", "openai-chatgpt-responses", "azure-openai-responses"])(
+    "preserves append-only history for %s without rewriting tool-call ids",
+    (modelApi) => {
+      const policy = buildOpenAICompatibleReplayPolicy(modelApi, { sanitizeToolCallIds: false });
+      expect(policy?.appendOnlyRuntimeContext).toBe(true);
+      expect(policy?.allowSyntheticToolResults).toBe(true);
+      expect(policy).not.toHaveProperty("sanitizeToolCallIds");
+      expect(policy?.validateAnthropicTurns).toBe(false);
+      expect(policy?.validateGeminiTurns).toBe(false);
+    },
+  );
+
   it("builds strict openai-completions replay policy", () => {
     expectFields(buildOpenAICompatibleReplayPolicy("openai-completions"), {
       sanitizeToolCallIds: true,

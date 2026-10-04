@@ -297,6 +297,21 @@ describe("resolveTranscriptPolicy", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
+  it.each([
+    ["openai-responses", true],
+    ["openai-chatgpt-responses", true],
+    ["azure-openai-responses", true],
+    ["openai-completions", false],
+  ] as const)("keeps unowned %s runtime context append-only: %s", (modelApi, appendOnly) => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "gpt-5.4",
+      modelApi,
+    });
+    expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
   it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
     const claudePolicy = resolveTranscriptPolicy({
       provider: "anthropic-foundry",

@@ -23,7 +23,7 @@ export type ProviderReplayPolicy = {
   duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
-  /** Keep per-turn runtime context in place to preserve signed thinking prefixes. */
+  /** Keep runtime context in place when replay requires an exact history prefix. */
   appendOnlyRuntimeContext?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;

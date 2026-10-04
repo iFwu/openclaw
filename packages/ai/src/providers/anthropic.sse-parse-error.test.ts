@@ -4,7 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
-import type { Context, Model } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 
 // Stands in for the payload class this path exposes: text the model emitted, which
@@ -62,7 +62,7 @@ function makeModel(baseUrl: string): Model<"anthropic-messages"> {
 // socket is ours; the SDK, its SSE reader, and the provider stream are production code.
 async function streamAnthropicSseFrames(
   frames: readonly (readonly [string, string])[],
-): Promise<{ stopReason: string; errorMessage?: string }> {
+): Promise<AssistantMessage> {
   const server = createServer((request, response) => {
     response.writeHead(200, {
       "content-type": "text/event-stream",
@@ -82,7 +82,7 @@ async function streamAnthropicSseFrames(
     const result = await streamAnthropic(makeModel(`http://127.0.0.1:${address.port}`), context, {
       apiKey: "test-api-key",
     }).result();
-    return { stopReason: result.stopReason, errorMessage: result.errorMessage };
+    return result;
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -104,6 +104,30 @@ describe("Anthropic malformed SSE frames", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(result.errorMessage).toBeUndefined();
+  });
+
+  it.each([
+    "except Exception as e:\n    print(e)",
+    "B:\bback F:\fform N:\nnext R:\rreturn T:\ttab",
+    "C:\\bin\\new\\file",
+  ])("preserves valid string bytes through the actual SSE decoder: %j", async (text) => {
+    const frames = WELL_FORMED_FRAMES.map(
+      ([event, data]) =>
+        [
+          event,
+          event === "content_block_delta"
+            ? JSON.stringify({
+                type: "content_block_delta",
+                index: 0,
+                delta: { type: "text_delta", text },
+              })
+            : data,
+        ] as const,
+    );
+    const result = await streamAnthropicSseFrames(frames);
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([expect.objectContaining({ type: "text", text })]);
   });
 
   it("keeps a response alive while Anthropic sends protocol pings", async () => {

@@ -2516,6 +2516,7 @@ describe("ollama plugin", () => {
     expect(responsesPolicy?.applyAssistantFirstOrderingFix).toBe(false);
     expect(responsesPolicy?.validateGeminiTurns).toBe(false);
     expect(responsesPolicy?.validateAnthropicTurns).toBe(false);
+    expect(responsesPolicy?.appendOnlyRuntimeContext).toBe(true);
 
     const nativePolicy = provider.buildReplayPolicy?.({
       provider: "ollama",

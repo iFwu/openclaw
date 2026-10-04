@@ -777,6 +777,7 @@ describe("xai provider plugin", () => {
     expect(responsesPolicy?.applyAssistantFirstOrderingFix).toBe(false);
     expect(responsesPolicy?.validateGeminiTurns).toBe(false);
     expect(responsesPolicy?.validateAnthropicTurns).toBe(false);
+    expect(responsesPolicy?.appendOnlyRuntimeContext).toBe(true);
   });
 
   it("wires provider stream shaping for fast mode and tool-stream defaults", async () => {

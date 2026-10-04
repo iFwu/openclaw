@@ -89,6 +89,64 @@ describe("normalizeOpenAIResponsesToolCallIds", () => {
     expect(toolResultId(secondResult)).toBe(secondCallId);
   });
 
+  it.each(["call_repeat|fc_repeat", "functions.exec:0"])(
+    "keeps identical raw call ids distinct across settled turns: %s",
+    (rawId) => {
+      const messages: AgentMessage[] = [
+        buildAssistantToolCall(rawId),
+        buildToolResult(rawId),
+        { role: "user", content: "again", timestamp: 1 },
+        buildAssistantToolCall(rawId),
+        buildToolResult(rawId),
+      ];
+      const out = normalizeOpenAIResponsesToolCallIds(messages);
+      expect(toolCallId(out[3])).not.toBe(toolCallId(out[0]));
+      expect(toolResultId(out[1])).toBe(toolCallId(out[0]));
+      expect(toolResultId(out[4])).toBe(toolCallId(out[3]));
+      expect(normalizeOpenAIResponsesToolCallIds(out)).toBe(out);
+      expect(toolCallId(messages[3])).toBe(rawId);
+    },
+  );
+
+  it.each(["call_repeat|fc_repeat", "functions.exec:0"])(
+    "claims one repeated occurrence per result, not per alias: %s",
+    (rawId) => {
+      const result = () => ({
+        ...buildToolResult(rawId),
+        toolUseId: rawId,
+        tool_call_id: rawId,
+        tool_use_id: rawId,
+        callId: rawId,
+        call_id: rawId,
+      });
+      const messages: AgentMessage[] = [
+        buildAssistantToolCall(rawId),
+        buildAssistantToolCall(rawId),
+        result(),
+        result(),
+      ];
+      const out = normalizeOpenAIResponsesToolCallIds(messages);
+      const first = toolCallId(out[0]);
+      const second = toolCallId(out[1]);
+      expect(second).not.toBe(first);
+      for (const [index, id] of [
+        [2, first],
+        [3, second],
+      ] as const) {
+        expect(out[index]).toMatchObject({
+          toolCallId: id,
+          toolUseId: id,
+          tool_call_id: id,
+          tool_use_id: id,
+          callId: id,
+          call_id: id,
+        });
+      }
+      expect(normalizeOpenAIResponsesToolCallIds(out)).toBe(out);
+      expect(toolCallId(messages[1])).toBe(rawId);
+    },
+  );
+
   it("strips a checkpoint when rekeying a pre-checkpoint tool call", () => {
     const rawId = "functions.gateway:0|fc_tmp_checkpoint";
     const owner: AssistantMessage = {

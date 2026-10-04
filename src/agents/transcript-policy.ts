@@ -136,6 +136,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
           }),
         }
       : {}),
+    ...(isOpenAiResponsesCompatibleApi(params.modelApi) ? { appendOnlyRuntimeContext: true } : {}),
     ...(isGoogle
       ? {
           sanitizeThoughtSignatures: {

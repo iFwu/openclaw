@@ -21,6 +21,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { buildOpenAICompatibleReplayPolicy } from "../../../plugins/provider-replay-helpers.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -178,9 +179,22 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect(await activeSession.agent.convertToLlm(messages)).toEqual(converted);
   });
 
-  it.each([false, true])(
-    "replays turn and tool-loop prefixes with append-only runtime context %s",
-    async (appendOnlyRuntimeContext) => {
+  it.each([
+    false,
+    true,
+    "openai-responses",
+    "openai-chatgpt-responses",
+    "azure-openai-responses",
+  ] as const)(
+    "replays turn and tool-loop prefixes with runtime replay policy %s",
+    async (replayMode) => {
+      const appendOnlyRuntimeContext =
+        typeof replayMode === "boolean"
+          ? replayMode
+          : buildOpenAICompatibleReplayPolicy(replayMode)?.appendOnlyRuntimeContext === true;
+      if (typeof replayMode === "string") {
+        expect(appendOnlyRuntimeContext).toBe(true);
+      }
       const { activeSession } = createActiveSession();
       await prepareEmbeddedAttemptSessionBoundary({
         activeSession,

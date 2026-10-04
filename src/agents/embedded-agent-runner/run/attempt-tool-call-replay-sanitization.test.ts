@@ -3,6 +3,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import { createFakeStream } from "./attempt-stream.test-helpers.js";
 import {
@@ -540,6 +541,57 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 });
 
 describe("sanitizeOpenAIResponsesReplayForStream", () => {
+  it.each(["call_repeat|fc_repeat", "functions.exec:0"])(
+    "keeps repeated Responses occurrences and every result alias aligned through stream replay: %s",
+    (rawId) => {
+      const call = () =>
+        makeAssistantMessageFixture({
+          stopReason: "toolUse",
+          errorMessage: undefined,
+          content: [{ type: "toolCall", id: rawId, name: "read", arguments: {} }],
+        });
+      const result = () => ({
+        ...makeTextToolResult(rawId, "read", "ok", false, 1),
+        toolUseId: rawId,
+        tool_call_id: rawId,
+        tool_use_id: rawId,
+        callId: rawId,
+        call_id: rawId,
+      });
+      const messages: AgentMessage[] = [
+        call(),
+        result(),
+        { role: "user", content: "again", timestamp: 2 },
+        call(),
+        result(),
+      ];
+      const out = sanitizeOpenAIResponsesReplayForStream(messages);
+      const ids = [0, 3].map((index) => {
+        const block = requireAssistantMessage(out[index]).content[0];
+        if (block?.type !== "toolCall") {
+          throw new Error("expected replayed toolCall");
+        }
+        return block.id;
+      });
+      expect(ids[1]).not.toBe(ids[0]);
+      for (const [index, id] of [
+        [1, ids[0]],
+        [4, ids[1]],
+      ] as const) {
+        expect(out[index]).toMatchObject({
+          toolCallId: id,
+          toolUseId: id,
+          tool_call_id: id,
+          tool_use_id: id,
+          callId: id,
+          call_id: id,
+        });
+      }
+      expect(sanitizeOpenAIResponsesReplayForStream(out)).toBe(out);
+      expect(requireToolResultMessage(messages[4]).toolCallId).toBe(rawId);
+    },
+  );
+
   it("preserves completed encrypted reasoning after an async tool fragment and steering", () => {
     const assistant: Omit<AssistantMessage, "content"> = {
       role: "assistant",

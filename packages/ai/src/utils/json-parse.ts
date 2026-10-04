@@ -106,7 +106,7 @@ export function repairJson(
 }
 
 export function parseJsonWithRepair(json: string): unknown {
-  return JSON.parse(repairJson(json)) as unknown;
+  return JSON.parse(repairJson(json, { preserveValidControlEscapes: true })) as unknown;
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {

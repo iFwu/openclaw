@@ -52,7 +52,9 @@ export function buildOpenAICompatibleReplayPolicy(
             : {}),
         }
       : {}),
-    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
+    ...(isResponsesFamily
+      ? { allowSyntheticToolResults: true, appendOnlyRuntimeContext: true }
+      : {}),
     applyAssistantFirstOrderingFix: modelApi === "openai-completions",
     validateGeminiTurns: modelApi === "openai-completions",
     validateAnthropicTurns: modelApi === "openai-completions",
