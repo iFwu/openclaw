@@ -72,6 +72,8 @@ const SessionsPatchMutationProperties = {
   sandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
   nativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Limit this pin to the session even when operator selections normally persist globally. */
+  modelSelectionScope: Type.Optional(Type.Literal("session")),
   /** Explicit runtime for the selected model; null follows configured routing. */
   agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

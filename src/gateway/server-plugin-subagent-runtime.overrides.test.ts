@@ -78,7 +78,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function run(override: { provider?: string; model?: string }) {
+function run(override: { provider?: string; model?: string; persistModel?: boolean }) {
   const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
   const runtime = createGatewaySubagentRuntime(
     () => context,
@@ -94,6 +94,53 @@ function run(override: { provider?: string; model?: string }) {
 }
 
 describe("plugin subagent initial override policy", () => {
+  it("rechecks the exact configuration owner after persistence before starting", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];
+    dispatch.mockImplementationOnce(async () => {
+      config = { ...config };
+      return { runId: "patch-result" };
+    });
+    await expect(
+      run({ provider: "fixture", model: "literal", persistModel: true }),
+    ).rejects.toThrow(/configuration changed before admission/u);
+    expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["sessions.patch"]);
+  });
+  it("keeps a normal authorized override single-run without persistence", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];
+    await run({ provider: "fixture", model: "literal" });
+    expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["agent"]);
+  });
+  it("pins an authorized model for continuation before starting the worker", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];
+    await run({ provider: "fixture", model: "literal", persistModel: true });
+    expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["sessions.patch", "agent"]);
+    expect(dispatch.mock.calls[0]?.[1]).toEqual({
+      key: "agent:worker:subagent:override",
+      model: "fixture/literal",
+      modelSelectionScope: "session",
+    });
+  });
+
+  it("does not persist a model rejected by the plugin allowlist", async () => {
+    await expect(run({ model: "fixture/literal", persistModel: true })).rejects.toThrow(
+      /not allowlisted/u,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects persistence without an explicit model", async () => {
+    await expect(run({ persistModel: true })).rejects.toThrow(/explicit model/u);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not start when continuation model persistence fails", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];
+    dispatch.mockRejectedValueOnce(new Error("session model persistence failed"));
+    await expect(run({ model: "fixture/literal", persistModel: true })).rejects.toThrow(
+      /persistence failed/u,
+    );
+    expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["sessions.patch"]);
+  });
   it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
     "checks the exact configured execution target for %j",
     async (override) => {

@@ -178,3 +178,9 @@ terminal persistence and the first completion handoff settle, call
 releases the execution drain obligation while retaining completion delivery
 authority. After a restart, recovery must capture fresh custody from a live
 registration and validate its requester; stored history never grants authority.
+
+An explicitly authorized `api.runtime.subagent.run` model can use `persistModel: true`
+to pin the selection for later interactive turns. The host applies the session-only
+model patch before starting the run and revalidates authority after it completes.
+Omitting this flag retains the ordinary single-run override; persistence never
+changes agent or global model defaults or bypasses plugin model allowlists.

@@ -531,3 +531,7 @@ owner.
 - [Manage plugins](/plugins/manage-plugins)
 - [Sessions](/concepts/session)
 - [Managed worktrees](/concepts/managed-worktrees)
+
+When dispatch supplies an explicit model, the worker runtime persists that authorized
+selection on its session before starting. Later interactive turns reuse it until a
+normal user model switch replaces it. The pin does not change agent or global defaults.

@@ -271,6 +271,25 @@ registerSessionNativeRuntimeConsentTests({
 registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
+  it("allows a session-only pin without changing a configured global default", async () => {
+    cfg.agents!.defaults!.modelSelectionScope = "global";
+    const sessionKey = "agent:main:subagent:workboard-continuation";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "workboard-continuation", updatedAt: 1 },
+    );
+    const response = await patchSession({
+      key: sessionKey,
+      model: "openai/gpt-5.6-sol",
+      modelSelectionScope: "session",
+    });
+    expect(response[0]).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+    });
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
   registerSessionSandboxStickyModelTests({
     getConfig: () => cfg,
     patchSession,

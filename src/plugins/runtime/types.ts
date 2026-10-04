@@ -24,6 +24,8 @@ type SubagentRunParams = {
   toolsAlsoAllow?: string[];
   provider?: string;
   model?: string;
+  /** Persist an authorized explicit model on this session for later interactive turns. */
+  persistModel?: boolean;
   extraSystemPrompt?: string;
   /** Use the bounded subagent prompt instead of the full conversation prompt. */
   promptMode?: "minimal";

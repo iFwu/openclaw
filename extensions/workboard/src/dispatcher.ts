@@ -489,6 +489,7 @@ async function runWorkboardDispatch(
         toolsAlsoAllow: [...WORKBOARD_REQUIRED_WORKER_TOOLS],
         ...(params.options?.provider ? { provider: params.options.provider } : {}),
         ...(params.options?.model ? { model: params.options.model } : {}),
+        ...(params.options?.model ? { persistModel: true } : {}),
         lane: `workboard:${cardBoardId(card)}:${card.id}`,
         idempotencyKey: runId,
         lightContext: true,

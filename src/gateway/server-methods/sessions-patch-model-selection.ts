@@ -50,6 +50,7 @@ export function persistSessionPatchModelSelection(params: {
   // when ordinary model selections normally update agent/global defaults.
   if (
     isSessionStatusModelPatchOrigin() ||
+    params.patch.modelSelectionScope === "session" ||
     typeof params.patch.model !== "string" ||
     params.patch.sandboxMode !== undefined ||
     params.patch.nativeRuntimeConsent !== undefined ||

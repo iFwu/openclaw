@@ -359,6 +359,9 @@ export function createGatewaySubagentRuntime(
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
       const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
+      if (params.persistModel === true && (!allowOverride || !params.model?.trim())) {
+        throw new Error("Persisting a subagent model requires an authorized explicit model.");
+      }
       let sessionMutationCommitGuard = assertCurrent;
       if (policy) {
         const context = getInProcessGatewayRequestContext(resolveGatewayContext);
@@ -409,6 +412,25 @@ export function createGatewaySubagentRuntime(
         assertPluginSubagentModelAllowed(policy, selection, pluginId, authProfileId);
         // The command owns parsing. Replacing its input with this result would
         // apply non-idempotent provider aliases again; retain the authorized syntax.
+      }
+      if (params.persistModel === true) {
+        sessionMutationCommitGuard?.();
+        await dispatchGatewayMethodInProcess(
+          "sessions.patch",
+          {
+            key: params.sessionKey,
+            model: params.provider ? `${params.provider}/${params.model}` : params.model,
+            modelSelectionScope: "session",
+          },
+          {
+            sessionMutationCommitGuard,
+            ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
+            ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+            resolveGatewayContext,
+          },
+        );
+        sessionMutationCommitGuard?.();
+        runtimeLifetime?.throwIfAborted();
       }
       const payload = await dispatchGatewayMethodInProcess<{
         runId?: string;

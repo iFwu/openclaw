@@ -4,6 +4,28 @@ import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 describe("dispatchAndStartWorkboardCards", () => {
+  it("asks the authorized runtime to persist an explicit worker model before continuation", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({
+      title: "Pinned worker",
+      agentId: "main",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "pinned-worker" });
+    await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 1, provider: "fixture", model: "chosen" },
+    });
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: `agent:main:subagent:workboard-default-${card.id}`,
+      provider: "fixture",
+      model: "chosen",
+      persistModel: true,
+    });
+  });
   it("persists the resolved subagent runtime on new executions", async () => {
     const store = createWorkboardSqliteTestStore();
     const card = await store.create({
@@ -795,6 +817,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       lane: `workboard:default:${first.id}`,
       deliver: false,
     });
+    expect(run.mock.calls[0]?.[0]).not.toHaveProperty("persistModel");
     expect(run.mock.calls[0]?.[0]?.message).toContain("Claim token:");
     expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_complete with the card id");
     expect(run.mock.calls[0]?.[0]?.message).toContain("returned proofId");
