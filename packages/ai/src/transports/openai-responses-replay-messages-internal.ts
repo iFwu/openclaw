@@ -32,6 +32,7 @@ import {
 } from "./openai-responses-contracts.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { log } from "./openai-transport-shared.js";
 import {
   buildProviderReplayContext,
   providerReplayContextMatches,
@@ -106,6 +107,57 @@ function normalizeOpenAIResponsesReasoningReplayItem(
   return { ...record, summary: [] } as ReplayableResponseReasoningItem;
 }
 
+const reasoningReplayFenceFields = [
+  "provider",
+  "api",
+  "model",
+  "baseUrlHash",
+  "sessionHash",
+  "authProfileHash",
+] as const;
+const reportedReasoningReplayDrops = new Set<string>();
+const MAX_REPORTED_REASONING_REPLAY_DROPS = 256;
+
+function reasoningFenceFingerprint(value: string | undefined): string {
+  // Metadata can be imported from transcripts; diagnostic work and output stay bounded.
+  return value === undefined ? "absent" : `${shortHash(value.slice(0, 256))}:${value.length}`;
+}
+
+function reportDroppedReasoningReplay(
+  metadata: OpenAIResponsesReasoningReplayMetadata | undefined,
+  context: OpenAIResponsesReplayContext,
+  capturedMetadataPresent: boolean,
+): void {
+  const reason = metadata
+    ? reasoningReplayFenceFields
+        .filter((field) => metadata[field] !== context[field])
+        .map(
+          (field) =>
+            `${field}(captured=${reasoningFenceFingerprint(metadata[field])} current=${reasoningFenceFingerprint(context[field])})`,
+        )
+        .join(" ")
+    : `capturedMetadata=${capturedMetadataPresent ? "invalid" : "absent"}`;
+  const route = shortHash(
+    reasoningReplayFenceFields.map((field) => reasoningFenceFingerprint(context[field])).join("|"),
+  );
+  const signature = `${route}|${reason}`;
+  if (reportedReasoningReplayDrops.has(signature)) {
+    return;
+  }
+  if (reportedReasoningReplayDrops.size >= MAX_REPORTED_REASONING_REPLAY_DROPS) {
+    const oldest = reportedReasoningReplayDrops.values().next().value;
+    if (oldest !== undefined) {
+      reportedReasoningReplayDrops.delete(oldest);
+    }
+  }
+  reportedReasoningReplayDrops.add(signature);
+  try {
+    log.warn(`[responses] dropping encrypted reasoning replay route=${route}: ${reason}`);
+  } catch {
+    // Optional diagnostic sinks cannot change enforced replay fencing.
+  }
+}
+
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
@@ -131,6 +183,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
+  reportDroppedReasoningReplay(metadata, context, blockMetadata !== undefined || hasRawMetadata);
   const stripped = stripEncryptedReasoningContentFields(rest);
   return normalizeOpenAIResponsesReasoningReplayItem(
     stripped.value as ReplayableResponseReasoningItem,
