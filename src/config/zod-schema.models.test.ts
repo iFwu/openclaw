@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
+  it.each([undefined, false, true, "true"])(
+    "admits only an explicit boolean compatible WS capability (%s)",
+    (supportsResponsesWebSocket) => {
+      const result = ModelsConfigSchema.safeParse({
+        providers: {
+          "fixture-proxy": {
+            baseUrl: "https://compatible.example/v1",
+            models: [
+              { id: "fixture-model", name: "fixture", compat: { supportsResponsesWebSocket } },
+            ],
+          },
+        },
+      });
+      expect(result.success).toBe(supportsResponsesWebSocket !== "true");
+      if (result.success) {
+        expect(
+          result.data?.providers?.["fixture-proxy"]?.models?.[0]?.compat
+            ?.supportsResponsesWebSocket,
+        ).toBe(supportsResponsesWebSocket);
+      }
+    },
+  );
   it("preserves a SecretRef-only bundled overlay without custom provider fields", () => {
     const apiKey = { source: "file", provider: "x", id: "/runway" };
     const parsed = ModelsConfigSchema.parse({ providers: { runway: { apiKey } } });

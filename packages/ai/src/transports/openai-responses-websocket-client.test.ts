@@ -1,10 +1,8 @@
 import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
-  type AssistantMessage,
   type Context,
   type Model,
 } from "@openclaw/llm-core";
-import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginMetadataSnapshot,
@@ -13,31 +11,42 @@ import {
 import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
+import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
+  createOpenAIResponsesClient,
+  createOpenAIResponsesTransportStreamFn,
+} from "./openai-responses-client.js";
+import {
   OpenAIResponsesWebSocketSafeRetryError,
-  responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
+import type {
+  StreamMessage,
+  SdkResponse,
+} from "./openai-responses-websocket-client.test-support.js";
 import {
-  withProviderAcceptanceObserver,
-  type ProviderAcceptance,
-} from "./transport-stream-shared.js";
-
-type StreamMessage =
-  | { type: "open" }
-  | { type: "error"; error: Error }
-  | { type: "close"; code: number }
-  | { type: "delay"; ms: number }
-  | { type: "message"; message: Record<string, unknown> };
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+  initialHost,
+  model,
+  userMessage,
+  completedEvent,
+  message,
+  wrappedSdkServerError,
+  toolCallResponse,
+  sdkCompletion,
+  sdkEvent,
+  run,
+} from "./openai-responses-websocket-client.test-support.js";
+import { forbidResponsesTestNetwork } from "./openai-responses-websocket-network.test-support.js";
+import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const transportState = vi.hoisted(() => ({
   handshakeMessages: [] as StreamMessage[],
   responseBatches: [] as StreamMessage[][],
   sdkOutcomes: [] as Array<Error | SdkResponse>,
   sdkRequests: [] as Array<Record<string, unknown>>,
+  sdkDispatchSignals: [] as Array<AbortSignal | undefined>,
   websocketCloseCount: 0,
   websocketCloseReasons: [] as string[],
   websocketClients: [] as Array<{ apiKey?: string; baseURL?: string }>,
@@ -49,9 +58,11 @@ vi.mock("openai", () => {
   class MockOpenAI {
     apiKey: string;
     baseURL: string;
+    defaultHeaders: Record<string, string | null>;
     responses = {
-      create: (request: Record<string, unknown>) => {
+      create: (request: Record<string, unknown>, options?: { signal?: AbortSignal }) => {
         transportState.sdkRequests.push(request);
+        transportState.sdkDispatchSignals.push(options?.signal);
         const outcome = transportState.sdkOutcomes.shift() ?? new Error("Unexpected SSE request");
         return {
           withResponse: async () => {
@@ -64,13 +75,38 @@ vi.mock("openai", () => {
       },
     };
 
-    constructor(options: { apiKey?: string; baseURL?: string }) {
+    constructor(options: {
+      apiKey?: string;
+      baseURL?: string;
+      defaultHeaders?: Record<string, string | null>;
+    }) {
       this.apiKey = options.apiKey ?? "";
       this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
+      this.defaultHeaders = options.defaultHeaders ?? {};
     }
 
-    withOptions(options: { apiKey?: string }) {
-      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
+    withOptions(options: { apiKey?: string; defaultHeaders?: Record<string, string | null> }) {
+      return new MockOpenAI({
+        apiKey: options.apiKey ?? this.apiKey,
+        baseURL: this.baseURL,
+        defaultHeaders: options.defaultHeaders ?? this.defaultHeaders,
+      });
+    }
+
+    _buildWebSocketHeaders(authHeaders: Record<string, string>) {
+      const headers = new Headers(authHeaders);
+      for (const [name, value] of Object.entries(this.defaultHeaders)) {
+        if (value === null) {
+          headers.delete(name);
+        } else {
+          headers.set(name, value);
+        }
+      }
+      return Object.fromEntries(headers);
+    }
+
+    buildURL(path: string) {
+      return this.baseURL.replace(/\/+$/, "") + path;
     }
   }
 
@@ -127,194 +163,16 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
-import {
-  createOpenAIResponsesClient,
-  createOpenAIResponsesTransportStreamFn,
-} from "./openai-responses-client.js";
-import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
-
-const initialHost = getAiTransportHost();
-const model = {
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
-
-function userMessage(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
-}
-
-function completedEvent(responseId: string, content?: string | Array<Record<string, unknown>>) {
-  const output =
-    typeof content === "string"
-      ? [
-          {
-            id: `msg_${responseId}`,
-            type: "message",
-            status: "completed",
-            content: [
-              {
-                annotations: [
-                  {
-                    type: "url_citation",
-                    url: "https://example.test/source",
-                    title: "source",
-                    start_index: 0,
-                    end_index: content.length,
-                  },
-                ],
-                logprobs: [{ token: content, logprob: -0.1, bytes: [], top_logprobs: [] }],
-                text: content,
-                type: "output_text",
-              },
-            ],
-            role: "assistant",
-            phase: "final_answer",
-          },
-        ]
-      : (content ?? []);
-  return {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: {
-        input_tokens: 5,
-        output_tokens: output.length > 0 ? 3 : 0,
-        total_tokens: output.length > 0 ? 8 : 5,
-      },
-    },
-  };
-}
-
-function message(event: Record<string, unknown>): StreamMessage {
-  return { type: "message", message: event };
-}
-
-function wrappedSdkServerError(params: {
-  code: string;
-  message: string;
-  param?: string;
-  status: number;
-}): WebSocketError {
-  const event = {
-    type: "error",
-    error: {
-      type: "invalid_request_error",
-      code: params.code,
-      message: params.message,
-      param: params.param ?? null,
-    },
-    status: params.status,
-  };
-  return new WebSocketError(JSON.stringify(event), event as never);
-}
-
-function toolCallResponse(responseId: string): StreamMessage[] {
-  const functionCall = {
-    type: "function_call",
-    id: "fc_read",
-    call_id: "call_read",
-    name: "read",
-    arguments: '{"path":"README.md"}',
-    status: "completed",
-  };
-  return [
-    message({
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...functionCall, arguments: "", status: "in_progress" },
-    }),
-    message({
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: "fc_read",
-      delta: '{"path":"README.md"}',
-    }),
-    message({
-      type: "response.function_call_arguments.done",
-      output_index: 0,
-      item_id: "fc_read",
-      name: "read",
-      arguments: '{"path":"README.md"}',
-    }),
-    message({
-      type: "response.output_item.done",
-      output_index: 0,
-      item: functionCall,
-    }),
-    message(completedEvent(responseId, [functionCall])),
-  ];
-}
-
-function sdkCompletion(responseId: string): SdkResponse {
-  return sdkEvent(completedEvent(responseId));
-}
-
-function sdkEvent(event: Record<string, unknown>): SdkResponse {
-  return {
-    data: (async function* () {
-      yield event;
-    })(),
-    response: new Response(null, { status: 200 }),
-  };
-}
-
-async function run(
-  context: Context,
-  overrides: {
-    model?: Model<"openai-responses">;
-    transport?: "sse" | "websocket" | "websocket-cached" | "auto";
-    sessionId?: string;
-    timeoutMs?: number;
-    headers?: Record<string, string>;
-    cacheRetention?: "none" | "short";
-    observations?: ResponsesPromptObservation[];
-    onCompactionRejected?: () => void;
-    acceptanceObserver?: (acceptance: ProviderAcceptance) => void;
-  } = {},
-): Promise<AssistantMessage> {
-  const options = {
-    apiKey: "test-key",
-    sessionId: overrides.sessionId ?? "session-1",
-    transport: overrides.transport ?? "websocket-cached",
-    reasoningEffort: "low",
-    timeoutMs: overrides.timeoutMs,
-    headers: overrides.headers,
-    cacheRetention: overrides.cacheRetention,
-    onCompactionRejected: overrides.onCompactionRejected,
-  };
-  if (overrides.acceptanceObserver) {
-    withProviderAcceptanceObserver(options, overrides.acceptanceObserver);
-  }
-  if (overrides.observations) {
-    responsesPromptObserver.set(options, (observation) =>
-      overrides.observations?.push(observation),
-    );
-  }
-  const stream = await createOpenAIResponsesTransportStreamFn()(
-    overrides.model ?? model,
-    context,
-    options as never,
-  );
-  return stream.result();
-}
-
 describe("native OpenAI Responses WebSocket client integration", () => {
+  let verifyNoNetwork: (() => void) | undefined;
   beforeEach(() => {
+    verifyNoNetwork = forbidResponsesTestNetwork();
     cleanupSessionResources();
     transportState.handshakeMessages.length = 0;
     transportState.responseBatches.length = 0;
     transportState.sdkOutcomes.length = 0;
     transportState.sdkRequests.length = 0;
+    transportState.sdkDispatchSignals.length = 0;
     transportState.websocketCloseCount = 0;
     transportState.websocketCloseReasons.length = 0;
     transportState.websocketClients.length = 0;
@@ -356,6 +214,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    verifyNoNetwork?.();
   });
 
   it.each([undefined, "short", "none"] as const)(
@@ -407,6 +266,38 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       "x-openclaw-session-id": "session-1",
       "x-provider-route": "route-a",
     });
+  });
+
+  it("reports compatible WebSocket acceptance and keeps native Astra steering hooks isolated", async () => {
+    const { Agent } = await import("node:http");
+    const agent = new Agent();
+    const release = vi.fn(() => agent.destroy());
+    const acceptanceObserver = vi.fn();
+    const onActiveResponse = vi.fn();
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      prepareResponsesWebSocket: async () => ({ agent, release }),
+    });
+    transportState.responseBatches.push([message(completedEvent("resp_compatible_acceptance"))]);
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        model: {
+          ...model,
+          id: "gpt-6-astra",
+          provider: "compatible-gateway",
+          baseUrl: "https://api.openai.com/v1",
+          compat: { supportsResponsesWebSocket: true },
+        },
+        acceptanceObserver,
+        onActiveResponse,
+      },
+    );
+    expect(result.stopReason).toBe("stop");
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+    expect(onActiveResponse).not.toHaveBeenCalled();
+    cleanupSessionResources();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("closes the WebSocket when acceptance observation fails", async () => {
@@ -941,6 +832,199 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.websocketRequests).toHaveLength(1);
     expect(transportState.sdkRequests).toEqual([]);
   });
+
+  it.each(["websocket", "websocket-cached", "auto"] as const)(
+    "uses a guarded compatible route for %s without granting native Astra steering",
+    async (transport) => {
+      const { Agent } = await import("node:http");
+      const agent = new Agent();
+      const release = vi.fn(() => agent.destroy());
+      const prepare = vi.fn(async () => ({ agent, release }));
+      configureAiTransportHost({ ...getAiTransportHost(), prepareResponsesWebSocket: prepare });
+      transportState.responseBatches.push([
+        { type: "message", message: completedEvent("resp_custom", "compatible answer") },
+      ]);
+      const compatibleModel = {
+        ...model,
+        id: "gpt-6-astra",
+        provider: "compatible-gateway",
+        baseUrl: "https://compatible.example/v1",
+        compat: { supportsResponsesWebSocket: true },
+      };
+      const result = await run(
+        { messages: [userMessage("hello", 1)], tools: [] },
+        { model: compatibleModel, transport },
+      );
+      expect(result.stopReason).toBe("stop");
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: compatibleModel,
+          url: "wss://compatible.example/v1/responses",
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(transportState.websocketOptions[0]).toMatchObject({ agent });
+      expect(transportState.sdkRequests).toEqual([]);
+      cleanupSessionResources();
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["missing", "rejected"])(
+    "never opens a bare compatible socket when the host route is %s",
+    async (routeStatus) => {
+      configureAiTransportHost({
+        ...getAiTransportHost(),
+        prepareResponsesWebSocket:
+          routeStatus === "missing"
+            ? undefined
+            : async () => {
+                throw new Error("synthetic SSRF rejection");
+              },
+      });
+      transportState.sdkOutcomes.push(sdkCompletion("resp_guarded_sse"));
+      const result = await run(
+        { messages: [userMessage("hello", 1)], tools: [] },
+        {
+          model: {
+            ...model,
+            baseUrl: "https://compatible.example/v1",
+            compat: { supportsResponsesWebSocket: true },
+          },
+        },
+      );
+      expect(result.stopReason).toBe("stop");
+      expect(transportState.websocketClients).toEqual([]);
+      expect(transportState.sdkRequests).toHaveLength(1);
+    },
+  );
+
+  it("releases a route aborted during preparation without attempting WS or fallback SSE", async () => {
+    const { Agent } = await import("node:http");
+    const agent = new Agent();
+    const release = vi.fn(() => agent.destroy());
+    const controller = new AbortController();
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      prepareResponsesWebSocket: async () => {
+        controller.abort();
+        return { agent, release };
+      },
+    });
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        signal: controller.signal,
+        model: {
+          ...model,
+          baseUrl: "https://compatible.example/v1",
+          compat: { supportsResponsesWebSocket: true },
+        },
+      },
+    );
+    expect(result.stopReason).not.toBe("stop");
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(transportState.websocketClients).toEqual([]);
+    expect(transportState.sdkRequests).toEqual([]);
+  });
+
+  it("keeps host-managed compatible routes on guarded SSE even with opt-in", async () => {
+    const prepare = vi.fn();
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      requiresManagedTransport: () => true,
+      prepareResponsesWebSocket: prepare,
+    });
+    transportState.sdkOutcomes.push(sdkCompletion("resp_managed"));
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        model: {
+          ...model,
+          baseUrl: "https://compatible.example/v1",
+          compat: { supportsResponsesWebSocket: true },
+        },
+      },
+    );
+    expect(result.stopReason).toBe("stop");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(transportState.websocketClients).toEqual([]);
+  });
+
+  it.each(["deadline", "caller"] as const)(
+    "does not dispatch SSE after %s abort while SafeRetry rebuild awaits",
+    async (abortKind) => {
+      const { Agent } = await import("node:http");
+      const agent = new Agent();
+      const release = vi.fn(() => agent.destroy());
+      let routeSignal: AbortSignal | undefined;
+      configureAiTransportHost({
+        ...getAiTransportHost(),
+        prepareResponsesWebSocket: async ({ signal }) => {
+          routeSignal = signal;
+          return { agent, release };
+        },
+      });
+      transportState.responseBatches.push([
+        {
+          type: "error",
+          error: wrappedSdkServerError({
+            code: "websocket_connection_limit_reached",
+            message: "synthetic safe rejection",
+            status: 400,
+          }),
+        },
+      ]);
+      transportState.sdkOutcomes.push(sdkCompletion("resp_should_not_dispatch"));
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const controller = new AbortController();
+      let payloadCalls = 0;
+      const resultPromise = run(
+        { messages: [userMessage("hello", 1)], tools: [] },
+        {
+          model: {
+            ...model,
+            provider: "compatible-gateway",
+            baseUrl: "https://compatible.example/v1",
+            compat: { supportsResponsesWebSocket: true },
+          },
+          timeoutMs: 500,
+          signal: controller.signal,
+          onPayload: async (payload) => {
+            if (++payloadCalls === 2) {
+              entered.resolve();
+              await resume.promise;
+            }
+            return payload;
+          },
+        },
+      );
+      await withTestTimeout(entered.promise, 3000, "SafeRetry did not enter payload rebuild");
+      if (!routeSignal) {
+        throw new Error("missing route signal");
+      }
+      if (abortKind === "caller") {
+        controller.abort();
+      }
+      if (!routeSignal.aborted) {
+        await withTestTimeout(
+          new Promise<void>((resolve) => {
+            routeSignal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+          3000,
+          "route deadline did not abort",
+        );
+      }
+      resume.resolve();
+      const result = await resultPromise;
+      expect(transportState.sdkDispatchSignals.filter((signal) => !signal?.aborted)).toHaveLength(
+        0,
+      );
+      expect(result.stopReason).not.toBe("stop");
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps custom OpenAI-compatible endpoints on guarded SSE", async () => {
     transportState.sdkOutcomes.push(sdkCompletion("resp_sse"));

@@ -601,6 +601,8 @@ export interface OpenAIResponsesCompat {
    * `store: true` turns. Default: false.
    */
   supportsResponsesContinuation?: boolean;
+  /** Opts a verified compatible endpoint into host-guarded Responses WebSockets. Default: false. */
+  supportsResponsesWebSocket?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

@@ -1,3 +1,4 @@
+import { Agent } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const websocketState = vi.hoisted(() => ({
@@ -5,10 +6,12 @@ const websocketState = vi.hoisted(() => ({
     socket: { readyState: number };
     closed: boolean;
     emitError(error: Error): void;
+    emitClose(): void;
   }>,
   clients: [] as Array<{ apiKey?: string }>,
   options: [] as Array<{ headers?: Record<string, string> }>,
   responseBatches: [] as Array<Array<Record<string, unknown>>>,
+  constructorError: false,
 }));
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -17,8 +20,12 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     closed = false;
     private events: Array<Record<string, unknown>> = [];
     private errorListeners: Array<(error: Error) => void> = [];
+    private closeListeners: Array<() => void> = [];
 
     constructor(client: { apiKey?: string }, options: { headers?: Record<string, string> }) {
+      if (websocketState.constructorError) {
+        throw new Error("synthetic SDK constructor failure");
+      }
       websocketState.instances.push(this);
       websocketState.clients.push(client);
       websocketState.options.push(options);
@@ -36,6 +43,8 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     on(event: string, listener: (error: Error) => void) {
       if (event === "error") {
         this.errorListeners.push(listener);
+      } else if (event === "close") {
+        this.closeListeners.push(() => listener(new Error("closed")));
       }
       return this;
     }
@@ -43,6 +52,13 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     emitError(error: Error) {
       for (const listener of this.errorListeners) {
         listener(error);
+      }
+    }
+
+    emitClose() {
+      this.socket.readyState = 3;
+      for (const listener of this.closeListeners) {
+        listener();
       }
     }
 
@@ -60,6 +76,8 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
+import { supportsOpenAIResponsesWebSocketEndpoint } from "./openai-responses-websocket-endpoint.js";
+import { forbidResponsesTestNetwork } from "./openai-responses-websocket-network.test-support.js";
 import {
   createOpenAIResponsesWebSocketStream,
   supportsNativeOpenAIResponsesEndpoint,
@@ -69,8 +87,23 @@ const initialHost = getAiTransportHost();
 const clientFixture = {
   apiKey: "test-key",
   baseURL: "https://api.openai.com/v1",
-  withOptions(options: { apiKey?: string }) {
+  defaultHeaders: {} as Record<string, string | null>,
+  _buildWebSocketHeaders(authHeaders: Record<string, string>) {
+    const headers = new Headers(authHeaders);
+    for (const [name, value] of Object.entries(this.defaultHeaders)) {
+      if (value === null) {
+        headers.delete(name);
+      } else {
+        headers.set(name, value);
+      }
+    }
+    return Object.fromEntries(headers);
+  },
+  withOptions(options: { apiKey?: string; defaultHeaders?: Record<string, string | null> }) {
     return { ...this, ...options };
+  },
+  buildURL(path: string) {
+    return this.baseURL + path;
   },
 };
 const client = clientFixture as never;
@@ -114,18 +147,206 @@ function createStream(request: Record<string, unknown>, overrides: { sessionId?:
 }
 
 describe("native OpenAI Responses WebSocket transport", () => {
+  let verifyNoNetwork: (() => void) | undefined;
   beforeEach(() => {
+    verifyNoNetwork = forbidResponsesTestNetwork();
     websocketState.instances.length = 0;
     websocketState.clients.length = 0;
     websocketState.options.length = 0;
     websocketState.responseBatches.length = 0;
+    websocketState.constructorError = false;
     configureAiTransportHost(initialHost);
   });
 
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    vi.useRealTimers();
+    verifyNoNetwork?.();
   });
+
+  it.each([
+    ["https://compatible.example/v1", true, true],
+    ["http://127.0.0.1:8187/v1", true, true],
+    ["http://[::1]:8187/v1", true, true],
+    ["https://compatible.example/v1", false, false],
+    ["https://compatible.example/v1", undefined, false],
+    ["http://localhost:8187/v1", true, false],
+    ["http://10.0.0.1/v1", true, false],
+    ["https://user:password@compatible.example/v1", true, false],
+    ["https://compatible.example/v1?q=secret", true, false],
+    ["https://compatible.example/v1#fragment", true, false],
+  ] as const)("compatible endpoint %s requires exact opt-in %s", (baseUrl, capability, allowed) => {
+    expect(
+      supportsOpenAIResponsesWebSocketEndpoint({
+        provider: "compatible",
+        api: "openai-responses",
+        baseUrl,
+        compat: { supportsResponsesWebSocket: capability },
+      }),
+    ).toBe(allowed);
+    expect(
+      supportsOpenAIResponsesWebSocketEndpoint({
+        provider: "compatible",
+        api: "openai-completions",
+        baseUrl,
+        compat: { supportsResponsesWebSocket: true },
+      }),
+    ).toBe(false);
+  });
+
+  function compatibleRoute() {
+    const agent = new Agent();
+    return {
+      agent,
+      url: "wss://compatible.example/v1/responses",
+      release: vi.fn(() => agent.destroy()),
+    };
+  }
+
+  function compatibleStream(route: ReturnType<typeof compatibleRoute>, overrides = {}) {
+    return createOpenAIResponsesWebSocketStream({
+      client: { ...clientFixture, baseURL: "https://compatible.example/v1" } as never,
+      request: { model: "fixture", input: [firstUser] },
+      mode: "websocket-cached",
+      sessionId: "compatible-session",
+      route,
+      ...overrides,
+    });
+  }
+
+  it("keeps the cached socket route and releases an unused prepared route on reuse", async () => {
+    const first = compatibleRoute();
+    const second = compatibleRoute();
+    websocketState.responseBatches.push([completion("resp_route_1")], [completion("resp_route_2")]);
+    await consumeResponse(compatibleStream(first));
+    expect(first.release).not.toHaveBeenCalled();
+    await consumeResponse(compatibleStream(second));
+    expect(websocketState.instances).toHaveLength(1);
+    expect(second.release).toHaveBeenCalledTimes(1);
+    cleanupSessionResources();
+    cleanupSessionResources();
+    expect(first.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases unused routes during cooldown and accepts a new route after cooldown expires", async () => {
+    vi.useFakeTimers();
+    const failed = compatibleRoute();
+    websocketState.constructorError = true;
+    expect(() => compatibleStream(failed, { degradeCooldownMs: 1000 })).toThrow();
+    expect(failed.release).toHaveBeenCalledTimes(1);
+    websocketState.constructorError = false;
+    const unused = compatibleRoute();
+    let cooldownError: unknown;
+    try {
+      compatibleStream(unused, { degradeCooldownMs: 1000 });
+    } catch (error) {
+      cooldownError = error;
+    }
+    expect(cooldownError).toMatchObject({
+      cause: { message: expect.stringContaining("cooling down") },
+    });
+    expect(websocketState.instances).toHaveLength(0);
+    expect(unused.release).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1001);
+    const recovered = compatibleRoute();
+    websocketState.responseBatches.push([completion("resp_after_cooldown")]);
+    await consumeResponse(compatibleStream(recovered, { degradeCooldownMs: 1000 }));
+    expect(recovered.release).not.toHaveBeenCalled();
+    cleanupSessionResources();
+    expect(recovered.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces and releases a cached route at the 55 minute connection age despite recent use", async () => {
+    vi.useFakeTimers();
+    const first = compatibleRoute();
+    websocketState.responseBatches.push([completion("resp_before_max_age")]);
+    await consumeResponse(compatibleStream(first));
+    vi.setSystemTime(Date.now() + 55 * 60 * 1000);
+    const next = compatibleRoute();
+    websocketState.responseBatches.push([completion("resp_after_max_age")]);
+    await consumeResponse(compatibleStream(next));
+    expect(websocketState.instances).toHaveLength(2);
+    expect(first.release).toHaveBeenCalledTimes(1);
+    expect(next.release).not.toHaveBeenCalled();
+    cleanupSessionResources();
+    expect(next.release).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["apiKey", "header", "baseURL"] as const)(
+    "does not reuse a compatible socket across a changed %s identity",
+    async (field) => {
+      const first = compatibleRoute();
+      const next = compatibleRoute();
+      websocketState.responseBatches.push(
+        [completion("resp_identity_a")],
+        [completion("resp_identity_b")],
+      );
+      await consumeResponse(compatibleStream(first));
+      const changedClient = { ...clientFixture, baseURL: "https://compatible.example/v1" };
+      if (field === "apiKey") {
+        changedClient.apiKey = "synthetic-second-key";
+      }
+      if (field === "baseURL") {
+        changedClient.baseURL = "https://other-compatible.example/v1";
+        next.url = "wss://other-compatible.example/v1/responses";
+      }
+      await consumeResponse(
+        compatibleStream(next, {
+          client: changedClient,
+          headers: field === "header" ? { "x-stable-auth-profile": "second" } : undefined,
+        }),
+      );
+      expect(websocketState.instances).toHaveLength(2);
+      expect(next.release).not.toHaveBeenCalled();
+      cleanupSessionResources();
+      expect(first.release).toHaveBeenCalledTimes(1);
+      expect(next.release).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["constructor", "pre-abort", "route-mismatch"])(
+    "releases a prepared route once for %s without caching a socket",
+    (failure) => {
+      const route = compatibleRoute();
+      if (failure === "constructor") {
+        websocketState.constructorError = true;
+      }
+      if (failure === "route-mismatch") {
+        route.url = "wss://different.example/v1/responses";
+      }
+      const controller = new AbortController();
+      if (failure === "pre-abort") {
+        controller.abort();
+      }
+      expect(() => compatibleStream(route, { signal: controller.signal })).toThrow();
+      cleanupSessionResources();
+      expect(route.release).toHaveBeenCalledTimes(1);
+      expect(websocketState.instances).toHaveLength(0);
+    },
+  );
+
+  it.each(["remote-close", "idle-error", "expiry"])(
+    "releases an owned route once for %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      const route = compatibleRoute();
+      websocketState.responseBatches.push([completion("resp_route_lifetime")]);
+      await consumeResponse(compatibleStream(route));
+      if (failure === "remote-close") {
+        websocketState.instances[0]?.emitClose();
+      }
+      if (failure === "idle-error") {
+        websocketState.instances[0]?.emitError(new Error("synthetic idle error"));
+      }
+      if (failure === "expiry") {
+        vi.advanceTimersByTime(5 * 60 * 1000);
+      }
+      expect(route.release).toHaveBeenCalledTimes(1);
+      cleanupSessionResources();
+      expect(route.release).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("only enables WebSockets for the official native OpenAI Responses endpoint", () => {
     expect(
@@ -173,6 +394,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
     websocketState.responseBatches.push([completion("resp_1")]);
     const sentinelClient = {
+      ...clientFixture,
       apiKey: "SECRET_SENTINEL-key",
       baseURL: "https://api.openai.com/v1",
       withOptions(options: { apiKey?: string }) {

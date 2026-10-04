@@ -72,8 +72,13 @@ import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
+  combineWebSocketTimeoutSignal,
+  prepareCompatibleResponsesWebSocketRoute,
+  resolveOpenAIResponsesWebSocketMode,
+} from "./openai-responses-websocket-route.js";
+import {
   createOpenAIResponsesWebSocketStream,
-  type OpenAIResponsesWebSocketMode,
+  type PreparedResponsesWebSocketRoute,
   supportsNativeOpenAIResponsesEndpoint,
 } from "./openai-responses-websocket.js";
 import {
@@ -104,40 +109,6 @@ import {
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
-
-function resolveNativeOpenAIResponsesWebSocketMode(
-  model: Model,
-  transport: OpenAIResponsesOptions["transport"],
-): OpenAIResponsesWebSocketMode | undefined {
-  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
-    return undefined;
-  }
-  if (getAiTransportHost().requiresManagedTransport(model)) {
-    return undefined;
-  }
-  return supportsNativeOpenAIResponsesEndpoint({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  })
-    ? transport
-    : undefined;
-}
-
-function combineWebSocketTimeoutSignal(
-  signal: AbortSignal,
-  model: Model,
-  timeoutMs: number | undefined,
-) {
-  const resolvedTimeoutMs =
-    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? timeoutMs
-      : getAiTransportHost().resolveModelRequestTimeoutMs(model);
-  if (resolvedTimeoutMs === undefined || !Number.isFinite(resolvedTimeoutMs)) {
-    return signal;
-  }
-  return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
-}
 
 export function createOpenAIResponsesClient(
   model: Model,
@@ -196,7 +167,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
       const requestLifecycle = responsesRequestLifecycle.get(options);
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const websocketMode = resolveNativeOpenAIResponsesWebSocketMode(
+        const websocketMode = resolveOpenAIResponsesWebSocketMode(
           model,
           responsesOptions?.transport,
         );
@@ -392,10 +363,15 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
           initialRejectedCompaction?: ResponsesStreamParams["initialRejectedCompaction"],
         ): Promise<AsyncIterable<unknown>> => {
+          if (websocketMode) {
+            websocketSignal.throwIfAborted();
+          }
           const { stream: responseStream } = await createResponsesStreamWithEncryptedContentRetry({
             client,
             request: initialRequest,
-            requestOptions,
+            requestOptions: websocketMode
+              ? { ...requestOptions, signal: websocketSignal }
+              : requestOptions,
             model,
             encodeBody,
             observePrompt,
@@ -414,7 +390,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               const trackedResponseStream = responseModelTracker.track(response, rawResponseStream);
               return withProviderResponseHook({
                 stream: observeResponsesStream(trackedResponseStream, model, requestStartedAt),
-                signal: firstEvent.signal,
+                signal: websocketMode ? websocketSignal : firstEvent.signal,
                 abort: firstEvent.abort,
                 hook: createOpenAIProviderAcceptanceHook(options, response, model),
                 onReady: () => {
@@ -448,12 +424,25 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           logWebSocketFallback(reason);
         };
         if (websocketMode) {
+          let preparedRoute: PreparedResponsesWebSocketRoute | undefined;
           try {
+            const nativeEndpoint = supportsNativeOpenAIResponsesEndpoint(model);
+            const websocketClient = client.withOptions({ defaultHeaders: websocketHeaders });
+            if (!nativeEndpoint) {
+              preparedRoute = await prepareCompatibleResponsesWebSocketRoute(
+                websocketClient,
+                model,
+                websocketSignal,
+              );
+            }
             const websocket = createOpenAIResponsesWebSocketStream({
-              client,
+              client: websocketClient,
               request: params,
-              restoreRequest: (request) =>
-                restoreResponsesReasoningState(context, model, responsesOptions, request),
+              restoreRequest: nativeEndpoint
+                ? (request) =>
+                    restoreResponsesReasoningState(context, model, responsesOptions, request)
+                : undefined,
+              route: preparedRoute,
               mode: websocketMode,
               sessionId: options?.sessionId,
               headers: websocketHeaders,
@@ -509,6 +498,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                   }
                 } catch (error) {
                   if (error instanceof OpenAIResponsesWebSocketSafeRetryError) {
+                    websocketSignal.throwIfAborted();
                     // Explicit server rejection proves no output was accepted. Resume at the next
                     // semantic attempt instead of treating this like an ambiguous disconnect.
                     const encryptedContentRejected = isInvalidEncryptedContentError(error);
@@ -523,6 +513,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                           { buildFullHistoryRequest: () => buildRequest("full-history") },
                         )
                       : undefined;
+                    websocketSignal.throwIfAborted();
                     if (encryptedContentRejected && !recovery) {
                       throw error;
                     }
@@ -549,7 +540,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               },
             };
           } catch (error) {
-            if (error instanceof OpenAIResponsesWebSocketPostDispatchError) {
+            preparedRoute?.release();
+            if (
+              websocketSignal.aborted ||
+              options?.signal?.aborted ||
+              error instanceof OpenAIResponsesWebSocketPostDispatchError
+            ) {
               throw error;
             }
             closeWebSocketForFallback("setup_failure");

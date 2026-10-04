@@ -251,6 +251,8 @@ const ModelCompatSchema = z
     supportsPromptCacheKey: z.boolean().optional(),
     /** Opts this model into stored HTTP continuation on a verified compatible endpoint. */
     supportsResponsesContinuation: z.boolean().optional(),
+    /** Opts a verified compatible endpoint into host-guarded Responses WebSockets. */
+    supportsResponsesWebSocket: z.boolean().optional(),
     /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
     supportsDeveloperRole: z.boolean().optional(),
     /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
