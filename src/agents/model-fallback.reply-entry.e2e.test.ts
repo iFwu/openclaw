@@ -125,7 +125,7 @@ function countProviderAttempts(provider: string): number {
 describe("getReplyFromConfig fallback availability", () => {
   it.each([
     {
-      title: "returns the pinned rate-limit surface through the reply entry",
+      title: "returns the explicit-empty-ladder rate-limit surface through the reply entry",
       provider: "openai",
       errorMessage: RATE_LIMIT_ERROR_MESSAGE,
       toolMetas: [],
@@ -153,9 +153,9 @@ describe("getReplyFromConfig fallback availability", () => {
       loginCommand: "/login",
     })),
   ])("$title", async ({ provider, errorMessage, toolMetas, loginCommand }) => {
-    // Pre-fix this chain returned "The AI service is temporarily rate-limited. Please try again
-    // in a moment." because run preparation rebuilt fallbackConfigured from config defaults instead
-    // of carrying the disabled model-fallback availability into the embedded runner.
+    // An authored empty agent ladder disables model switching while retaining
+    // same-model recovery and terminal error delivery. A manual selection alone
+    // no longer implies that the model's effective fallback chain is disabled.
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       if (provider === "openai") {
         await writeFallbackMultiProfileAuthStore(agentDir);
@@ -179,7 +179,7 @@ describe("getReplyFromConfig fallback availability", () => {
             workspace: workspaceDir,
             model: { primary: `${provider}/mock-1`, fallbacks: ["anthropic/mock-2"] },
           },
-          list: [{ id: "test", agentDir, workspace: workspaceDir }],
+          list: [{ id: "test", agentDir, workspace: workspaceDir, model: { fallbacks: [] } }],
         },
         models: {
           ...baseConfig.models,
