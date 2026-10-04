@@ -159,6 +159,9 @@ export async function withPreparedWebchatReplyMedia<T>(
             inputs.map(readChatSendReplyPayload),
             {
               localRoots,
+              literalPayloadIndexes: new Set(
+                inputs.flatMap((input, index) => (input.kind === "prepared" ? [index] : [])),
+              ),
               assertCurrent: captureChannelReadAuthority(),
               onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
             },

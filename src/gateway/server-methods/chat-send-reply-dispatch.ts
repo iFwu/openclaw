@@ -406,6 +406,7 @@ export function createChatSendReplyDispatch(params: {
       mediaMessage,
       assistantContent,
       persistedAssistantContent,
+      openclawDelivery,
     } = await prepareWebchatReplyMediaForDisplay({
       scope: mediaScope,
       storePath: latestStorePath,
@@ -476,6 +477,7 @@ export function createChatSendReplyDispatch(params: {
         content: persistedContentForAppend,
         idempotencyKey: ownedTranscriptIdempotencyKey,
         managedMediaUrls: sourceMediaUrls,
+        openclawDelivery,
         scope: transcriptScope,
       });
       if (!rewritten) {
@@ -500,6 +502,7 @@ export function createChatSendReplyDispatch(params: {
         content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
+        openclawDelivery,
         scope: transcriptScope,
       });
       if (indexedRewrite) {
@@ -560,6 +563,7 @@ export function createChatSendReplyDispatch(params: {
       sessionKey,
       message: isRuntimeMediaSupplement ? "" : transcriptReply,
       content: appendContent,
+      openclawDelivery,
       sessionId,
       storePath: latestStorePath,
       agentId,

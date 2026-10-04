@@ -1,6 +1,7 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { projectAssistantDirectiveDisplayText } from "../config/sessions/transcript-assistant-delivery.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -57,7 +58,11 @@ export function projectSessionDisplayMessage(
   }
   const extracted =
     role === "assistant" ? extractAssistantPhaseText(entry) : extractUserText(entry);
-  let text = extracted?.trim();
+  let text = (
+    role === "assistant" && options.view !== "model-context"
+      ? projectAssistantDirectiveDisplayText(entry)
+      : extracted
+  )?.trim();
   if (!text || (role === "assistant" && isSuppressedControlReplyText(text))) {
     return null;
   }

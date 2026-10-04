@@ -296,11 +296,12 @@ describe("handleTtsCommands status fallback reporting", () => {
   });
 
   it.each([
-    { command: "/tts latest", audioAsVoice: true },
-    { command: "/tts read latest", audioAsVoice: false },
+    { command: "/tts latest", audioAsVoice: true, withDirectiveFacts: false },
+    { command: "/tts read latest", audioAsVoice: false, withDirectiveFacts: false },
+    { command: "/tts latest", audioAsVoice: true, withDirectiveFacts: true },
   ])(
     "reads the latest assistant reply via $command with voice delivery $audioAsVoice",
-    async ({ command, audioAsVoice }) => {
+    async ({ command, audioAsVoice, withDirectiveFacts }) => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
       const storePath = path.join(tempDir, "sessions.json");
       const sessionKey = "agent:other:tts-latest";
@@ -332,7 +333,9 @@ describe("handleTtsCommands status fallback reporting", () => {
             },
             {
               type: "text",
-              text: "latest visible reply",
+              text: withDirectiveFacts
+                ? "[[reply_to_current]]latest visible reply [[tts:text]]latest speech[[/tts:text]]"
+                : "latest visible reply",
               textSignature: JSON.stringify({
                 v: 1,
                 id: "item_final",
@@ -340,6 +343,14 @@ describe("handleTtsCommands status fallback reporting", () => {
               }),
             },
           ],
+          ...(withDirectiveFacts
+            ? {
+                openclawDelivery: {
+                  replyToCurrent: true,
+                  tts: { tagged: true, text: "latest speech" },
+                },
+              }
+            : {}),
         },
       });
       ttsMocks.textToSpeech.mockResolvedValue({
@@ -365,11 +376,11 @@ describe("handleTtsCommands status fallback reporting", () => {
       const reply = expectReply(result);
       expect(reply.mediaUrl).toBe("/tmp/latest.ogg");
       expect(reply.audioAsVoice).toBe(audioAsVoice);
-      expect(reply.spokenText).toBe("latest visible reply");
+      expect(reply.spokenText).toBe(withDirectiveFacts ? "latest speech" : "latest visible reply");
       const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
         text?: string;
       };
-      expect(speechCall.text).toBe("latest visible reply");
+      expect(speechCall.text).toBe(withDirectiveFacts ? "latest speech" : "latest visible reply");
       expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
       expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
     },

@@ -6,6 +6,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { stripAssistantDeliveryDirectivesForDisplay } from "../../config/sessions/transcript-assistant-delivery.js";
+import { splitMediaOutput } from "../../media/parse-output.js";
 import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
@@ -226,7 +228,14 @@ async function handleTtsLatestAction(
       storePath: params.storePath,
     }),
   });
-  const latestText = latest?.text.trim();
+  const latestText = latest
+    ? splitMediaOutput(
+        stripAssistantDeliveryDirectivesForDisplay(
+          latest.openclawDelivery?.tts?.text ?? latest.text,
+        ),
+        { extractAudioDirectives: false },
+      ).text.trim()
+    : undefined;
   if (!latestText || isSilentReplyPayloadText(latestText)) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
   }

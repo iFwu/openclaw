@@ -2,14 +2,21 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessageSync,
+  loadTranscriptEventRowsAfterSeqSync,
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { enrichAssistantTranscriptMediaForRun } from "./chat-transcript-persistence.js";
+import {
+  enrichAssistantTranscriptMediaForRun,
+  rewriteAssistantTranscriptMessageByIdempotencyKey,
+  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
+} from "./chat-transcript-persistence.js";
 
 const RUN_ID = "generated-media-completion";
 const MESSAGE_ID = "completion-answer";
@@ -29,6 +36,7 @@ async function withTranscriptFixture(
       watermark: ReturnType<typeof readSessionTranscriptWatermark>;
     };
     mediaBlock: Record<string, unknown>;
+    mediaUrl: string;
   }) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState({ label: "generated-media-transcript" }, async (state) => {
@@ -91,6 +99,7 @@ async function withTranscriptFixture(
         eventId: MESSAGE_ID,
         message: {
           role: "assistant",
+          idempotencyKey: "owned-display-reply",
           content: [
             { type: "thinking", thinking: "Synthetic reasoning.", thinkingSignature: "opaque" },
             { type: "text", text: "Here are four options.\n", textSignature: "signed-caption" },
@@ -145,6 +154,7 @@ async function withTranscriptFixture(
       scope,
       snapshot,
       mediaBlock,
+      mediaUrl,
       enrich: (runId = RUN_ID) =>
         enrichAssistantTranscriptMediaForRun({
           scope,
@@ -158,6 +168,66 @@ async function withTranscriptFixture(
 }
 
 describe("generated-media transcript enrichment", () => {
+  it.each(["idempotency", "turn-index"] as const)(
+    "keeps no-overlay owned raw content unchanged during %s display rewrites",
+    async (owner) => {
+      await withTranscriptFixture(null, async ({ scope, snapshot, mediaBlock, mediaUrl }) => {
+        const before = snapshot();
+        const target = before.rows.find((row) => row.event.id === MESSAGE_ID);
+        if (!target || !isRecord(target.event.message)) {
+          throw new Error("missing owned assistant fixture");
+        }
+        const turnBoundary = before.rows.find((row) => row.event.id === "request");
+        if (!turnBoundary) {
+          throw new Error("missing current user turn boundary");
+        }
+        const rawContent = structuredClone(target.event.message.content);
+        expect(target.event.message).not.toHaveProperty("openclawDisplayContent");
+        if (owner === "turn-index") {
+          const rows = loadTranscriptEventRowsAfterSeqSync(scope, turnBoundary.seq);
+          const assistants = rows.filter(
+            (row) =>
+              isRecord(row.event) &&
+              isRecord(row.event.message) &&
+              row.event.message.role === "assistant",
+          );
+          expect(assistants[1]?.event).toMatchObject({ id: MESSAGE_ID });
+          expect(
+            splitMediaFromOutput(extractAssistantPhaseText(target.event.message) ?? "").mediaUrls,
+          ).toEqual([mediaUrl]);
+          expect(readSessionTranscriptWatermark(scope)).toEqual(before.watermark);
+        }
+        const content = [{ type: "text", text: "Here are four options." }, mediaBlock];
+        const openclawDelivery = { audioAsVoice: true as const, replyToId: "explicit-prepared" };
+        const result =
+          owner === "idempotency"
+            ? await rewriteAssistantTranscriptMessageByIdempotencyKey({
+                scope,
+                idempotencyKey: "owned-display-reply",
+                content,
+                managedMediaUrls: [mediaUrl],
+                openclawDelivery,
+              })
+            : await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+                scope,
+                content,
+                mediaUrls: [mediaUrl],
+                afterSeq: turnBoundary.seq,
+                assistantMessageIndex: 2,
+                expectedGeneration: before.watermark.generation,
+                openclawDelivery,
+              });
+        expect(result).toMatchObject({ messageId: MESSAGE_ID });
+        const after = snapshot().rows.find((row) => row.event.id === MESSAGE_ID);
+        expect(after?.event).toMatchObject({
+          message: { content: rawContent, openclawDisplayContent: expect.any(Array) },
+        });
+        expect(after?.event).toMatchObject({ message: { openclawDelivery } });
+        expect(after?.event).not.toHaveProperty("message.openclawDelivery.replyToCurrent");
+        expect(after?.seq).toBe(target.seq);
+      });
+    },
+  );
   it.each([null, "initial-revision"])(
     "enriches only its run's reply and preserves model bytes through replay (revision=%s)",
     async (revision) => {

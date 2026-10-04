@@ -10,6 +10,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
+import { stripAssistantDeliveryDirectivesForDisplay } from "../config/sessions/transcript-assistant-delivery.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import {
@@ -19,9 +20,10 @@ import {
   type TextFilter,
   type TextProjection,
 } from "../shared/text/text-projection.js";
+import { proveTtsDirectiveAppendInert } from "../tts/directive-facts.js";
 import {
+  createCodeAwareDirectiveDisplayTextFilter,
   inlineDirectiveDisplayTextFilter,
-  stripInlineDirectiveTagsForDisplay,
 } from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
@@ -64,7 +66,7 @@ export function normalizeLiveAssistantBufferedText(
     managedMediaUrls?: readonly string[];
   },
 ): string {
-  const normalized = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
+  const normalized = stripInternalRuntimeContext(stripAssistantDeliveryDirectivesForDisplay(text));
   return stripAssistantMediaDirectivesForDisplay(
     options?.final ? normalized : stripPendingLiveAssistantTail(normalized),
     options?.managedMediaUrls ?? [],
@@ -158,6 +160,10 @@ export function createLiveAssistantTextProjection(options?: {
   };
   const projection = createTextProjection([
     inlineDirectiveDisplayTextFilter,
+    createCodeAwareDirectiveDisplayTextFilter(
+      stripAssistantDeliveryDirectivesForDisplay,
+      proveTtsDirectiveAppendInert,
+    ),
     {
       activationTokens: [
         INTERNAL_RUNTIME_CONTEXT_BEGIN,

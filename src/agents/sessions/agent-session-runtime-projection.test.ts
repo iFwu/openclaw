@@ -447,7 +447,7 @@ describe("AgentSession runtime and transcript projections", () => {
       const live = session.state.messages.find((message) => message.role === "assistant");
       expect(live).toMatchObject({
         content: [
-          { type: "text", text: "Extension: Looking up both records." },
+          { type: "text", text: "[[reply_to_current]] Extension: Looking up both records." },
           ...values.map((value) => ({ type: "toolCall", arguments: { [field]: value } })),
         ],
         openclawDelivery: { replyToCurrent: true },
@@ -459,7 +459,7 @@ describe("AgentSession runtime and transcript projections", () => {
       expect(stored).toMatchObject({
         message: {
           content: [
-            { type: "text", text: "Extension: Looking up both records." },
+            { type: "text", text: "[[reply_to_current]] Extension: Looking up both records." },
             ...values.map((value) => ({
               type: "toolCall",
               arguments: { [field]: field === "account" ? value : "***" },

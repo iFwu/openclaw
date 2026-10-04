@@ -25,6 +25,9 @@ import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webch
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
+type AssistantDeliveryFacts = NonNullable<
+  import("../../llm/types.js").AssistantMessage["openclawDelivery"]
+>;
 
 /** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
 export function combineNonStreamingReplyParts(parts: readonly string[]): string {
@@ -168,6 +171,7 @@ export async function buildAssistantReplyContentFromInputs(
 ): Promise<{
   assistantContent: AssistantDisplayContentBlock[] | undefined;
   persistedAssistantContent: AssistantDisplayContentBlock[] | undefined;
+  openclawDelivery?: AssistantDeliveryFacts;
 }> {
   const payloads = params.inputs.map((input) =>
     input.kind === "raw" ? input.payload : input.plan.payload,
@@ -210,11 +214,29 @@ export async function buildAssistantReplyContentFromInputs(
   const persistedContent: AssistantDisplayContentBlock[] = [];
   const persistSensitiveDisplay = !hasSensitiveMediaPayload(payloads);
   let strippedTextPayloadCount = 0;
+  let openclawDelivery: AssistantDeliveryFacts | undefined;
   for (const entry of plan) {
     const payload = entry.payload;
     const metadataSource = payloads[entry.sourceIndex] ?? payload;
     const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
+    if (isPrepared) {
+      const tts = getReplyPayloadMetadata(metadataSource)?.tts;
+      const facts: AssistantDeliveryFacts = {
+        ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(payload.replyToCurrent === true ? { replyToCurrent: true } : {}),
+        ...(payload.replyToId ? { replyToId: payload.replyToId } : {}),
+        ...(tts ? { tts } : {}),
+      };
+      if (Object.keys(facts).length) {
+        openclawDelivery = Object.assign(openclawDelivery ?? {}, facts);
+        if (facts.replyToId) {
+          delete openclawDelivery.replyToCurrent;
+        } else if (facts.replyToCurrent) {
+          delete openclawDelivery.replyToId;
+        }
+      }
+    }
     const statusNotice = isReplyPayloadStatusNotice(payload);
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
@@ -222,7 +244,25 @@ export async function buildAssistantReplyContentFromInputs(
     });
     if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
       if (statusNotice) {
-        content.push({ type: "text", text, openclawStatusNotice: true });
+        content.push({
+          type: "text",
+          text,
+          openclawStatusNotice: true,
+          ...(isPrepared ? { textInterpretation: "literal" } : {}),
+        });
+      } else if (isPrepared) {
+        const previous = content.at(-1);
+        if (
+          previous &&
+          !Array.isArray(previous) &&
+          previous.type === "text" &&
+          previous.textInterpretation === "literal" &&
+          typeof previous.text === "string"
+        ) {
+          previous.text = combineNonStreamingReplyParts([previous.text, text]);
+        } else {
+          content.push({ type: "text", text, textInterpretation: "literal" });
+        }
       } else {
         const previousBlock = content.at(-1);
         if (Array.isArray(previousBlock)) {
@@ -241,6 +281,7 @@ export async function buildAssistantReplyContentFromInputs(
       persistedContent.push({
         type: "text",
         text: transcriptText,
+        ...(isPrepared ? { textInterpretation: "literal" } : {}),
         ...(statusNotice ? { openclawStatusNotice: true } : {}),
       });
     }
@@ -299,6 +340,7 @@ export async function buildAssistantReplyContentFromInputs(
         : undefined;
   return {
     assistantContent,
+    ...(openclawDelivery ? { openclawDelivery } : {}),
     persistedAssistantContent:
       persistedContent.length > 0
         ? persistedContent

@@ -2,6 +2,57 @@ import { describe, expect, it } from "vitest";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 
 describe("assistant delivery normalization across native parts", () => {
+  it("does not reinterpret admitted literal text or mint facts across its boundary", () => {
+    const literal = "Literal [[reply_to:other]] [[audio_as_voice]] [[tts:text]]say[[/tts:text]]";
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "text", text: literal, textInterpretation: "literal" },
+        { type: "text", text: "[[reply_to_current]]Actual raw answer." },
+      ],
+    };
+    applyAssistantDeliveryDirectives(message, { stripForDisplay: true });
+    expect(message).toMatchObject({
+      content: [{ text: literal, textInterpretation: "literal" }, { text: "Actual raw answer." }],
+      openclawDelivery: { replyToCurrent: true },
+    });
+    expect(message).not.toHaveProperty("openclawDelivery.replyToId");
+    expect(message).not.toHaveProperty("openclawDelivery.audioAsVoice");
+    expect(message).not.toHaveProperty("openclawDelivery.tts");
+  });
+  it("records delivery facts without rewriting the model's raw multipart bytes", () => {
+    const parts = [
+      "[[reply_to_current]]Hello.",
+      "Use `[[audio_as_voice]]` literally. [[tts:text]]Speak `code`.[[/tts:text]]",
+    ];
+    const message = {
+      role: "assistant",
+      content: parts.map((text, index) => ({
+        type: "text",
+        text,
+        textSignature: `native-${index}`,
+      })),
+      openclawDelivery: { mediaUrls: ["./kept.png"] },
+    };
+    const content = message.content;
+    const blocks = [...content];
+    applyAssistantDeliveryDirectives(message);
+    expect(message.content).toBe(content);
+    expect(message.content.map((block) => block.text)).toEqual(parts);
+    expect(message.openclawDelivery).toEqual({
+      mediaUrls: ["./kept.png"],
+      replyToCurrent: true,
+      tts: { tagged: true, text: "Speak `code`." },
+    });
+    for (const [index, block] of message.content.entries()) {
+      expect(block).toBe(blocks[index]);
+      expect(block.textSignature).toBe(`native-${index}`);
+    }
+    const snapshot = structuredClone(message);
+    applyAssistantDeliveryDirectives(message);
+    expect(message).toEqual(snapshot);
+  });
+
   it.each([
     {
       name: "reply IDs containing code bytes",
@@ -37,7 +88,7 @@ describe("assistant delivery normalization across native parts", () => {
     }));
     const identities = [...content];
     const message = { role: "assistant", content, openclawDelivery: { mediaUrls: ["./kept.png"] } };
-    applyAssistantDeliveryDirectives(message);
+    applyAssistantDeliveryDirectives(message, { stripForDisplay: true });
     expect(message.content).toBe(content);
     expect(message.content.map((block) => block.text)).toEqual(expected);
     expect(message.openclawDelivery).toEqual({ mediaUrls: ["./kept.png"], ...facts });
@@ -46,7 +97,7 @@ describe("assistant delivery normalization across native parts", () => {
       expect(block.textSignature).toBe(`native-${index}`);
     }
     const prepared = structuredClone(message);
-    applyAssistantDeliveryDirectives(message);
+    applyAssistantDeliveryDirectives(message, { stripForDisplay: true });
     expect(message).toEqual(prepared);
   });
 
@@ -66,7 +117,7 @@ describe("assistant delivery normalization across native parts", () => {
         },
       ],
     };
-    applyAssistantDeliveryDirectives(message);
+    applyAssistantDeliveryDirectives(message, { stripForDisplay: true });
     expect(message).toMatchObject({
       content: [{ text: "```text\n[[reply_to:commentary]]" }, { text: "Final reply." }],
       openclawDelivery: { replyToCurrent: true },

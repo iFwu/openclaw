@@ -29,6 +29,8 @@ const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
 type WebchatAudioEmbeddingOptions = {
   assertCurrent?: () => void;
   localRoots?: readonly string[];
+  /** Structured operations retain literal captions; explicit routing is persisted separately. */
+  literalPayloadIndexes?: ReadonlySet<number>;
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 
@@ -211,7 +213,8 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     const visibleText = payload.text?.trim();
     const text =
       visibleText && !isSuppressedControlReplyText(visibleText) ? visibleText : undefined;
-    const replyDirectivePrefix = resolveReplyDirectivePrefix(payload);
+    const isLiteral = options?.literalPayloadIndexes?.has(payloadIndex) === true;
+    const replyDirectivePrefix = isLiteral ? "" : resolveReplyDirectivePrefix(payload);
     let payloadHasAudio = false;
     let payloadHasImage = false;
     const payloadMediaBlocks: Array<Record<string, unknown>> = [];
@@ -253,7 +256,11 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     if (fullText) {
       transcriptTextParts.push(fullText);
       payloadTexts[payloadIndex] = fullText;
-      content.push({ type: "text", text: fullText });
+      content.push({
+        type: "text",
+        text: fullText,
+        ...(isLiteral ? { textInterpretation: "literal" } : {}),
+      });
     }
     content.push(...payloadMediaBlocks);
   }

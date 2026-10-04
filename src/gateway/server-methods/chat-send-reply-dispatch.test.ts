@@ -248,12 +248,15 @@ describe("buildAssistantReplyContentFromInputs", () => {
           payloadTexts: ["Thinking text for slot zero.", "The persisted result is 4."],
         },
       });
-      const expected = withAnswer ? [{ type: "text", text: "The result is 4." }] : undefined;
+      const interpretation = kind === "prepared" ? { textInterpretation: "literal" } : {};
+      const expected = withAnswer
+        ? [{ type: "text", text: "The result is 4.", ...interpretation }]
+        : undefined;
 
       expect(content).toEqual({
         assistantContent: expected,
         persistedAssistantContent: withAnswer
-          ? [{ type: "text", text: "The persisted result is 4." }]
+          ? [{ type: "text", text: "The persisted result is 4.", ...interpretation }]
           : undefined,
       });
     },
@@ -261,6 +264,44 @@ describe("buildAssistantReplyContentFromInputs", () => {
 });
 
 describe("createChatSendReplyDispatch", () => {
+  it("retains bare prepared literal controls through the real final display projection", async () => {
+    const dispatch = createChatSendReplyDispatch({
+      accountId: undefined,
+      isAgentRunStarted: () => true,
+      isRunCurrent: () => true,
+      logGateway: { ...createSubsystemLogger("test/chat-prepared-literal"), warn: vi.fn() },
+      session: createReplyDispatchSession("prepared-literal"),
+      userTurnRecorder: { markBlocked: vi.fn(), getAdmissionReceipt: () => undefined },
+    });
+    const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+    const literal = "Literal [[reply_to:other]] [[tts:text]]say this[[/tts:text]]";
+    for (const plan of createStructuredOutboundPayloadPlan([{ text: literal }])) {
+      dispatcher.sendPreparedReply("final", plan);
+    }
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    const inputs = selectChatSendFinalReplyInputs({
+      deliveredReplies: dispatch.deliveredReplies,
+      foldCommandBlocks: false,
+      suppressReplies: false,
+    });
+    const prepared = await buildAssistantReplyContentFromInputs({
+      sessionKey: "agent:main:main",
+      inputs,
+    });
+    expect(prepared.assistantContent).toEqual([
+      { type: "text", text: literal, textInterpretation: "literal" },
+    ]);
+    const source = {
+      role: "assistant",
+      content: prepared.persistedAssistantContent,
+      openclawDisplayContent: prepared.assistantContent,
+    };
+    expect(projectChatDisplayMessage(source)).toMatchObject({
+      content: [{ type: "text", text: literal, textInterpretation: "literal" }],
+    });
+    expect(source).not.toHaveProperty("openclawDelivery");
+  });
   it("owns assistant media before transcript publication only during its live dispatch", async () => {
     let current = true;
     const dispatch = createChatSendReplyDispatch({
@@ -283,8 +324,14 @@ describe("createChatSendReplyDispatch", () => {
         }),
         prepareAssistantTranscriptMessage: dispatch.prepareAssistantTranscriptMessage,
       });
+    expect(prepare()).toMatchObject({ content: [{ type: "text", text: rawText }] });
     expect(projectChatDisplayMessage(prepare())).toMatchObject({
-      content: [{ type: "text", text: rawText }],
+      content: [
+        {
+          type: "text",
+          text: "Artifacts ready\nMEDIA:./artifact.json\n```text\nMEDIA:./example.png\n```",
+        },
+      ],
     });
     await dispatch.runAgentMediaTranscript({ run: async (operation) => operation() }, async () => {
       const persisted = prepare();
@@ -296,7 +343,7 @@ describe("createChatSendReplyDispatch", () => {
         content: [
           {
             type: "text",
-            text: "[[reply_to_current]] Artifacts ready\n```text\nMEDIA:./example.png\n```",
+            text: "Artifacts ready\n```text\nMEDIA:./example.png\n```",
           },
         ],
       });
@@ -400,7 +447,15 @@ describe("createChatSendReplyDispatch", () => {
       sessionKey: "agent:main:main",
       inputs,
     });
-    expect(content.assistantContent).toEqual([{ type: "text", text: visible }]);
+    expect(content.assistantContent).toEqual([
+      { type: "text", text: "Command changed" },
+      {
+        type: "text",
+        text: literalChunks.map((text) => `${text} changed`).join("\n\n"),
+        textInterpretation: "literal",
+      },
+    ]);
+    expect(extractAssistantDisplayText(content.assistantContent)).toBe(visible);
     expect(buildTranscriptReplyTextFromInputs(inputs)).toBe(`[[reply_to:command]]\n${visible}`);
   });
 
@@ -446,7 +501,13 @@ describe("createChatSendReplyDispatch", () => {
         inputs,
       });
 
-      expect.soft(content.assistantContent).toEqual([{ type: "text", text }]);
+      expect.soft(content.assistantContent).toEqual([
+        {
+          type: "text",
+          text,
+          ...(operation === "prepared" ? { textInterpretation: "literal" } : {}),
+        },
+      ]);
       expect.soft(extractAssistantDisplayText(content.assistantContent)).toBe(text);
       expect.soft(buildTranscriptReplyTextFromInputs(inputs)).toBe(text);
     },

@@ -24,6 +24,64 @@ import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readRecentSessionMessagesWithStatsAsync } from "./session-transcript-readers.js";
 
+it.each(["mixed-tool", "mixed-alias"] as const)(
+  "retains prepared literal interpretation through repeated history projection (%s)",
+  (kind) => {
+    const literal = "Literal [[reply_to:other]] [[tts:text]]example[[/tts:text]]";
+    const source = {
+      role: "assistant",
+      content: [
+        { type: "text", text: literal, textInterpretation: "literal" },
+        ...(kind === "mixed-tool"
+          ? [{ type: "toolCall", id: "t", name: "read", arguments: {} }]
+          : [{ type: "text", text: "[[reply_to_current]]Raw answer." }]),
+      ],
+      ...(kind === "mixed-alias" ? { text: literal + "\n\n[[reply_to_current]]Raw answer." } : {}),
+    };
+    const original = structuredClone(source);
+    const display = projectChatDisplayMessages([source]);
+    const message = display[0] as Record<string, unknown>;
+    expect(message.content).toContainEqual({
+      type: "text",
+      text: literal,
+      textInterpretation: "literal",
+    });
+    if (kind === "mixed-alias") {
+      expect(message).not.toHaveProperty("text");
+      expect(message.content).toContainEqual({ type: "text", text: "Raw answer." });
+    }
+    expect(projectChatDisplayMessages(display)).toEqual(display);
+    expect(source).toEqual(original);
+  },
+);
+
+it("cleans raw multipart delivery directives before display caps without mutating model bytes", () => {
+  const signature = JSON.stringify({ v: 1, phase: "final_answer" });
+  const source = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "[[reply_to_current]]Use `", textSignature: signature },
+      {
+        type: "text",
+        text: "[[audio_as_voice]]` literally. [[tts:text]]Spoken.[[/tts:text]]",
+        textSignature: signature,
+      },
+    ],
+    openclawDelivery: { replyToCurrent: true, tts: { tagged: true, text: "Spoken." } },
+  };
+  const original = structuredClone(source);
+  const projected = projectChatDisplayMessages([source], { maxChars: 100 });
+  expect(projected).toContainEqual(
+    expect.objectContaining({
+      content: [
+        { type: "text", text: "Use `", textSignature: signature },
+        { type: "text", text: "[[audio_as_voice]]` literally.", textSignature: signature },
+      ],
+    }),
+  );
+  expect(source).toEqual(original);
+});
+
 it("caps commentary captions across an intervening image as one message", () => {
   const signature = JSON.stringify({ v: 1, id: "progress-caption", phase: "commentary" });
   const image = { type: "image", url: "/media/proof.png", mimeType: "image/png" };

@@ -4,7 +4,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseAgentSessionKey } from "@openclaw/session-url-contract/session-key-normalization";
 import type { SessionNarrationEvent } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
-import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
+import { projectAssistantDirectiveDisplayText } from "../config/sessions/transcript-assistant-delivery.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import type {
   GatewayBroadcastOpts,
@@ -142,7 +142,7 @@ export function createGatewayNarrationDelivery(params: {
     // hidden block whose opening marker no longer fits in the bounded digest.
     const visible = stripInternalRuntimeContext(
       sanitizeAssistantVisibleTextWithProfile(
-        extractAssistantPhaseText(payload.message) ?? "",
+        projectAssistantDirectiveDisplayText(payload.message) ?? "",
         "internal-scaffolding",
         payload.state === "delta",
       ),

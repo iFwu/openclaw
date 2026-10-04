@@ -9,7 +9,12 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
-        content: [{ type: "text", text: "Recovered answer" }],
+        content: [
+          {
+            type: "text",
+            text: "[[reply_to:message-7]] [[audio_as_voice]]Recovered answer [[tts:text]]Recovered speech[[/tts:text]]",
+          },
+        ],
         openclawDelivery: {
           audioAsVoice: true,
           replyToCurrent: true,

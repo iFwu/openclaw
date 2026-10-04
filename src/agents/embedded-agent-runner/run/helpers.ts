@@ -1,3 +1,4 @@
+import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
@@ -184,7 +185,14 @@ export function resolveFinalAssistantVisibleText(
   if (!lastAssistant) {
     return undefined;
   }
-  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  const display = applyAssistantDeliveryDirectives(
+    {
+      ...lastAssistant,
+      content: lastAssistant.content.map((block) => ({ ...block })),
+    },
+    { stripForDisplay: true },
+  );
+  const visibleText = extractAssistantVisibleText(display).trim();
   return visibleText || undefined;
 }
 

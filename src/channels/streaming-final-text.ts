@@ -1,4 +1,5 @@
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { stripAssistantDeliveryDirectivesForDisplay } from "../config/sessions/transcript-assistant-delivery.js";
 
 const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
 const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
@@ -57,7 +58,11 @@ export async function resolveTranscriptBackedChannelFinalText(params: {
   ) {
     return params.finalText;
   }
-  const candidateText = await params.resolveCandidateText();
+  const rawCandidateText = await params.resolveCandidateText();
+  const candidateText =
+    rawCandidateText === undefined
+      ? undefined
+      : stripAssistantDeliveryDirectivesForDisplay(rawCandidateText);
   return (
     selectLongerFinalText({
       finalText: params.finalText,

@@ -11,6 +11,8 @@ import {
 } from "../shared/text/code-regions.js";
 import {
   createConditionalTextProjector,
+  createTextProjection,
+  trimTextFilter,
   trimTextPreservingCode,
   type TextFilter,
 } from "../shared/text/text-projection.js";
@@ -437,37 +439,93 @@ export function findDirectiveCodePrefix(
   return end ? { end, checkedRawLength: source.length } : undefined;
 }
 
-/** Retain only literal directives whose Markdown ownership cannot change on append. */
-export const inlineDirectiveDisplayTextFilter: TextFilter = {
-  transform: (text) => stripInlineDirectiveTagsForDisplay(text).text,
-  create: () => {
-    let prefix: StreamDirectiveCodePrefix | undefined;
-    let hasMarker = false;
-    let previousChar = "";
-    let delta = "";
-    return createConditionalTextProjector(
-      (text) => {
-        const projected = stripInlineDirectiveTagsForDisplay(text).text;
-        prefix = projected === text ? findDirectiveCodePrefix(text, delta) : undefined;
-        return projected;
-      },
-      (input) => {
-        delta = input.delta ?? input.text;
-        if ((previousChar + delta).includes("[[")) {
-          hasMarker = true;
-          prefix = undefined;
-        }
-        if (delta) {
-          previousChar = delta.slice(-1);
-        }
-        if (prefix) {
-          prefix.checkedRawLength = input.text.length;
-        }
-        return hasMarker && !prefix;
-      },
-    );
-  },
+type DirectiveAppendProof = {
+  cleanedText: string;
+  acceptsAppend: (delta: string) => boolean;
 };
+
+/** Retain canonical ownership proofs until an append can change directive meaning. */
+export function createCodeAwareDirectiveDisplayTextFilter(
+  transform: (text: string) => string,
+  proveAppendInert?: (source: string, projected: string) => DirectiveAppendProof | undefined,
+): TextFilter {
+  return {
+    transform,
+    create: () => {
+      let prefix: StreamDirectiveCodePrefix | undefined;
+      let hasMarker = false;
+      let previousChar = "";
+      let delta = "";
+      let previous = "";
+      let advanced = false;
+      let proof: DirectiveAppendProof | undefined;
+      let continuation: ReturnType<typeof createTextProjection> | undefined;
+      const project = createConditionalTextProjector(
+        (text) => {
+          const projected = transform(text);
+          prefix = projected === text ? findDirectiveCodePrefix(text, delta) : undefined;
+          proof = projected !== text ? proveAppendInert?.(text, projected) : undefined;
+          continuation = undefined;
+          if (proof) {
+            // The TTS owner supplies pre-trim bytes. Native pending whitespace
+            // must survive an ordinary append after a stripped speech block.
+            continuation = createTextProjection([trimTextFilter("both")]);
+            continuation.replace(proof.cleanedText);
+          }
+          return projected;
+        },
+        (input) => {
+          delta = input.delta ?? input.text;
+          if ((previousChar + delta).includes("[[")) {
+            hasMarker = true;
+            prefix = undefined;
+          }
+          if (delta) {
+            previousChar = delta.slice(-1);
+          }
+          if (prefix) {
+            prefix.checkedRawLength = input.text.length;
+          }
+          return hasMarker && !prefix;
+        },
+      );
+      if (!proveAppendInert) {
+        return project;
+      }
+      return (input) => {
+        if (input.delta === "") {
+          return { text: previous, delta: "" };
+        }
+        if (input.delta !== null && proof?.acceptsAppend(input.delta) && continuation) {
+          const result = continuation.append(input.delta);
+          previous = result.text;
+          advanced = true;
+          return result;
+        }
+        proof = undefined;
+        continuation = undefined;
+        const result = project(input);
+        // Canonical fallback may retract an earlier visible opener or change
+        // code ownership. Reconcile only after bypassing its last snapshot.
+        const nextDelta =
+          input.delta === null
+            ? null
+            : advanced
+              ? result.text.startsWith(previous)
+                ? result.text.slice(previous.length)
+                : null
+              : result.delta;
+        previous = result.text;
+        advanced = false;
+        return { text: result.text, delta: nextDelta };
+      };
+    },
+  };
+}
+
+export const inlineDirectiveDisplayTextFilter = createCodeAwareDirectiveDisplayTextFilter(
+  (text) => stripInlineDirectiveTagsForDisplay(text).text,
+);
 
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();

@@ -5,6 +5,34 @@ export const ASSISTANT_DISPLAY_CONTENT_FIELD = "openclawDisplayContent";
 
 type AssistantModelContentBlock = AssistantMessage["content"][number];
 
+/** Literal interpretation describes text only, never delivery or writer authority. */
+export function isAssistantLiteralTextBlock(value: unknown): boolean {
+  const block = asOptionalRecord(value);
+  return (
+    block?.textInterpretation === "literal" &&
+    typeof block.text === "string" &&
+    (block.type === "text" || block.type === "input_text" || block.type === "output_text")
+  );
+}
+
+/** Prepared text is a separate directive scope; raw-native parts keep their multipart owner. */
+export function readAssistantDirectiveTextGroups<T>(blocks: readonly T[]): T[][] {
+  const groups: T[][] = [];
+  let current: T[] | undefined;
+  for (const block of blocks) {
+    if (isAssistantLiteralTextBlock(block)) {
+      current = undefined;
+    } else {
+      if (!current) {
+        current = [];
+        groups.push(current);
+      }
+      current.push(block);
+    }
+  }
+  return groups;
+}
+
 function isAssistantModelContentBlock(value: unknown): value is AssistantModelContentBlock {
   const block = asOptionalRecord(value);
   if (!block) {

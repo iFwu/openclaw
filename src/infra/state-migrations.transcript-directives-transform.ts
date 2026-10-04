@@ -52,6 +52,7 @@ export function transformHistoricalTranscriptEvent(event: TranscriptEvent): {
   }
   const before = JSON.stringify(event.message);
   stripLegacyReactionDirectives(event.message);
-  applyAssistantDeliveryDirectives(event.message);
+  // Historical migration retains its established stripped-text representation.
+  applyAssistantDeliveryDirectives(event.message, { stripForDisplay: true });
   return { changed: JSON.stringify(event.message) !== before, event };
 }

@@ -264,6 +264,8 @@ export interface TextSignatureV1 {
 export interface TextContent {
   type: "text";
   text: string;
+  /** Admitted literal text is not interpreted as inline delivery controls. This grants no runtime authority. */
+  textInterpretation?: "literal";
   textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
 }
 
@@ -570,6 +572,8 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether the compatible route accepts prompt_cache_key. Unknown proxy routes default to false. */
+  supportsPromptCacheKey?: boolean;
   /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */
   supportsStrictMode?: boolean;
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */

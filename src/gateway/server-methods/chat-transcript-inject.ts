@@ -9,6 +9,7 @@ import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
@@ -80,6 +81,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
+  /** Facts already admitted by a structured reply operation, never inferred from literal text. */
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
   idempotencyKey?: string;
   stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
@@ -98,15 +101,19 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   } = {
     role: "assistant",
     content: resolvedContent.map((block) => Object.assign({}, block)),
+    ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
   };
-  const preparedDisplayMessage = applyAssistantDeliveryDirectives(displayMessage);
+  const preparedDisplayMessage = applyAssistantDeliveryDirectives(displayMessage, {
+    stripForDisplay: true,
+  });
   const displayContent = preparedDisplayMessage.content;
-  const canonicalContent = retainAssistantModelContent(displayContent);
+  const canonicalContent = retainAssistantModelContent(resolvedContent);
   const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
   const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     content: canonicalContent,
+    ...(rawDeliveryFacts ? { openclawDelivery: rawDeliveryFacts } : {}),
     [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
     timestamp: now,
     // Runtime projections retain their terminal state; host-authored partials
@@ -132,9 +139,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         }
       : {}),
   });
-  if (rawDeliveryFacts && messageBody.openclawDelivery === undefined) {
-    messageBody.openclawDelivery = rawDeliveryFacts;
-  }
 
   try {
     if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {

@@ -4,6 +4,20 @@ import { projectSessionDisplayMessage } from "./session-display-projection.js";
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
 
 describe("projectSessionDisplayMessage", () => {
+  test("cleans assistant preview while model-context and user projections retain authored controls", () => {
+    const raw = "[[reply_to_current]]Shown. [[tts:text]]Spoken.[[/tts:text]]";
+    const message = { role: "assistant", content: [{ type: "text", text: raw }] };
+    expect(projectSessionDisplayMessage(message)).toEqual({ role: "assistant", text: "Shown." });
+    expect(projectSessionDisplayMessage(message, { view: "model-context" })).toEqual({
+      role: "assistant",
+      text: raw,
+    });
+    expect(projectSessionDisplayMessage({ role: "user", content: raw })).toEqual({
+      role: "user",
+      text: raw,
+    });
+    expect(message.content).toEqual([{ type: "text", text: raw }]);
+  });
   test("keeps visible user and assistant text while excluding non-display rows", () => {
     const messages = [
       { role: "user", content: "Initial request" },

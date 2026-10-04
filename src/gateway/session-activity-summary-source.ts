@@ -8,12 +8,9 @@ import {
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { projectAssistantDirectiveDisplayText } from "../config/sessions/transcript-assistant-delivery.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
-import {
-  extractAssistantPhaseText,
-  extractAssistantTextForPhase,
-} from "../shared/chat-message-content.js";
 
 /** Restore only this transcript, then read one chronological, byte-bounded batch. */
 export async function readActivitySummarySource(params: {
@@ -77,8 +74,8 @@ export async function readActivitySummarySource(params: {
         const role = message.role;
         const text =
           role === "assistant"
-            ? (extractAssistantPhaseText(message) ??
-              extractAssistantTextForPhase(message, { phase: "commentary" }))
+            ? (projectAssistantDirectiveDisplayText(message) ??
+              projectAssistantDirectiveDisplayText(message, "commentary"))
             : extractTextFromChatContent(message.content);
         if (!text) {
           return "";

@@ -2,8 +2,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
 import {
+  readAssistantDirectiveTextGroups,
+  projectAssistantDisplayContent,
+} from "../../shared/assistant-display-content.js";
+import {
   extractAssistantPhaseText,
+  extractAssistantTextForPhase,
   readAssistantTextBlocksForPhase,
+  type AssistantPhase,
 } from "../../shared/chat-message-content.js";
 import { createTextPartCodeRegionResolver } from "../../shared/text/code-regions.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
@@ -58,20 +64,62 @@ function mergeTtsFacts(
   };
 }
 
-/** Strips final-answer directives in place so live state and persisted bytes stay identical. */
-// TRANSITIONAL(marker-retirement): once the visibleReplies default flips and the
-// model stops emitting inline markers, this projection parses nothing and the
-// whole applier (plus its parser imports) can be deleted; openclawDelivery facts
-// then come exclusively from structured message-tool sends and managed-media rewrites.
+/** Record final delivery facts; only explicitly prepared display copies rewrite text. */
+// TRANSITIONAL(marker-retirement): retire live fact extraction once model-emitted
+// controls stop. Display parsing still serves retained transcripts.
 export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMessage>(
   message: T,
-  options?: { managedMediaUrls?: readonly string[] },
+  options?: { managedMediaUrls?: readonly string[]; stripForDisplay?: true },
 ): T {
   if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return message;
   }
   const finalBlocks = readAssistantTextBlocksForPhase(message, "final_answer");
   const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(message);
+  let facts: AssistantDeliveryFacts | undefined;
+  for (const group of readAssistantDirectiveTextGroups(blocks)) {
+    const next = applyAssistantDeliveryTextBlocks(group, options?.stripForDisplay);
+    if (!next) {
+      continue;
+    }
+    const priorTts = facts?.tts;
+    facts = Object.assign(facts ?? {}, next);
+    if (next.tts) {
+      facts.tts = mergeTtsFacts(priorTts, next.tts);
+    }
+    if (next.replyToId) {
+      delete facts.replyToCurrent;
+    } else if (next.replyToCurrent) {
+      delete facts.replyToId;
+    }
+  }
+  if (facts) {
+    const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
+    const mergedFacts = mergeAssistantDeliveryFacts(currentFacts, facts);
+    Object.assign(message, { openclawDelivery: mergedFacts });
+  }
+  return recordAssistantManagedMediaUrls(message, options?.managedMediaUrls);
+}
+
+/** Merge only persisted facts; text interpretation and runtime authority stay separate. */
+export function mergeAssistantDeliveryFacts(
+  current: Record<string, unknown> | undefined,
+  next: AssistantDeliveryFacts,
+): AssistantDeliveryFacts {
+  const merged = { ...current, ...next };
+  if (next.replyToId) {
+    delete merged.replyToCurrent;
+  } else if (next.replyToCurrent) {
+    delete merged.replyToId;
+  }
+  return merged;
+}
+
+/** One raw directive scope reuses native multipart/code ownership and fact extraction. */
+function applyAssistantDeliveryTextBlocks(
+  blocks: ReturnType<typeof readAssistantTextBlocksForPhase>,
+  stripForDisplay?: true,
+): AssistantDeliveryFacts | undefined {
   const original = blocks.map((block) => block.text);
   const parsed = parseInlineDirectiveParts(original);
   const stripped = stripInlineDirectivePartsForDelivery(parsed.map((part) => part.text));
@@ -88,9 +136,11 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     if (speech.cleanedText === original[index] && !hasDeliveryFacts) {
       continue;
     }
-    block.text = speech.facts
-      ? trimTextPreservingCode(speech.cleanedText, "both", codeRegions?.(index))
-      : speech.cleanedText;
+    if (stripForDisplay) {
+      block.text = speech.facts
+        ? trimTextPreservingCode(speech.cleanedText, "both", codeRegions?.(index))
+        : speech.cleanedText;
+    }
     if (!hasDeliveryFacts) {
       continue;
     }
@@ -102,17 +152,54 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
       ...(speech.facts ? { tts: mergeTtsFacts(facts.tts, speech.facts) } : {}),
     });
   }
-  if (facts) {
-    const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
-    const mergedFacts = { ...currentFacts, ...facts };
-    if (facts.replyToId) {
-      delete mergedFacts.replyToCurrent;
-    } else if (facts.replyToCurrent) {
-      delete mergedFacts.replyToId;
-    }
-    Object.assign(message, { openclawDelivery: mergedFacts });
+  return facts;
+}
+
+/** Clean one phase's display text together so code ownership survives native block splits. */
+export function stripAssistantDeliveryDirectivePartsForDisplay(texts: readonly string[]): string[] {
+  const content = texts.map((text) => ({ type: "text", text }));
+  applyAssistantDeliveryDirectives({ role: "assistant", content }, { stripForDisplay: true });
+  return content.map((block) => block.text);
+}
+
+/** Clean a display string without rewriting its durable source or deriving runtime authority. */
+export function stripAssistantDeliveryDirectivesForDisplay(text: string): string {
+  return expectDefined(
+    stripAssistantDeliveryDirectivePartsForDisplay([text])[0],
+    "single display part",
+  );
+}
+
+/** Project authored display text while retaining literal interpretation and original model bytes. */
+export function projectAssistantDirectiveDisplayText(
+  message: unknown,
+  phase?: AssistantPhase,
+): string | undefined {
+  if (!isRecord(message)) {
+    return undefined;
   }
-  return recordAssistantManagedMediaUrls(message, options?.managedMediaUrls);
+  const source = projectAssistantDisplayContent(message);
+  if (!Array.isArray(source.content)) {
+    const text = phase
+      ? extractAssistantTextForPhase(source, { phase })
+      : extractAssistantPhaseText(source);
+    return text === undefined ? undefined : stripAssistantDeliveryDirectivesForDisplay(text);
+  }
+  const content = source.content.map((block) => (isRecord(block) ? { ...block } : block));
+  const prepared: Record<string, unknown> = { ...source, content };
+  delete prepared.text;
+  if (phase === "commentary") {
+    for (const blocks of readAssistantDirectiveTextGroups(
+      readAssistantTextBlocksForPhase(prepared, phase),
+    )) {
+      applyAssistantDeliveryTextBlocks(blocks, true);
+    }
+  } else {
+    applyAssistantDeliveryDirectives(prepared, { stripForDisplay: true });
+  }
+  return phase
+    ? extractAssistantTextForPhase(prepared, { phase })
+    : extractAssistantPhaseText(prepared);
 }
 
 /** Decode only persisted delivery facts; transcript records cannot supply runtime authority. */

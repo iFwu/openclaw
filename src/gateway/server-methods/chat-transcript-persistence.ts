@@ -16,14 +16,19 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import {
+  applyAssistantDeliveryDirectives,
+  mergeAssistantDeliveryFacts,
+} from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
+  isAssistantLiteralTextBlock,
 } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
@@ -98,6 +103,7 @@ function buildAssistantDisplayRewrite(params: {
   displayContent: AssistantDisplayContentBlock[];
   managedMediaUrls?: readonly string[];
   retainOriginalText?: true;
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
 }): Record<string, unknown> {
   const previousDisplay = Array.isArray(params.message[ASSISTANT_DISPLAY_CONTENT_FIELD])
     ? readAssistantDisplayContent(params.message)
@@ -114,9 +120,17 @@ function buildAssistantDisplayRewrite(params: {
   const prepared = applyAssistantDeliveryDirectives(
     {
       ...params.message,
+      ...(params.openclawDelivery
+        ? {
+            openclawDelivery: mergeAssistantDeliveryFacts(
+              transcriptEventRecord(params.message.openclawDelivery),
+              params.openclawDelivery,
+            ),
+          }
+        : {}),
       content: params.displayContent.map((block) => Object.assign({}, block)),
     },
-    { managedMediaUrls },
+    { managedMediaUrls, stripForDisplay: true },
   );
   const original =
     previousDisplay ??
@@ -154,6 +168,11 @@ function buildAssistantDisplayRewrite(params: {
     ) {
       continue;
     }
+    if (isAssistantLiteralTextBlock(block)) {
+      content.push(block);
+      seenText.add(block.text);
+      continue;
+    }
     const splitText = splitMediaFromOutput(block.text).text;
     if (splitText === block.text && /\bMEDIA:/iu.test(block.text)) {
       continue;
@@ -180,7 +199,8 @@ function buildAssistantDisplayRewrite(params: {
   }
   return {
     ...prepared,
-    content: previousDisplay ? params.message.content : content,
+    // Display enrichment never becomes the canonical model-content owner.
+    content: params.message.content,
     [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(
       content,
       prepared.content,
@@ -366,6 +386,7 @@ export async function appendAssistantTranscriptMessage(
     message: params.message,
     label: params.label,
     content: params.content,
+    openclawDelivery: params.openclawDelivery,
     idempotencyKey: params.idempotencyKey,
     stopReason: params.stopReason,
     abortMeta: params.abortMeta,
@@ -547,6 +568,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
   idempotencyKey: string;
   managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
 }): Promise<{ messageId: string } | null> {
   const idempotencyKey = params.idempotencyKey.trim();
   if (!idempotencyKey || params.content.length === 0) {
@@ -565,6 +587,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
               message: target.message,
               displayContent: params.content,
               managedMediaUrls: params.managedMediaUrls,
+              openclawDelivery: params.openclawDelivery,
             }),
           })
         : event,
@@ -581,6 +604,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
   scope: ResolvedAssistantTranscriptScope;
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
 }): Promise<{ generation: string; messageId: string } | null> {
   if (params.content.length === 0 || params.mediaUrls.length === 0) {
     return null;
@@ -610,6 +634,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
     message: target.message,
     displayContent: params.content,
     managedMediaUrls: params.mediaUrls,
+    openclawDelivery: params.openclawDelivery,
     // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
     retainOriginalText: true,
   });
@@ -637,6 +662,7 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   scope: ResolvedAssistantTranscriptScope;
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
 }): Promise<{ messageId: string } | null> {
   return await rewriteAssistantTranscriptMessageForRun({
     scope: params.scope,
@@ -647,6 +673,7 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
         message,
         displayContent: params.content,
         managedMediaUrls: params.mediaUrls,
+        openclawDelivery: params.openclawDelivery,
         retainOriginalText: true,
       }),
       // The display projection owns MEDIA stripping; transcript signatures and

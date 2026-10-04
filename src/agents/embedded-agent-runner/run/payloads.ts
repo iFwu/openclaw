@@ -20,6 +20,7 @@ import {
   isSilentReplyPayloadText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
+import { stripAssistantDeliveryDirectivesForDisplay } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -272,7 +273,7 @@ export function buildEmbeddedRunPayloads(params: {
           : null;
       for (const text of answerTexts) {
         const {
-          text: cleanedText,
+          text: parsedText,
           mediaUrls,
           audioAsVoice,
           replyToId,
@@ -280,6 +281,7 @@ export function buildEmbeddedRunPayloads(params: {
           replyToCurrent,
           isSilent,
         } = preparedAnswerDirectives ?? parseReplyDirectives(text);
+        const cleanedText = stripAssistantDeliveryDirectivesForDisplay(parsedText);
         hasIntentionalSilentFinal = isSilent;
         const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
         const delivery = shouldUseCanonicalFinalAnswer

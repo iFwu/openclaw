@@ -4,10 +4,10 @@ import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/hea
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
+import { projectAssistantDirectiveDisplayText } from "../config/sessions/transcript-assistant-delivery.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaOutput } from "../media/parse-output.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
-import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
@@ -60,7 +60,7 @@ function publicMessageText(
     if (entry.phase !== undefined && entry.phase !== "final_answer") {
       return undefined;
     }
-    text = extractAssistantPhaseText(entry);
+    text = projectAssistantDirectiveDisplayText(entry);
   } else if (typeof entry.content === "string") {
     text = entry.content;
   } else if (Array.isArray(entry.content)) {

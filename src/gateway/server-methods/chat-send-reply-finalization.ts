@@ -267,6 +267,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
     mediaMessage,
     assistantContent,
     persistedAssistantContent,
+    openclawDelivery,
   } = await prepareWebchatReplyMediaForDisplay({
     scope: mediaScope,
     storePath: sourceSession.storePath,
@@ -289,9 +290,11 @@ export async function finalizeChatSendDispatchedReplies(params: {
   const ttsSupplementMarker = finalPayloads
     .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
     .find((marker): marker is GatewayInjectedTtsSupplementMarker => Boolean(marker));
-  const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-    ? persistedAssistantContent
-    : undefined;
+  const persistedContentForAppend =
+    hasAssistantDisplayMediaContent(persistedAssistantContent) ||
+    finalInputs.some((input) => input.kind === "prepared")
+      ? persistedAssistantContent
+      : undefined;
   const broadcastAssistantContent = hasAssistantDisplayMediaContent(assistantContent)
     ? assistantContent
     : hasAssistantDisplayMediaContent(mediaMessage?.content)
@@ -334,6 +337,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
       sessionKey: transcriptSessionKey,
       message: transcriptReply,
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
+      ...(openclawDelivery ? { openclawDelivery } : {}),
       sessionId,
       storePath: latestStorePath,
       agentId: transcriptAgentId,
@@ -354,10 +358,13 @@ export async function finalizeChatSendDispatchedReplies(params: {
     });
     if (appended.ok) {
       message = broadcastAssistantContent?.length
-        ? applyAssistantDeliveryDirectives({
-            ...appended.message,
-            content: broadcastAssistantContent.map((block) => ({ ...block })),
-          })
+        ? applyAssistantDeliveryDirectives(
+            {
+              ...appended.message,
+              content: broadcastAssistantContent.map((block) => ({ ...block })),
+            },
+            { stripForDisplay: true },
+          )
         : appended.message;
     } else {
       context.logGateway.warn(
@@ -374,7 +381,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
           : fallbackText
             ? { content: [{ type: "text", text: fallbackText }] }
             : {}),
-        ...(fallbackText ? { text: fallbackText } : {}),
+        ...(fallbackText && !fallbackAssistantContent?.length ? { text: fallbackText } : {}),
         timestamp: Date.now(),
         ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
         stopReason,
@@ -385,7 +392,6 @@ export async function finalizeChatSendDispatchedReplies(params: {
     message = {
       role: "assistant",
       content: broadcastAssistantContent,
-      text: extractAssistantDisplayText(broadcastAssistantContent) ?? "",
       timestamp: Date.now(),
       stopReason,
       usage: { input: 0, output: 0, totalTokens: 0 },

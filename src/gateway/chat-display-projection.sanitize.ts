@@ -1,8 +1,10 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripAssistantDeliveryDirectivesForDisplay } from "../config/sessions/transcript-assistant-delivery.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
+import { isAssistantLiteralTextBlock } from "../shared/assistant-display-content.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -23,6 +25,7 @@ import {
   isProjectedForwardedMessage,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,
+  stripAssistantDeliveryPartsForDisplay,
   stripPrivateToolCallContextForDisplay,
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
@@ -305,7 +308,11 @@ function projectAssistantMixedToolContent(
     }
     const truncated = truncateChatHistoryText(entry.text, maxChars);
     if (truncated.text.trim()) {
-      projectedContent.push({ type: "text", text: truncated.text });
+      projectedContent.push({
+        type: "text",
+        text: truncated.text,
+        ...(isAssistantLiteralTextBlock(entry) ? { textInterpretation: "literal" } : {}),
+      });
       hasVisibleText = true;
     }
   }
@@ -408,6 +415,15 @@ export function sanitizeChatHistoryMessage(
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
   let truncated = false;
+  if (
+    Array.isArray(entry.content) &&
+    entry.content.some(isAssistantLiteralTextBlock) &&
+    "text" in entry
+  ) {
+    // Flattened aliases cannot retain raw/literal block interpretation.
+    delete entry.text;
+    changed = true;
+  }
   if ("providerReplay" in entry) {
     delete entry.providerReplay;
     changed = true;
@@ -487,10 +503,13 @@ export function sanitizeChatHistoryMessage(
   const stripAssistantControlTokens =
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
+  if (role === "assistant") {
+    changed = stripAssistantDeliveryPartsForDisplay(entry) || changed;
+  }
   const projectText = (text: string) => {
     const controlStripped = stripAssistantControlTokens
       ? stripAssistantMediaDirectivesForDisplay(
-          stripSuppressedControlReplyToken(text),
+          stripSuppressedControlReplyToken(stripAssistantDeliveryDirectivesForDisplay(text)),
           managedMedia.urls,
         )
       : text;
@@ -529,6 +548,7 @@ export function sanitizeChatHistoryMessage(
       const contentBlock = stripAssistantControlTokens ? readRecord(sanitized.block) : undefined;
       if (
         contentBlock &&
+        !isAssistantLiteralTextBlock(contentBlock) &&
         isAssistantTextContentType(contentBlock.type) &&
         typeof contentBlock.text === "string"
       ) {

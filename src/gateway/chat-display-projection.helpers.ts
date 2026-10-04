@@ -1,8 +1,14 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAssistantDeliveryDirectivePartsForDisplay } from "../config/sessions/transcript-assistant-delivery.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import {
+  readAssistantDirectiveTextGroups,
+  isAssistantLiteralTextBlock,
+} from "../shared/assistant-display-content.js";
+import { readAssistantTextBlocksForPhase } from "../shared/chat-message-content.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export type RoleContentMessage = {
@@ -49,6 +55,34 @@ export function takeAssistantManagedMediaUrlsForDisplay(
     delete entry.openclawDelivery;
   }
   return { changed: true, urls };
+}
+
+/** Clean native text parts before display truncation without losing cross-block code ownership. */
+export function stripAssistantDeliveryPartsForDisplay(entry: Record<string, unknown>): boolean {
+  if (!Array.isArray(entry.content)) {
+    return false;
+  }
+  const replacements = new Map<unknown, unknown>();
+  for (const phase of [undefined, "commentary", "final_answer"] as const) {
+    for (const blocks of readAssistantDirectiveTextGroups(
+      readAssistantTextBlocksForPhase(entry, phase),
+    )) {
+      const texts = stripAssistantDeliveryDirectivePartsForDisplay(
+        blocks.map((block) => block.text),
+      );
+      for (const [index, block] of blocks.entries()) {
+        const text = texts[index];
+        if (text !== undefined && text !== block.text) {
+          replacements.set(block, { ...block, text });
+        }
+      }
+    }
+  }
+  if (!replacements.size) {
+    return false;
+  }
+  entry.content = entry.content.map((block) => replacements.get(block) ?? block);
+  return true;
 }
 
 /** Keeps managed attachment commands in the raw transcript while removing them from display text. */
@@ -181,6 +215,15 @@ export function hasAssistantDisplayableNonTextContent(message: unknown): boolean
 }
 
 export function shouldPreserveAssistantControlReplyText(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.content)) {
+    const textBlocks = message.content.filter((block) => {
+      const entry = readRecord(block);
+      return entry && isAssistantTextContentType(entry.type) && typeof entry.text === "string";
+    });
+    if (textBlocks.length > 0 && textBlocks.every(isAssistantLiteralTextBlock)) {
+      return true;
+    }
+  }
   if (isProjectedForwardedMessage(message)) {
     return true;
   }

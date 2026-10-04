@@ -50,6 +50,43 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("SessionManager persistence compatibility", () => {
+  it.each(["sync", "async"] as const)(
+    "retains raw assistant bytes across native %s persistence and model replay",
+    async (mode) => {
+      const dir = tempDirs.make("openclaw-raw-assistant-");
+      const scope = {
+        agentId: "main",
+        sessionId: `raw-${mode}`,
+        sessionKey: `agent:main:raw-${mode}`,
+        storePath: path.join(dir, "agents", "main", "sessions", "sessions.json"),
+      };
+      expect(resolveSessionTranscriptDatabasePath(scope).startsWith(dir + path.sep)).toBe(true);
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const raw =
+        "[[reply_to_current]]\n[[audio_as_voice]]\nShown. [[tts:text]]Spoken.[[/tts:text]]";
+      const message = buildAssistantMessage(raw);
+      const manager = SessionManager.open(scope, dir);
+      const id =
+        mode === "sync"
+          ? manager.appendMessage(message)
+          : await manager.appendMessageAsync(message);
+      expect(id).toBeTruthy();
+      expect(message.content).toEqual([{ type: "text", text: raw }]);
+      expect(message).toMatchObject({
+        openclawDelivery: {
+          replyToCurrent: true,
+          audioAsVoice: true,
+          tts: { tagged: true, text: "Spoken." },
+        },
+      });
+      const persisted = (await loadTranscriptEvents(scope)).find(
+        (event) => isRecord(event) && event.type === "message",
+      );
+      expect(persisted).toMatchObject({ message: { content: [{ type: "text", text: raw }] } });
+      expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([message]);
+    },
+  );
+
   it("persists an assistant-first session after creating its header", async () => {
     const dir = tempDirs.make("openclaw-session-manager-assistant-first-");
     const storePath = path.join(dir, "sessions.json");
@@ -85,6 +122,7 @@ describe("SessionManager persistence compatibility", () => {
         "Final answer [[tts:text]]Spoken answer[[/tts:text]]",
       ].join("\n"),
     );
+    const taggedText = tagged.content.map((block) => block.text).join("");
     const codeExampleText = [
       "Use `[[reply_to_current]]` literally.",
       "Use `[[tts:text]]spoken[[/tts:text]]` literally.",
@@ -109,7 +147,7 @@ describe("SessionManager persistence compatibility", () => {
     manager.appendMessage(ordinaryRelativeMedia);
     manager.appendMessage(ordinaryMarkdown);
 
-    expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
+    expect(tagged.content).toEqual([{ type: "text", text: taggedText }]);
     expect(tagged).toMatchObject({
       openclawDelivery: {
         audioAsVoice: true,
@@ -129,7 +167,9 @@ describe("SessionManager persistence compatibility", () => {
     expect(codeExample.content).toEqual([{ type: "text", text: codeExampleText }]);
     expect(codeExample).not.toHaveProperty("openclawDelivery");
     expect(indentedCode).not.toHaveProperty("openclawDelivery");
-    expect(malformed.content).toEqual([{ type: "text", text: "Visible reply" }]);
+    expect(malformed.content).toEqual([
+      { type: "text", text: "[[reply_to_current]\nVisible reply" },
+    ]);
     expect(malformed).not.toHaveProperty("openclawDelivery");
     expect(laterLiteral.content).toEqual([
       { type: "text", text: "Visible reply\n[[reply_to_current] literally" },

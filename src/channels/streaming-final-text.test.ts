@@ -6,6 +6,21 @@ import {
 } from "./streaming-final-text.js";
 
 describe("channel final text recovery", () => {
+  it("cleans a raw transcript candidate before prefix recovery without adding delivery intent", async () => {
+    const prefix =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis";
+    const full = `${prefix} and enough additional continuation text to prove a truncated reply.`;
+    const payload = { text: `${prefix}...` };
+    const raw = `[[reply_to:message-7]]${full} [[tts:text]]Spoken.[[/tts:text]]`;
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        payload,
+        finalText: payload.text,
+        resolveCandidateText: async () => raw,
+      }),
+    ).resolves.toBe(full);
+    expect(payload).toEqual({ text: `${prefix}...` });
+  });
   it("keeps complete replies with long blank runs without stalling or reading candidates", async () => {
     const finalText = `before${"\n".repeat(60_000)}after`;
     const resolveCandidateText = vi.fn(async () => "unused");

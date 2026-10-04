@@ -1,30 +1,194 @@
 import { describe, expect, it, vi } from "vitest";
 import * as codeRegions from "../shared/text/code-regions.js";
+import { normalizeLiveAssistantBufferedText } from "./live-chat-projector.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 describe("live chat directive projection", () => {
-  it("keeps settled literal directives without repeatedly parsing the growing reply", () => {
+  it.each(["reply_to_current", "tts:text"])(
+    "keeps settled literal %s directives without repeatedly parsing the growing reply",
+    (directive) => {
+      const regions = vi.spyOn(codeRegions, "findCodeRegions");
+      const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
+      const state = createChatRunState();
+      const run = state.getOrCreate("reply");
+      const literal = `The marker is \`[[${directive}]]\`.\n\nNext paragraph.\n\n`;
+      const block = "```ts\nconst value = 1;\n```\n\n";
+      try {
+        state.updateBuffer("reply", { delta: literal });
+        expect(state.resolveBuffer("reply").text).toBe(literal);
+        for (let index = 1; index <= 100; index++) {
+          state.updateBuffer("reply", { delta: block });
+          expect(state.resolveBuffer("reply").text).toBe(literal + block.repeat(index));
+        }
+        const parsedChars = [...regions.mock.calls, ...ownership.mock.calls].reduce(
+          (total, [text]) => total + text.length,
+          0,
+        );
+        expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
+      } finally {
+        regions.mockRestore();
+        ownership.mockRestore();
+      }
+    },
+  );
+
+  it("removes completed speech-only text from the live display without changing raw bytes", () => {
+    const state = createChatRunState();
+    const raw = "[[reply_to_current]]Shown. [[tts:text]]Spoken.[[/tts:text]]";
+    state.updateBuffer("speech", { delta: raw });
+    expect(state.resolveBuffer("speech").text).toBe("Shown.");
+    expect(state.getOrCreate("speech").rawBuffer).toBe(raw);
+  });
+
+  it("keeps completed nonliteral speech followed by ordinary appends within the linear parsing budget", () => {
     const regions = vi.spyOn(codeRegions, "findCodeRegions");
     const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
     const state = createChatRunState();
-    const run = state.getOrCreate("reply");
-    const literal = "The marker is `[[reply_to_current]]`.\n\nNext paragraph.\n\n";
-    const block = "```ts\nconst value = 1;\n```\n\n";
+    const raw = "[[tts:text]]Spoken.[[/tts:text]]Visible";
     try {
-      state.updateBuffer("reply", { delta: literal });
-      expect(state.resolveBuffer("reply").text).toBe(literal);
+      state.updateBuffer("speech-tail", { delta: raw });
+      expect(state.resolveBuffer("speech-tail").text).toBe("Visible");
       for (let index = 1; index <= 100; index++) {
-        state.updateBuffer("reply", { delta: block });
-        expect(state.resolveBuffer("reply").text).toBe(literal + block.repeat(index));
+        state.updateBuffer("speech-tail", { delta: "x" });
+        expect(state.resolveBuffer("speech-tail").text).toBe("Visible" + "x".repeat(index));
       }
       const parsedChars = [...regions.mock.calls, ...ownership.mock.calls].reduce(
-        (total, [text]) => total + text.length,
+        (sum, [text]) => sum + text.length,
         0,
       );
-      expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
+      expect(parsedChars).toBeLessThan(
+        (state.getOrCreate("speech-tail").rawBuffer?.length ?? 0) * 4,
+      );
     } finally {
       regions.mockRestore();
       ownership.mockRestore();
+    }
+  });
+
+  it("keeps code-bearing completed speech and whitespace appends within the linear parsing budget", () => {
+    const regions = vi.spyOn(codeRegions, "findCodeRegions");
+    const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
+    const state = createChatRunState();
+    const raw = "[[tts:text]]`Spoken.`[[/tts:text]]Visible ";
+    try {
+      state.updateBuffer("code-speech-tail", { delta: raw });
+      expect(state.resolveBuffer("code-speech-tail").text).toBe("Visible");
+      for (let index = 1; index <= 100; index++) {
+        state.updateBuffer("code-speech-tail", { delta: index % 2 ? " " : "x" });
+        const source = state.getOrCreate("code-speech-tail").rawBuffer ?? "";
+        expect(state.resolveBuffer("code-speech-tail").text).toBe(
+          source.slice(raw.indexOf("Visible")).trimEnd(),
+        );
+      }
+      const parsedChars = [...regions.mock.calls, ...ownership.mock.calls].reduce(
+        (sum, [text]) => sum + text.length,
+        0,
+      );
+      expect(parsedChars).toBeLessThan(
+        (state.getOrCreate("code-speech-tail").rawBuffer?.length ?? 0) * 4,
+      );
+    } finally {
+      regions.mockRestore();
+      ownership.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      name: "split speech opener and closer",
+      deltas: ["[", "[tts:", "text]]`Spoken.`[", "[/tts:", "text]]Visible", " ", "x"],
+    },
+    {
+      name: "an unmatched opener across paragraph boundaries",
+      deltas: ["[[tts:text]]A", "\n\nB", "[[/tts:", "text]]Shown", " ", "again"],
+    },
+    {
+      name: "bare TTS pairing across chunks",
+      deltas: ["[[tts]] A ", "B", "[[/tts", "]]", " ", "C"],
+    },
+    {
+      name: "late backticks in a speech body",
+      deltas: ["before `[[tts:text]]Spoken.[[/tts:text]]Shown", "x", "` after"],
+    },
+    {
+      name: "a later reference after ordinary speech appends",
+      deltas: [
+        "[[tts:text]]`Spoken.`[[/tts:text]]Shown",
+        "x",
+        " ![`[[tts:text]]`][x]\n\nnext\n\n[x]:",
+        " /image.png",
+      ],
+    },
+    {
+      name: "a reference definition completed with ordinary bytes",
+      deltas: ["![`[[tts:text]]`][x]\n\n[x]:", "/image.png"],
+    },
+    {
+      name: "code whitespace after retiring an inert proof",
+      deltas: ["[[tts:text]]`Spoken.`[[/tts:text]]Shown", " ", "x", "\n\n    code ", "\n    more"],
+    },
+    {
+      name: "a new speech block across an inert append boundary",
+      deltas: [
+        "[[tts:text]]`Spoken.`[[/tts:text]]Shown ",
+        "x",
+        " [",
+        "[tts:text]]More",
+        "[[/tts:text]]",
+        " ",
+        "y",
+      ],
+    },
+    {
+      name: "leading code indentation after an empty speech projection",
+      deltas: ["[[tts:text]]`Spoken.`[[/tts:text]]    ", "x", " ", "y"],
+    },
+    {
+      name: "authored code indentation after speech removal",
+      deltas: ["[[tts:text]]`Spoken.`[[/tts:text]]    Visible", " ", "x"],
+    },
+  ])("matches canonical live speech projection for $name", ({ deltas }) => {
+    const state = createChatRunState();
+    let raw = "";
+    let streamed = "";
+    for (const delta of deltas) {
+      raw += delta;
+      state.updateBuffer("speech-parity", { delta });
+      const canonical = normalizeLiveAssistantBufferedText(raw);
+      const visible = state.resolveBuffer("speech-parity").text;
+      expect(visible).toBe(canonical);
+      expect(state.getOrCreate("speech-parity").rawBuffer).toBe(raw);
+      const update = state.takeBufferDelta("speech-parity", visible);
+      if (update) {
+        streamed = update.replace ? update.deltaText : streamed + update.deltaText;
+      }
+      expect(streamed).toBe(canonical);
+    }
+  });
+
+  it("retires speech append proofs on replacements including empty text", () => {
+    const state = createChatRunState();
+    const frames = [
+      "[[tts:text]]`Spoken.`[[/tts:text]]Shown ",
+      "[[tts:text]]`Spoken.`[[/tts:text]]Shown x",
+      "Replacement ",
+      "",
+      "[[tts:text]]New[[/tts:text]]Fresh ",
+      "[[tts:text]]New[[/tts:text]]Fresh x",
+    ];
+    let previous = "";
+    for (const text of frames) {
+      state.updateBuffer("speech-replace", {
+        itemId: "answer",
+        ...(text && text.startsWith(previous)
+          ? { delta: text.slice(previous.length) }
+          : { text, replace: true }),
+      });
+      expect(state.resolveBuffer("speech-replace").text).toBe(
+        normalizeLiveAssistantBufferedText(text),
+      );
+      expect(state.getOrCreate("speech-replace").rawBuffer).toBe(text);
+      previous = text;
     }
   });
 
