@@ -547,3 +547,8 @@ export function summarizeOpenAITransportError(error: unknown): string {
     `message=${error instanceof Error ? error.message : safeDebugValue(error)}`,
   ].join(" ");
 }
+
+export {
+  createWebSocketFailureDiagnostics,
+  summarizeWebSocketFailureCause,
+} from "./openai-responses-websocket-diagnostics.js";

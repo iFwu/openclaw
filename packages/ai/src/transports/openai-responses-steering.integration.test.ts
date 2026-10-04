@@ -3,9 +3,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, StreamOptions } from "../types.js";
 
 type WireEvent =
+  | { type: "error"; error: unknown }
   | { type: "open" }
   | { type: "message"; message: Record<string, unknown> }
-  | { type: "close"; code: number };
+  | { type: "close"; code: number; reason?: string };
 
 const sockets = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -15,6 +16,7 @@ const sockets = vi.hoisted(() => ({
     iteratorReturns: number;
     emit(message: Record<string, unknown>): void;
     disconnect(): void;
+    fail(error: unknown): void;
   }>,
 }));
 
@@ -45,10 +47,14 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       this.push({ type: "message", message });
     }
 
+    fail(error: unknown) {
+      this.push({ type: "error", error });
+    }
+
     disconnect() {
       this.closed = true;
       this.socket.readyState = 3;
-      this.push({ type: "close", code: 1006 });
+      this.push({ type: "close", code: 1006, reason: "private-close-reason" });
     }
 
     close() {
@@ -115,12 +121,25 @@ import {
   splitOpenAIFunctionCallPairing,
 } from "./openai-responses-tool-call-id-shape.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
+import { log } from "./openai-transport-shared.js";
 
 const client = {
   apiKey: "test-key",
   baseURL: "https://api.openai.com/v1",
-  withOptions() {
-    return this;
+  defaultHeaders: {} as Record<string, string | null>,
+  _buildWebSocketHeaders(authHeaders: Record<string, string>) {
+    const headers = new Headers(authHeaders);
+    for (const [name, value] of Object.entries(this.defaultHeaders)) {
+      if (value === null) {
+        headers.delete(name);
+      } else {
+        headers.set(name, value);
+      }
+    }
+    return Object.fromEntries(headers);
+  },
+  withOptions(options: { apiKey?: string; defaultHeaders?: Record<string, string | null> }) {
+    return { ...this, ...options };
   },
 };
 const model: Model = {
@@ -242,6 +261,114 @@ afterEach(() => {
 });
 
 describe("Responses WebSocket steering handoff", () => {
+  it("preserves the dispatched error and cleanup even if the diagnostic logger throws", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {
+      throw new Error("diagnostic logger failed");
+    });
+    try {
+      const first = createStream([initialUser]);
+      const events = collect(first.stream).catch((error: unknown) => error);
+      const socket = sockets.instances[0];
+      assert(socket);
+      socket.disconnect();
+      expect(await events).toBeInstanceOf(OpenAIResponsesWebSocketPostDispatchError);
+      expect(socket.requests).toHaveLength(1);
+      expect(socket.iteratorReturns).toBe(1);
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records a bounded failure snapshot without replaying a dispatched request or leaking payloads", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const first = createStream([user("private-prompt")]);
+      const events = collect(first.stream).catch((error: unknown) => error);
+      const socket = sockets.instances[0];
+      assert(socket);
+      socket.emit({ type: "response.created", response: { id: "resp-private" } });
+      socket.emit({ type: "response.output_text.delta", delta: "private-output" });
+      socket.disconnect();
+      expect(await events).toBeInstanceOf(OpenAIResponsesWebSocketPostDispatchError);
+      expect(socket.requests).toHaveLength(1);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0]).toEqual([
+        "[responses] websocket failure",
+        expect.objectContaining({
+          requestDispatched: true,
+          responseObserved: true,
+          lastEvent: "response.output_text.delta",
+          closeCode: 1006,
+          closeReasonPresent: true,
+          eventsReceived: 2,
+          elapsedMs: expect.any(Number),
+          idleMs: expect.any(Number),
+          responseIdHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        }),
+      ]);
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(
+        /private-prompt|private-output|resp-private|test-key|steering-integration-session|private-close-reason/u,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("distinguishes a dispatched disconnect before any server response", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const first = createStream([initialUser]);
+      const events = collect(first.stream).catch((error: unknown) => error);
+      const socket = sockets.instances[0];
+      assert(socket);
+      socket.disconnect();
+      expect(await events).toBeInstanceOf(OpenAIResponsesWebSocketPostDispatchError);
+      expect(warn.mock.calls[0]?.[1]).toMatchObject({
+        requestDispatched: true,
+        responseObserved: false,
+        eventsReceived: 0,
+        lastEvent: undefined,
+        closeCode: 1006,
+        responseIdHash: undefined,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records CPR upstream failure status/code without logging the server error body", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const first = createStream([initialUser]);
+      const events = collect(first.stream).catch((error: unknown) => error);
+      const socket = sockets.instances[0];
+      assert(socket);
+      socket.fail({
+        type: "error",
+        status: 502,
+        error: { code: "upstream_unavailable", message: "private-server-body" },
+      });
+      expect(await events).toBeInstanceOf(OpenAIResponsesWebSocketPostDispatchError);
+      expect(warn.mock.calls[0]?.[1]).toMatchObject({
+        requestDispatched: true,
+        lastEvent: "error",
+        causes: [
+          {
+            name: "OpenAIResponsesWebSocketServerError",
+            code: "upstream_unavailable",
+            status: 502,
+          },
+          { name: "other" },
+        ],
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("private-server-body");
+      expect(socket.requests).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("keeps runtime context with its user through steering and the automatic successor", async () => {
     const context: Context = {
       messages: [

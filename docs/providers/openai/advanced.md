@@ -110,6 +110,16 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     exceptions: OpenClaw closes the failed socket and retries that turn once
     over SSE with full history and no rejected `previous_response_id`.
 
+    Stream failures emit a structured `[responses] websocket failure` warning through
+    the transport host logger. It records dispatch and response progress, elapsed/idle
+    time, connection reuse and age, close code, cancellation flags, and bounded,
+    allowlisted cause names/codes and HTTP statuses. Session and response identifiers
+    are hashed; arbitrary peer event names become `other`. Request/output text,
+    headers, error bodies, and free-form close reasons are excluded. Logging failures
+    do not change replay, fallback, cancellation, or cleanup decisions. An upstream
+    response ID is not necessarily a proxy request ID; correlate only documented
+    shared identifiers or verified server-side mappings.
+
     ```json5
     {
       agents: {

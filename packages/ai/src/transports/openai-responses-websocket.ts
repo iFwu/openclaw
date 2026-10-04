@@ -27,6 +27,7 @@ import {
   type ResponsesInputReplay,
 } from "./openai-responses-input-replay.js";
 import { createResponsesSteering, omitAcceptedSteering } from "./openai-responses-steering.js";
+import { createWebSocketFailureDiagnostics } from "./openai-responses-websocket-diagnostics.js";
 import {
   closeWebSocketSilently,
   createWebSocket,
@@ -35,6 +36,7 @@ import {
   type PreparedWebSocketConnection,
   type PreparedResponsesWebSocketRoute,
 } from "./openai-responses-websocket-route.js";
+import { log } from "./openai-transport-shared.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 export type { PreparedResponsesWebSocketRoute } from "./openai-responses-websocket-route.js";
 export { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-websocket-endpoint.js";
@@ -447,6 +449,15 @@ export function createOpenAIResponsesWebSocketStream(params: {
       streamStarted = true;
       const iterator = lease.iterator;
       let requestDispatched = false;
+      const diagnostics = createWebSocketFailureDiagnostics({
+        sessionId: params.sessionId,
+        previousResponseId:
+          typeof prepared.request.previous_response_id === "string"
+            ? prepared.request.previous_response_id
+            : undefined,
+        reusedConnection: lease.reusedConnection,
+        connectionCreatedAt: lease.entry?.createdAt,
+      });
       try {
         if (params.signal?.aborted) {
           throw transportAbortError(params.signal);
@@ -482,6 +493,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
             }
             continue;
           }
+          diagnostics.observe(next.value);
           const event = readServerEvent(next.value);
           if (!event) {
             continue;
@@ -521,6 +533,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
               if (acknowledgement.done) {
                 throw new Error("Responses closed before acknowledging steering");
               }
+              diagnostics.observe(acknowledgement.value);
               const acknowledgedEvent = readServerEvent(acknowledgement.value);
               if (!steering.handle(acknowledgedEvent)) {
                 continuationBuffer.push(acknowledgement.value);
@@ -577,6 +590,19 @@ export function createOpenAIResponsesWebSocketStream(params: {
         const steeringDispatched = Boolean(
           steering?.pending || steering?.acceptedInput.length || resumedSteering,
         );
+        // Diagnostics cannot replace the transport outcome or prevent lease cleanup.
+        try {
+          log.warn("[responses] websocket failure", {
+            ...diagnostics.snapshot(error),
+            requestDispatched,
+            socketReadyState: lease.socket.socket.readyState,
+            callerAborted: Boolean(params.callerSignal?.aborted),
+            transportAborted: Boolean(params.signal?.aborted),
+            steeringDispatched,
+          });
+        } catch {
+          // The original failure remains authoritative when logging is unavailable.
+        }
         steering?.close(error instanceof Error ? error : new Error("Responses steering failed"));
         if (lease.entry) {
           lease.entry.continuation = undefined;

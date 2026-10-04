@@ -4,6 +4,8 @@ import {
   normalizeResponsesFailedEvent,
   ResponsesStreamFailure,
   summarizeResponsesPayload,
+  summarizeWebSocketFailureCause,
+  createWebSocketFailureDiagnostics,
 } from "./openai-responses-debug.js";
 
 const failedEventModel = {
@@ -85,5 +87,97 @@ describe("normalizeResponsesFailedEvent", () => {
     );
     expect(summary.code).toBeUndefined();
     expect(summary.message).toBe("unknown: provider failed");
+  });
+});
+
+describe("WebSocket failure cause metadata", () => {
+  it("keeps nested network codes but never arbitrary messages or error fields", () => {
+    const inner = Object.assign(new Error("Bearer private-token https://private.example"), {
+      code: "ECONNRESET",
+      headers: { authorization: "private-token" },
+    });
+    const outer = new Error("private-prompt", { cause: inner });
+    expect(summarizeWebSocketFailureCause(outer)).toEqual({
+      causes: [
+        { name: "Error", code: undefined },
+        { name: "Error", code: "ECONNRESET" },
+      ],
+    });
+    expect(JSON.stringify(summarizeWebSocketFailureCause(outer))).not.toContain("private");
+  });
+
+  it("preserves CPR server failure code and HTTP status without the error body", () => {
+    expect(
+      summarizeWebSocketFailureCause({
+        name: "OpenAIResponsesWebSocketServerError",
+        code: "upstream_unavailable",
+        status: 502,
+        message: "private upstream body",
+      }),
+    ).toEqual({
+      causes: [
+        { name: "OpenAIResponsesWebSocketServerError", code: "upstream_unavailable", status: 502 },
+      ],
+    });
+  });
+
+  it("bounds cyclic causes and treats peer supplied names/codes as untrusted", () => {
+    const error: Record<string, unknown> = { name: "private-name", code: "private-code" };
+    error.cause = error;
+    expect(summarizeWebSocketFailureCause(error)).toEqual({
+      causes: [{ name: "other", code: "other" }],
+    });
+  });
+});
+
+describe("bounded WebSocket failure observations", () => {
+  it("hashes identifiers and replaces arbitrary event names and free-form close reasons", () => {
+    const diagnostics = createWebSocketFailureDiagnostics({
+      sessionId: "private-session",
+      previousResponseId: "private-previous",
+      reusedConnection: true,
+      connectionCreatedAt: Date.now() - 50,
+    });
+    diagnostics.observe({
+      type: "message",
+      message: {
+        type: "private-event",
+        response: { id: "private-response" },
+        delta: "private-output",
+      },
+    });
+    diagnostics.observe({ type: "close", code: 1006, reason: "private-reason" });
+    const snapshot = diagnostics.snapshot(new Error("private-error"));
+    expect(snapshot).toMatchObject({
+      lastEvent: "other",
+      responseObserved: true,
+      eventsReceived: 1,
+      closeCode: 1006,
+      closeReasonPresent: true,
+      reusedConnection: true,
+    });
+    expect(snapshot.sessionIdHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(snapshot.previousResponseIdHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(snapshot.responseIdHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(snapshot)).not.toContain("private");
+  });
+  it.each([Number.NaN, Infinity, 99, 5000, 1006.5])(
+    "does not retain a malformed close code %s",
+    (code) => {
+      const diagnostics = createWebSocketFailureDiagnostics({ reusedConnection: false });
+      diagnostics.observe({ type: "close", code });
+      expect(diagnostics.snapshot(undefined).closeCode).toBeUndefined();
+    },
+  );
+  it("bounds nested causes at four and admits only integral HTTP status", () => {
+    const cause = { name: "Error", code: "ECONNRESET", status: 502 };
+    const nested = {
+      name: "Error",
+      status: 502.5,
+      cause: { name: "Error", cause: { name: "Error", cause: { name: "Error", cause } } },
+    };
+    const summary = summarizeWebSocketFailureCause(nested);
+    expect(summary.causes).toHaveLength(4);
+    expect(JSON.stringify(summary)).not.toContain("502");
   });
 });
