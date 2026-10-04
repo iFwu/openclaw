@@ -3,6 +3,7 @@
 // the embedding application (OpenClaw core installs its implementations via
 // configureAiTransportHost); the library defaults below are inert so external
 // consumers get safe, dependency-free behavior without wiring anything.
+import type { Agent as HttpAgent } from "node:http";
 import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
 import { transformMessages } from "./transcript-transform.js";
@@ -183,6 +184,12 @@ export interface AiTransportHost {
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
   /** Reports whether the model carries host-managed proxy, TLS, or local-service state. */
   requiresManagedTransport(model: Model): boolean;
+  /** Prepares a policy-pinned SDK WebSocket route for an opted-in compatible endpoint. */
+  prepareResponsesWebSocket?(params: {
+    model: Model;
+    url: string;
+    signal?: AbortSignal;
+  }): Promise<{ agent: HttpAgent; release(): void }>;
   /** Copies host-owned managed-transport state onto a projected model. */
   inheritManagedTransport(source: Model, target: Model): Model;
   /** Applies host-owned transcript replay and pairing rules. */

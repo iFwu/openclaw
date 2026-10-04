@@ -13,6 +13,7 @@ import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-prox
 import {
   assertHostnameAllowedWithPolicy,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   type PinnedDispatcherPolicy,
   type SsrFPolicy,
 } from "./ssrf.js";
@@ -30,6 +31,16 @@ type OpenProviderWebSocketParams = {
   trustConfiguredBaseUrlOrigin: boolean;
   url: string;
 };
+
+type PrepareProviderWebSocketAgentParams = Pick<
+  OpenProviderWebSocketParams,
+  | "allowPrivateNetwork"
+  | "baseUrl"
+  | "dispatcherPolicy"
+  | "signal"
+  | "trustConfiguredBaseUrlOrigin"
+  | "url"
+>;
 
 function toHttpUrl(value: string): string {
   const url = new URL(value);
@@ -80,10 +91,11 @@ async function createProxyAgent(params: {
 async function createProviderWebSocketAgent(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   policy: SsrFPolicy | undefined;
+  proxySsrFPolicy: SsrFPolicy | undefined;
   url: URL;
   signal?: AbortSignal;
 }): Promise<HttpAgent> {
-  const { dispatcherPolicy, policy, url, signal } = params;
+  const { dispatcherPolicy, policy, proxySsrFPolicy, url, signal } = params;
   const canDelegateEnvDns = shouldUseEnvHttpProxyForUrl(toHttpUrl(url.href));
   const useManagedProxy = isManagedProxyActive() && canDelegateEnvDns;
   const envProxyUrl =
@@ -125,7 +137,7 @@ async function createProviderWebSocketAgent(params: {
     assertHostnameAllowedWithPolicy(url.hostname, policy);
   }
   return await createProxyAgent({
-    policy,
+    policy: proxySsrFPolicy,
     proxyUrl,
     proxyTls:
       !useManagedProxy &&
@@ -138,6 +150,61 @@ async function createProviderWebSocketAgent(params: {
       dispatcherPolicy.allowPrivateProxy === true,
     signal,
   });
+}
+
+/** Prepares the same pinned provider route for SDKs that construct their own WebSocket. */
+export async function prepareProviderWebSocketAgent(
+  params: PrepareProviderWebSocketAgentParams,
+): Promise<{ agent: HttpAgent; release: () => void }> {
+  let url: URL;
+  try {
+    url = new URL(params.url);
+  } catch {
+    throw new Error("Invalid provider WebSocket URL");
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error("Provider WebSocket URL must use ws or wss");
+  }
+  const requestUrl = new URL(toHttpUrl(url.toString()));
+  const basePolicy = resolveProviderTransportSsrFPolicy({
+    baseUrl: toHttpUrl(params.baseUrl),
+    url: requestUrl.toString(),
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin: params.trustConfiguredBaseUrlOrigin,
+  });
+  // Origin trust belongs only to this target, never to a same-host proxy.
+  const policy = resolveSsrFPolicyForUrl(requestUrl, basePolicy);
+  params.signal?.throwIfAborted();
+  const pending = createProviderWebSocketAgent({
+    dispatcherPolicy: params.dispatcherPolicy,
+    policy,
+    proxySsrFPolicy: basePolicy,
+    url,
+    signal: params.signal,
+  }).then((agent) => {
+    let released = false;
+    return {
+      agent,
+      release: () => {
+        if (!released) {
+          released = true;
+          agent.destroy();
+        }
+      },
+    };
+  });
+  void pending.then(
+    (prepared) => params.signal?.aborted && prepared.release(),
+    () => undefined,
+  );
+  const prepared = await racePromiseWithAbortSignal(pending, params.signal);
+  try {
+    params.signal?.throwIfAborted();
+    return prepared;
+  } catch (error) {
+    prepared.release();
+    throw error;
+  }
 }
 
 /** Opens a provider WebSocket through the resolved request and network policy. */
@@ -153,12 +220,6 @@ export async function openProviderWebSocket(
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error("Provider WebSocket URL must use ws or wss");
   }
-  const policy = resolveProviderTransportSsrFPolicy({
-    baseUrl: toHttpUrl(params.baseUrl),
-    url: toHttpUrl(url.toString()),
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    trustConfiguredBaseUrlOrigin: params.trustConfiguredBaseUrlOrigin,
-  });
   // DNS preparation and the opening handshake share one deadline. Proxyline
   // owns pending proxy sockets and closes them when the request or agent ends.
   const { signal, cleanup } = buildTimeoutAbortSignal({
@@ -166,20 +227,9 @@ export async function openProviderWebSocket(
     timeoutMs: Math.max(1, params.timeoutMs),
     operation: "Provider WebSocket connection",
   });
-  let agent: HttpAgent;
+  let prepared: Awaited<ReturnType<typeof prepareProviderWebSocketAgent>>;
   try {
-    signal?.throwIfAborted();
-    const pending = createProviderWebSocketAgent({
-      dispatcherPolicy: params.dispatcherPolicy,
-      policy,
-      url,
-      signal,
-    });
-    void pending.then(
-      (resolved) => signal?.aborted && resolved.destroy(),
-      () => undefined,
-    );
-    agent = await racePromiseWithAbortSignal(pending, signal);
+    prepared = await prepareProviderWebSocketAgent({ ...params, signal });
   } catch (error) {
     cleanup();
     throw error;
@@ -188,7 +238,7 @@ export async function openProviderWebSocket(
   try {
     signal?.throwIfAborted();
     socket = new WebSocket(url, {
-      agent,
+      agent: prepared.agent,
       headers: Object.fromEntries(new Headers(params.headers).entries()),
       maxPayload: params.maxPayloadBytes ?? DEFAULT_PROVIDER_WEBSOCKET_MAX_PAYLOAD_BYTES,
       perMessageDeflate: false,
@@ -196,7 +246,7 @@ export async function openProviderWebSocket(
     });
   } catch (error) {
     cleanup();
-    agent.destroy();
+    prepared.release();
     throw error;
   }
   const onAbort = () => socket.terminate();
@@ -205,7 +255,7 @@ export async function openProviderWebSocket(
   socket.once("close", () => {
     signal?.removeEventListener("abort", onAbort);
     cleanup();
-    agent.destroy();
+    prepared.release();
   });
   return socket;
 }

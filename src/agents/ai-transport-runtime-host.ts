@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import { prepareProviderWebSocketAgent } from "../infra/net/provider-websocket.js";
 import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -24,6 +25,7 @@ import {
 } from "./provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
+  buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
   getModelProviderRequestRouteFacts,
   inheritModelProviderRequestRouteFacts,
@@ -111,6 +113,25 @@ export function configureAiTransportRuntimeHost(): void {
     requiresManagedTransport: (model) => {
       const request = getModelProviderRequestTransport(model);
       return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
+    },
+    prepareResponsesWebSocket: ({ model, url, signal }) => {
+      const requestConfig = resolveProviderRequestPolicyConfig({
+        provider: model.provider,
+        api: model.api,
+        baseUrl: model.baseUrl,
+        routeFacts: getModelProviderRequestRouteFacts(model),
+        request: getModelProviderRequestTransport(model),
+        capability: "llm",
+        transport: "websocket",
+      });
+      return prepareProviderWebSocketAgent({
+        baseUrl: model.baseUrl,
+        url,
+        allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+        trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
+        dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
+        signal,
+      });
     },
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(

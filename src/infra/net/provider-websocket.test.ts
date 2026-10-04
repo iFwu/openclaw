@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
-import { createServer as createHttpsServer } from "node:https";
+import { Agent as HttpsAgent, createServer as createHttpsServer } from "node:https";
 import net, { type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
-import { openProviderWebSocket } from "./provider-websocket.js";
+import { openProviderWebSocket, prepareProviderWebSocketAgent } from "./provider-websocket.js";
 import * as ssrf from "./ssrf.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -142,6 +142,120 @@ describe("openProviderWebSocket", () => {
     vi.unstubAllEnvs();
     vi.useRealTimers();
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  });
+
+  it("prepares only the trusted exact loopback origin and releases an SDK route once", async () => {
+    configureProxyEnvironment("", "*");
+    const pin = vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy");
+    const prepared = await prepareProviderWebSocketAgent({
+      allowPrivateNetwork: false,
+      baseUrl: "http://127.0.0.1:8187/v1",
+      dispatcherPolicy: { mode: "direct" },
+      trustConfiguredBaseUrlOrigin: true,
+      url: "ws://127.0.0.1:8187/v1/responses",
+    });
+    expect(pin).toHaveBeenCalledWith("127.0.0.1", expect.anything());
+    expect(pin).toHaveBeenCalledTimes(1);
+    const destroy = vi.spyOn(prepared.agent, "destroy");
+    prepared.release();
+    prepared.release();
+    expect(destroy).toHaveBeenCalledTimes(1);
+    await expect(
+      prepareProviderWebSocketAgent({
+        allowPrivateNetwork: false,
+        baseUrl: "http://127.0.0.1:8187/v1",
+        dispatcherPolicy: { mode: "direct" },
+        trustConfiguredBaseUrlOrigin: true,
+        url: "ws://127.0.0.1:8188/v1/responses",
+      }),
+    ).rejects.toThrow(/private|loopback|blocked/iu);
+  });
+
+  it.each([undefined, false, true])(
+    "keeps target-origin trust separate from an explicit proxy with permission %s",
+    async (allowPrivateProxy) => {
+      configureProxyEnvironment("", "*");
+      const pending = prepareProviderWebSocketAgent({
+        allowPrivateNetwork: false,
+        baseUrl: "http://127.0.0.1:8187/v1",
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://127.0.0.1:8188",
+          allowPrivateProxy,
+        },
+        trustConfiguredBaseUrlOrigin: true,
+        url: "ws://127.0.0.1:8187/v1/responses",
+      });
+      if (allowPrivateProxy === true) {
+        const prepared = await pending;
+        const destroy = vi.spyOn(prepared.agent, "destroy");
+        prepared.release();
+        prepared.release();
+        expect(destroy).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(
+          pending.then((prepared) => {
+            prepared.release();
+            return prepared;
+          }),
+        ).rejects.toThrow(/private|loopback|blocked/iu);
+      }
+    },
+  );
+
+  it("does not start DNS preparation for an already aborted SDK route", async () => {
+    const resolve = vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      prepareProviderWebSocketAgent({
+        allowPrivateNetwork: false,
+        baseUrl: "https://provider.example/v1",
+        dispatcherPolicy: { mode: "direct" },
+        trustConfiguredBaseUrlOrigin: false,
+        url: "wss://provider.example/v1/responses",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("abandons pending DNS promptly and releases a late SDK agent exactly once", async () => {
+    configureProxyEnvironment("", "*");
+    const entered = createDeferred();
+    const dns = createDeferred();
+    const destroyed = createDeferred();
+    const resolveHostname = ssrf.resolvePinnedHostnameWithPolicy;
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+      async (hostname, params) => {
+        entered.resolve();
+        await dns.promise;
+        return resolveHostname(hostname, {
+          ...params,
+          signal: undefined,
+          lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+        });
+      },
+    );
+    const destroy = vi.spyOn(HttpsAgent.prototype, "destroy").mockImplementation(() => {
+      destroyed.resolve();
+    });
+    const controller = new AbortController();
+    const pending = prepareProviderWebSocketAgent({
+      allowPrivateNetwork: false,
+      baseUrl: "https://provider.example/v1",
+      dispatcherPolicy: { mode: "direct" },
+      trustConfiguredBaseUrlOrigin: false,
+      url: "wss://provider.example/v1/responses",
+      signal: controller.signal,
+    });
+    await entered.promise;
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(destroy).not.toHaveBeenCalled();
+    dns.resolve();
+    await destroyed.promise;
+    expect(destroy).toHaveBeenCalledTimes(1);
   });
 
   it.each(["explicit-proxy", "env-proxy"] as const)(
@@ -344,10 +458,12 @@ describe("openProviderWebSocket", () => {
   });
 
   it("opens an allowed socket with resolved request headers", async () => {
+    configureProxyEnvironment("", "*");
     const server = await createLocalWebSocketServer();
     const socket = await openProviderWebSocket({
       allowPrivateNetwork: true,
       baseUrl: server.url,
+      dispatcherPolicy: { mode: "direct" },
       headers: { authorization: "Token configured", "x-provider": "deepgram" },
       timeoutMs: 1000,
       trustConfiguredBaseUrlOrigin: false,

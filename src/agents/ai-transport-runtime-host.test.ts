@@ -1,6 +1,7 @@
 // Verifies package transports consume the route generation prepared on the model.
 import { getAiTransportHost } from "@openclaw/ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../infra/net/ssrf.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import "./ai-transport-runtime-host.js";
 import {
@@ -32,6 +33,48 @@ function buildOwners(): PluginMetadataSnapshotOwnerMaps {
 }
 
 describe("AI transport prepared provider routes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("prepares a configured compatible loopback origin without granting other private origins", async () => {
+    for (const name of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+    ]) {
+      vi.stubEnv(name, "");
+    }
+    vi.stubEnv("NO_PROXY", "*");
+    vi.stubEnv("no_proxy", "*");
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
+    const model = makeProviderModelFixture<"openai-responses">({
+      id: "fixture-model",
+      provider: "compatible-gateway",
+      api: "openai-responses",
+      baseUrl: "http://127.0.0.1:8187/v1",
+    });
+    const prepare = getAiTransportHost().prepareResponsesWebSocket;
+    if (!prepare) {
+      throw new Error("missing guarded SDK WebSocket route owner");
+    }
+    const pin = vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy");
+    const route = await prepare({ model, url: "ws://127.0.0.1:8187/v1/responses" });
+    expect(pin).toHaveBeenCalledWith("127.0.0.1", expect.anything());
+    expect(pin).toHaveBeenCalledTimes(1);
+    const destroy = vi.spyOn(route.agent, "destroy");
+    route.release();
+    route.release();
+    expect(destroy).toHaveBeenCalledTimes(1);
+    await expect(prepare({ model, url: "ws://127.0.0.1:8188/v1/responses" })).rejects.toThrow(
+      /private|loopback|blocked/iu,
+    );
+  });
+
   it("keeps headers, capabilities, and SSRF posture on the prepared metadata generation", () => {
     const model = attachModelProviderRequestRouteFacts(
       makeProviderModelFixture<"openai-responses">({
