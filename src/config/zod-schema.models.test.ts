@@ -3,6 +3,25 @@ import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
   it.each([undefined, false, true, "true"])(
+    "preserves only a boolean compatible Fast support capability (%s)",
+    (supportsServiceTier) => {
+      const result = ModelsConfigSchema.safeParse({
+        providers: {
+          "fixture-proxy": {
+            baseUrl: "https://proxy.example/v1",
+            models: [{ id: "fixture", name: "fixture", compat: { supportsServiceTier } }],
+          },
+        },
+      });
+      expect(result.success).toBe(supportsServiceTier !== "true");
+      if (result.success) {
+        expect(
+          result.data?.providers?.["fixture-proxy"]?.models?.[0]?.compat?.supportsServiceTier,
+        ).toBe(supportsServiceTier);
+      }
+    },
+  );
+  it.each([undefined, false, true, "true"])(
     "admits only an explicit boolean compatible WS capability (%s)",
     (supportsResponsesWebSocket) => {
       const result = ModelsConfigSchema.safeParse({

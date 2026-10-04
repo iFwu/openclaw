@@ -121,6 +121,7 @@ function shouldUseCodexNativeTransport(model: {
 }
 
 function shouldApplyOpenAIServiceTier(model: {
+  compat?: unknown;
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;

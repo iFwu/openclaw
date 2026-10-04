@@ -120,3 +120,37 @@ describe("private selected Fast metadata", () => {
     ).toBeUndefined();
   });
 });
+
+describe("compatible Responses Fast metadata", () => {
+  it("requires opt-in, OpenClaw runtime, and no explicit tier", () => {
+    const entry: ModelCatalogEntry = {
+      id: "gpt-6.1-sol",
+      name: "Sol",
+      provider: "cpr",
+      api: "openai-responses",
+      baseUrl: "http://127.0.0.1:8187/v1",
+      compat: { supportsServiceTier: true },
+    };
+    const makeResolver = (cfg: OpenClawConfig = {}) =>
+      createModelFastModeResolver({
+        cfg,
+        agentId: "main",
+        catalog: [entry],
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+      });
+    const evaluation = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
+    expect(makeResolver()(entry, evaluation, "openclaw")).toBe(true);
+    expect(makeResolver()({ ...entry, compat: {} }, evaluation, "openclaw")).toBeUndefined();
+    expect(makeResolver()(entry, evaluation, "codex")).toBeUndefined();
+    expect(makeResolver()({ ...entry, api: "openai-completions" }, evaluation, "openclaw")).toBe(
+      false,
+    );
+    expect(
+      makeResolver({
+        agents: {
+          defaults: { models: { "cpr/gpt-6.1-sol": { params: { serviceTier: "default" } } } },
+        },
+      })(entry, evaluation, "openclaw"),
+    ).toBe(false);
+  });
+});

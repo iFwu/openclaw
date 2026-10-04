@@ -115,6 +115,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 function readCompatPayloadBoolean(
   compat: unknown,
   key:
+    | "supportsServiceTier"
     | "supportsInstructions"
     | "supportsPromptCacheKey"
     | "supportsResponsesContinuation"
@@ -172,6 +173,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
 
   return {
     allowsOpenAIServiceTier:
+      (isResponsesApi && readCompatPayloadBoolean(model.compat, "supportsServiceTier") === true) ||
       (provider === "openai" &&
         (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-public") ||

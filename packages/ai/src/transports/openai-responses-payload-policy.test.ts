@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenAIResponsesServerCompactionPlan } from "./openai-responses-payload-policy.js";
+import {
+  resolveOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesServerCompactionPlan,
+} from "./openai-responses-payload-policy.js";
 
 describe("OpenAI Responses compact threshold", () => {
   it.each([
@@ -62,3 +65,32 @@ describe("OpenAI Responses compact threshold", () => {
     ).toBe(expected);
   });
 });
+
+describe("compatible Responses service tier policy", () => {
+  it.each([undefined, false, true])("only permits explicit opt-in %s", (supportsServiceTier) => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        provider: "cpr",
+        api: "openai-responses",
+        baseUrl: "http://127.0.0.1:8187/v1",
+        compat: { supportsServiceTier },
+      },
+      { storeMode: "disable" },
+    );
+    expect(policy.allowsServiceTier).toBe(supportsServiceTier === true);
+  });
+});
+
+it.each(["openai-completions", "anthropic-messages"])(
+  "does not grant a service tier to %s by a Responses capability",
+  (api) => {
+    expect(
+      resolveOpenAIResponsesPayloadPolicy({
+        provider: "proxy",
+        api,
+        baseUrl: "https://proxy.example/v1",
+        compat: { supportsServiceTier: true },
+      }).allowsServiceTier,
+    ).toBe(false);
+  },
+);

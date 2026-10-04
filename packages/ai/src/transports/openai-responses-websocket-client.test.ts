@@ -27,6 +27,7 @@ import type {
   SdkResponse,
 } from "./openai-responses-websocket-client.test-support.js";
 import {
+  assertCompatibleFastWire,
   initialHost,
   model,
   userMessage,
@@ -164,6 +165,12 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 }));
 
 describe("native OpenAI Responses WebSocket client integration", () => {
+  it.each(["sse", "websocket-cached"] as const)(
+    "preserves compatible Fast opt-in and default-off semantics on %s wire",
+    async (transport) => {
+      await assertCompatibleFastWire(transport, transportState);
+    },
+  );
   let verifyNoNetwork: (() => void) | undefined;
   beforeEach(() => {
     verifyNoNetwork = forbidResponsesTestNetwork();

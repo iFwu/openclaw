@@ -572,6 +572,8 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Explicit opt-in for service_tier and Fast mode on a compatible Responses endpoint. */
+  supportsServiceTier?: boolean;
   /** Whether the compatible route accepts prompt_cache_key. Unknown proxy routes default to false. */
   supportsPromptCacheKey?: boolean;
   /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */

@@ -1,6 +1,10 @@
+import { Agent } from "node:http";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
-import { getAiTransportHost } from "../host.js";
+import { expect, vi } from "vitest";
+import { applyExtraParamsToAgent } from "../../../../src/agents/embedded-agent-runner/extra-params.js";
+import { attachModelProviderRuntimePluginHandle } from "../../../../src/plugins/provider-hook-runtime.js";
+import { getAiTransportHost, configureAiTransportHost } from "../host.js";
 import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
@@ -162,6 +166,10 @@ export async function run(
   context: Context,
   overrides: {
     model?: Model<"openai-responses">;
+    preparedExtraParams?: {
+      fastMode?: boolean;
+      serviceTier?: "auto" | "default" | "flex" | "priority";
+    };
     transport?: "sse" | "websocket" | "websocket-cached" | "auto";
     sessionId?: string;
     timeoutMs?: number;
@@ -196,10 +204,82 @@ export async function run(
       overrides.observations?.push(observation),
     );
   }
-  const stream = await createOpenAIResponsesTransportStreamFn()(
-    overrides.model ?? model,
-    context,
-    options as never,
-  );
+  const requestModel = overrides.model ?? model;
+  const agent = { streamFn: createOpenAIResponsesTransportStreamFn() };
+  if (overrides.preparedExtraParams) {
+    const preparedModel = attachModelProviderRuntimePluginHandle(requestModel, {
+      provider: requestModel.provider,
+      modelId: requestModel.id,
+      config: undefined,
+      plugin: undefined,
+    });
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      requestModel.provider,
+      requestModel.id,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      preparedModel,
+      undefined,
+      undefined,
+      { preparedExtraParams: overrides.preparedExtraParams },
+    );
+  }
+  const stream = await agent.streamFn(requestModel, context, options as never);
   return stream.result();
+}
+
+export async function assertCompatibleFastWire(
+  transport: "sse" | "websocket-cached",
+  fixture: {
+    sdkOutcomes: Array<SdkResponse | Error>;
+    responseBatches: StreamMessage[][];
+    sdkRequests: Record<string, unknown>[];
+    websocketRequests: Record<string, unknown>[];
+  },
+) {
+  const agent = new Agent();
+  const release = vi.fn(() => agent.destroy());
+  configureAiTransportHost({
+    ...getAiTransportHost(),
+    prepareResponsesWebSocket: async () => ({ agent, release }),
+  });
+  const cases = [
+    { optIn: true, fastMode: true, expected: "priority" },
+    { optIn: true, fastMode: false, expected: undefined },
+    { optIn: true, fastMode: undefined, expected: undefined },
+    { optIn: false, fastMode: true, expected: undefined },
+    { optIn: true, fastMode: true, tier: "flex" as const, expected: "flex" },
+  ];
+  for (const [index, c] of cases.entries()) {
+    const id = `resp_compatible_fast_${transport}_${index}`;
+    if (transport === "sse") {
+      fixture.sdkOutcomes.push(sdkCompletion(id));
+    } else {
+      fixture.responseBatches.push([message(completedEvent(id))]);
+    }
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        model: {
+          ...model,
+          provider: "fixture-proxy",
+          baseUrl: "https://proxy.example/v1",
+          compat: { supportsServiceTier: c.optIn, supportsResponsesWebSocket: true },
+        },
+        transport,
+        preparedExtraParams: { fastMode: c.fastMode, serviceTier: c.tier },
+        sessionId: id,
+      },
+    );
+    expect(result.stopReason).toBe("stop");
+    const requests = transport === "sse" ? fixture.sdkRequests : fixture.websocketRequests;
+    expect(requests[index]?.service_tier).toBe(c.expected);
+    if (c.expected === undefined) {
+      expect(requests[index]).not.toHaveProperty("service_tier");
+    }
+  }
 }
