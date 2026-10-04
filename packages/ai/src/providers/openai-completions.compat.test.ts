@@ -159,7 +159,7 @@ const defaultResolvedCompat = {
   supportsStrictMode: true,
   supportsJsonSchemaResponseFormat: false,
   cacheControlFormat: undefined,
-  sessionAffinity: "none",
+  sessionAffinity: "openai",
   supportsPromptCacheKey: false,
   supportsLongCacheRetention: true,
   visibleReasoningDetailTypes: [],
@@ -379,6 +379,27 @@ afterEach(() => {
 });
 
 describe("OpenAI-compatible completions compatibility", () => {
+  it.each([undefined, true, false])(
+    "uses default-on Completions session affinity with authored override %s",
+    async (sendSessionAffinityHeaders) => {
+      await streamOpenAICompletions(
+        createModel({ compat: { sendSessionAffinityHeaders } }),
+        context,
+        { apiKey: "synthetic-key", sessionId: "canonical-session" },
+      ).result();
+      const client = mockOpenAI.clientOptions[0] as { defaultHeaders?: Record<string, string> };
+      expect(client.defaultHeaders).toEqual(
+        sendSessionAffinityHeaders === false
+          ? {}
+          : {
+              session_id: "canonical-session",
+              "x-client-request-id": "canonical-session",
+              "x-session-affinity": "canonical-session",
+            },
+      );
+    },
+  );
+
   it.each([
     { provider: "dashscope", baseUrl: "", expected: "anthropic" },
     { provider: "modelstudio", baseUrl: "", expected: "anthropic" },
@@ -589,6 +610,7 @@ describe("OpenAI-compatible completions compatibility", () => {
       expected: {
         ...proxyResolvedCompat,
         thinkingFormat: "openrouter",
+        sessionAffinity: "openrouter",
         visibleReasoningDetailTypes: ["response.output_text", "response.text"],
       },
     },
@@ -802,6 +824,19 @@ describe("OpenAI-compatible completions compatibility", () => {
     {
       name: "OpenCode Zen",
       model: createModel({ baseUrl: "https://opencode.ai/zen/v1" }),
+      expectedHeaders: {
+        session_id: "session-123",
+        "x-client-request-id": "session-123",
+        "x-session-affinity": "session-123",
+        "x-opencode-session": "session-123",
+      },
+    },
+    {
+      name: "OpenCode Zen with generic affinity disabled",
+      model: createModel({
+        baseUrl: "https://opencode.ai/zen/v1",
+        compat: { sendSessionAffinityHeaders: false },
+      }),
       expectedHeaders: { "x-opencode-session": "session-123" },
     },
   ])(

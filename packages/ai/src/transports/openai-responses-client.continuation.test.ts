@@ -11,6 +11,7 @@ type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const sseState = vi.hoisted(() => ({
   clientHeaders: [] as Array<Record<string, string>>,
+  websocketHeaders: [] as Array<Record<string, string>>,
   outcomes: [] as Array<Error | SdkResponse>,
   requests: [] as Array<Record<string, unknown>>,
 }));
@@ -56,6 +57,9 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   ResponsesWS: class MockResponsesWS {
     socket = { readyState: 1 };
     private outcome?: Error | SdkResponse;
+    constructor(_client: unknown, options: { headers?: Record<string, string> }) {
+      sseState.websocketHeaders.push(options.headers ?? {});
+    }
     send(request: Record<string, unknown>) {
       sseState.requests.push(request);
       this.outcome = sseState.outcomes.shift();
@@ -185,6 +189,7 @@ async function run(
   context: Context,
   options: {
     sessionId?: string;
+    promptCacheKey?: string;
     cacheRetention?: "none" | "short";
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
@@ -199,6 +204,7 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
+    promptCacheKey: options.promptCacheKey,
     cacheRetention: options.cacheRetention,
     transport: options.transport ?? "sse",
     authProfileId: options.authProfileId,
@@ -215,6 +221,7 @@ describe("native OpenAI Responses SSE continuation", () => {
   beforeEach(() => {
     cleanupSessionResources();
     sseState.clientHeaders.length = 0;
+    sseState.websocketHeaders.length = 0;
     sseState.outcomes.length = 0;
     sseState.requests.length = 0;
     let turn = 0;
@@ -248,6 +255,88 @@ describe("native OpenAI Responses SSE continuation", () => {
     configureAiTransportHost(initialHost);
     vi.useRealTimers();
   });
+
+  it.each(
+    (["short", "none"] as const).flatMap((cacheRetention) =>
+      [undefined, false, true].map((supportsPromptCacheKey) => ({
+        cacheRetention,
+        supportsPromptCacheKey,
+      })),
+    ),
+  )(
+    "keeps managed custom reset affinity with $cacheRetention and body opt-in $supportsPromptCacheKey",
+    async ({ cacheRetention, supportsPromptCacheKey }) => {
+      const resolveTransportTurnState = vi.fn(() => undefined);
+      configureAiTransportHost({
+        ...initialHost,
+        plugin: { ...initialHost.plugin, resolveTransportTurnState },
+      });
+      sseState.outcomes.push(sdkCompletion("resp_reset", "done"));
+      const result = await run(
+        { messages: [userMessage("after reset", 1)], tools: [] },
+        {
+          sessionId: "canonical-session",
+          promptCacheKey: "reset-key",
+          cacheRetention,
+          onPayload: (payload) => payload,
+        },
+        {
+          ...model,
+          provider: "compatible-gateway",
+          baseUrl: "https://gateway.example/v1",
+          compat: { supportsPromptCacheKey },
+        },
+      );
+      expect(result.stopReason).toBe("stop");
+      expect(sseState.clientHeaders[0]).toMatchObject({
+        session_id: "reset-key",
+        "x-client-request-id": "reset-key",
+        "x-openclaw-session-id": "reset-key",
+      });
+      expect(sseState.requests[0]?.prompt_cache_key).toBe(
+        cacheRetention !== "none" && supportsPromptCacheKey ? "reset-key" : undefined,
+      );
+      expect(sseState.requests[0]).not.toHaveProperty("metadata");
+      expect(resolveTransportTurnState).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "compatible-gateway",
+          allowRuntimePluginLoad: false,
+          context: expect.objectContaining({ sessionId: "canonical-session" }),
+        }),
+      );
+    },
+  );
+
+  it.each([
+    { transport: "sse", cacheRetention: "short" },
+    { transport: "sse", cacheRetention: "none" },
+    { transport: "websocket-cached", cacheRetention: "short" },
+    { transport: "websocket-cached", cacheRetention: "none" },
+  ] as const)(
+    "keeps native $transport identity separate from the $cacheRetention reset key",
+    async ({ transport, cacheRetention }) => {
+      sseState.outcomes.push(sdkCompletion("resp_native_identity", "done"));
+      const result = await run(
+        { messages: [userMessage("native", 1)], tools: [] },
+        {
+          sessionId: "native-session",
+          promptCacheKey: "reset-key",
+          cacheRetention,
+          transport,
+          onPayload: (payload) => payload,
+        },
+        { ...model, id: "gpt-5.4", compat: { sendSessionIdHeader: true } },
+      );
+      expect(result.stopReason).toBe("stop");
+      const headers =
+        transport === "sse" ? sseState.clientHeaders[0] : sseState.websocketHeaders[0];
+      expect(headers?.session_id).toBe(cacheRetention === "none" ? undefined : "native-session");
+      expect(headers?.["x-openclaw-session-id"]).toBe("native-session");
+      expect(sseState.requests[0]?.prompt_cache_key).toBe(
+        cacheRetention === "none" ? undefined : "reset-key",
+      );
+    },
+  );
 
   it.each([undefined, "short", "none"] as const)(
     "continues stateful SSE turns with %s retention and matching affinity",

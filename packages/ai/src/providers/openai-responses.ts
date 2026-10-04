@@ -4,6 +4,10 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
+  buildOpenAIClientHeaders,
+  usesCustomOpenAIResponsesAffinity,
+} from "../transports/openai-transport-params.js";
 import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -64,13 +68,14 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
     createClient: () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-      const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       return createClient(
         model,
         context,
         apiKey,
         resolveProviderSimpleCompletionHeaders(model, options),
-        cacheSessionId,
+        options?.sessionId,
+        cacheRetention,
+        options?.promptCacheKey,
       );
     },
     buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
@@ -110,12 +115,29 @@ function createClient(
   apiKey?: string,
   optionsHeaders?: Record<string, string>,
   sessionId?: string,
+  cacheRetention?: SimpleStreamOptions["cacheRetention"],
+  promptCacheKey?: string,
 ) {
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
   const compat = getCompat(model);
+  if (usesCustomOpenAIResponsesAffinity(model)) {
+    return createOpenAIProviderClient(
+      model,
+      apiKey,
+      buildOpenAIClientHeaders(
+        model,
+        context,
+        optionsHeaders,
+        undefined,
+        sessionId,
+        cacheRetention,
+        promptCacheKey,
+      ),
+    );
+  }
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
     const hasImages = hasCopilotVisionInput(context.messages);
@@ -126,7 +148,7 @@ function createClient(
     Object.assign(headers, copilotHeaders);
   }
 
-  if (sessionId) {
+  if (sessionId && cacheRetention !== "none") {
     if (compat.sendSessionIdHeader) {
       headers.session_id = sessionId;
     }

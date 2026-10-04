@@ -298,6 +298,13 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
   return strict;
 }
 
+export function usesCustomOpenAIResponsesAffinity(model: Pick<Model, "api" | "provider">): boolean {
+  return (
+    model.api === "openai-responses" &&
+    !["openai", "azure-openai", "azure-openai-responses"].includes(model.provider)
+  );
+}
+
 export function buildOpenAIClientHeaders(
   model: Model,
   context: Context,
@@ -305,6 +312,7 @@ export function buildOpenAIClientHeaders(
   turnHeaders?: Record<string, string>,
   sessionId?: string,
   cacheRetention?: CacheRetention,
+  promptCacheKey?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -346,6 +354,25 @@ export function buildOpenAIClientHeaders(
     OPENAI_RESPONSES_APIS.has(model.api) && model.compat && "sendSessionIdHeader" in model.compat
       ? model.compat?.sendSessionIdHeader
       : undefined;
+  if (usesCustomOpenAIResponsesAffinity(model)) {
+    // Transport affinity follows reset boundaries independently of body caching.
+    const affinity = clampOpenAIPromptCacheKey(promptCacheKey ?? sessionId)
+      ?.trim()
+      .replace(/[\r\n]+/g, " ");
+    const existingNames = new Set(
+      Object.keys(resolvedHeaders).map(normalizeLowercaseStringOrEmpty),
+    );
+    if (affinity) {
+      for (const name of ["session_id", "x-client-request-id", "x-openclaw-session-id"]) {
+        if (
+          !existingNames.has(name) &&
+          (name !== "session_id" || configuredSessionHeaderPolicy !== false)
+        ) {
+          resolvedHeaders[name] = affinity;
+        }
+      }
+    }
+  }
   const sendSessionIdHeader =
     configuredSessionHeaderPolicy ?? usesNativeOpenAICodexResponsesBackend(model);
   // Preserve Responses session affinity for native routes and explicitly compatible proxies.

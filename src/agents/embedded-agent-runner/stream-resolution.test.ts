@@ -520,7 +520,7 @@ describe("resolveEmbeddedAgentStream", () => {
         bindStreamLlmRuntime(customStream, { ...llmRuntime } as LlmRuntime);
       }
 
-      const { streamFn } = resolveEmbeddedAgentStream({
+      const { streamFn, strategy } = resolveEmbeddedAgentStream({
         currentStreamFn: customStream as StreamFn,
         sessionId: "custom-session",
         model: {
@@ -530,7 +530,16 @@ describe("resolveEmbeddedAgentStream", () => {
         } as never,
       });
 
-      expect(streamFn).toBe(customStream);
+      expect(strategy).toBe("session-custom");
+      void streamFn(
+        { api: "openai-chatgpt-responses", provider: "openai", id: "gpt-5.5" } as never,
+        { messages: [] },
+      );
+      expect(customStream).toHaveBeenCalledWith(
+        expect.any(Object),
+        { messages: [] },
+        { sessionId: "custom-session" },
+      );
     },
   );
 
@@ -625,6 +634,7 @@ describe("resolveEmbeddedAgentStream", () => {
       "provider-owned result",
     );
     expect(result.apiKey).toBe("resolved-key");
+    expect(result.sessionId).toBe("session-1");
     expect(authStorage.getApiKey).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
@@ -682,6 +692,32 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(result.promptCacheKey).toBe("caller-cache-key");
   });
 
+  it("supplies custom stream identity without a cache key or cancellation wrapper", async () => {
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const params = {
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "canonical-session",
+      model: { api: "custom-api", provider: "custom-provider", id: "custom-model" } as never,
+    };
+    const { streamFn, strategy } = resolveEmbeddedAgentStream(params);
+    expect(strategy).toBe("session-custom");
+    const result = await expectStreamResultRecord(
+      streamFn(params.model, { messages: [] }),
+      "custom session identity",
+    );
+    expect(result.sessionId).toBe("canonical-session");
+    const overridden = await expectStreamResultRecord(
+      streamFn(
+        params.model,
+        { messages: [] },
+        { sessionId: "caller-session", promptCacheKey: "caller-cache" },
+      ),
+      "caller session identity",
+    );
+    expect(overridden.sessionId).toBe("caller-session");
+    expect(overridden.promptCacheKey).toBe("caller-cache");
+  });
+
   it("propagates prompt cache identity into custom session streams", async () => {
     const currentStreamFn = vi.fn(async (_model, _context, options) => options);
     const { streamFn } = resolveEmbeddedAgentStream({
@@ -709,8 +745,8 @@ describe("resolveEmbeddedAgentStream", () => {
   });
 
   it.each(["custom", "anthropic-vertex"] as const)(
-    "preserves %s stream identity without cache or run cancellation",
-    (provider) => {
+    "preserves %s stream ownership without cache or run cancellation",
+    async (provider) => {
       const currentStreamFn = vi.fn(async (_model, _context, options) => options);
       if (provider === "anthropic-vertex") {
         streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
@@ -725,7 +761,16 @@ describe("resolveEmbeddedAgentStream", () => {
         } as never,
       });
 
-      expect(streamFn).toBe(currentStreamFn);
+      if (provider === "anthropic-vertex") {
+        expect(streamFn).toBe(currentStreamFn);
+      } else {
+        const result = await expectStreamResultRecord(
+          streamFn({ provider, id: "custom-model" } as never, { messages: [] }),
+          "custom stream owner",
+        );
+        expect(result.sessionId).toBe("session-1");
+        expect(currentStreamFn).toHaveBeenCalledTimes(1);
+      }
     },
   );
 

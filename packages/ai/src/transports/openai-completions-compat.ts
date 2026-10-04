@@ -296,13 +296,13 @@ function resolveSessionAffinity(
   model: Pick<Model<"openai-completions">, "compat">,
   detectedFormat: OpenAICompletionsCompatDefaults["sessionAffinityFormat"],
 ): OpenAICompletionsSessionAffinity {
-  if (model.compat?.sendSessionAffinityHeaders !== true) {
+  if (model.compat?.sendSessionAffinityHeaders === false) {
     return "none";
   }
   if (
     detectedFormat === "openrouter" ||
-    model.compat.thinkingFormat === "openrouter" ||
-    model.compat.openRouterRouting !== undefined
+    model.compat?.thinkingFormat === "openrouter" ||
+    model.compat?.openRouterRouting !== undefined
   ) {
     return "openrouter";
   }

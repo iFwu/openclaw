@@ -228,6 +228,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               websocketTurnHeaders,
               options?.sessionId,
               options?.cacheRetention,
+              options?.promptCacheKey,
             )
           : undefined;
         const httpHeaders = buildOpenAIClientHeaders(
@@ -237,6 +238,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           httpTurnHeaders,
           options?.sessionId,
           options?.cacheRetention,
+          options?.promptCacheKey,
         );
         const fetchOverride = createResponsesRequestFetch(model, {
           compact: Boolean(compactRequest),

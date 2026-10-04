@@ -49,6 +49,37 @@ function model(overrides: Partial<Model<"openai-responses">> = {}) {
 }
 
 describe("OpenAI Responses provider", () => {
+  it.each(["short", "none"] as const)(
+    "keeps custom simple Responses reset identity with %s caching",
+    async (cacheRetention) => {
+      await streamSimpleOpenAIResponses(
+        model({
+          provider: "compatible-gateway",
+          baseUrl: "https://gateway.example/v1",
+          compat: { supportsPromptCacheKey: true },
+        }),
+        context,
+        {
+          apiKey: "synthetic-key",
+          sessionId: "canonical-session",
+          promptCacheKey: "reset-2",
+          cacheRetention,
+        },
+      ).result();
+      expect(openAiMockState.configs[0]).toMatchObject({
+        defaultHeaders: {
+          session_id: "reset-2",
+          "x-client-request-id": "reset-2",
+          "x-openclaw-session-id": "reset-2",
+        },
+      });
+      expect(openAiMockState.params[0]).toHaveProperty(
+        "prompt_cache_key",
+        cacheRetention === "none" ? undefined : "reset-2",
+      );
+    },
+  );
+
   afterEach(() => {
     openAiMockState.configs = [];
     openAiMockState.params = [];

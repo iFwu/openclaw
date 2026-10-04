@@ -24,6 +24,81 @@ const proxyResponsesModel = {
 } as Model;
 
 describe("buildOpenAIClientHeaders session_id affinity header", () => {
+  it.each(["short", "none"] as const)(
+    "keeps custom reset-aware transport affinity with %s body caching",
+    (cacheRetention) => {
+      const headers = buildOpenAIClientHeaders(
+        { ...proxyResponsesModel, compat: undefined },
+        context,
+        undefined,
+        undefined,
+        "canonical-session",
+        cacheRetention,
+        "canonical-session:reset-2",
+      );
+      expect(headers).toMatchObject({
+        session_id: "canonical-session:reset-2",
+        "x-client-request-id": "canonical-session:reset-2",
+        "x-openclaw-session-id": "canonical-session:reset-2",
+      });
+    },
+  );
+
+  it("retains custom request identity when session_id is explicitly disabled", () => {
+    const headers = buildOpenAIClientHeaders(
+      { ...proxyResponsesModel, compat: { sendSessionIdHeader: false } },
+      context,
+      undefined,
+      undefined,
+      "canonical-session",
+      "none",
+      "reset-key",
+    );
+    expect(headers).not.toHaveProperty("session_id");
+    expect(headers).toMatchObject({
+      "x-client-request-id": "reset-key",
+      "x-openclaw-session-id": "reset-key",
+    });
+  });
+
+  it("preserves case-insensitive caller and model affinity overrides", () => {
+    const headers = buildOpenAIClientHeaders(
+      { ...proxyResponsesModel, headers: { "X-OpenClaw-Session-ID": "model-id" } },
+      context,
+      { SeSsIoN_Id: "caller-session" },
+      { "X-Client-Request-ID": "turn-id" },
+      "canonical-session",
+      "none",
+      "reset-key",
+    );
+    const normalized = new Headers(headers);
+    expect(normalized.get("session_id")).toBe("caller-session");
+    expect(normalized.get("x-client-request-id")).toBe("turn-id");
+    expect(normalized.get("x-openclaw-session-id")).toBe("model-id");
+    expect(Object.keys(headers)).toHaveLength(3);
+  });
+
+  it("clamps and cleans custom affinity while OpenCode keeps canonical session identity", () => {
+    const headers = buildOpenAIClientHeaders(
+      { ...proxyResponsesModel, baseUrl: "https://opencode.ai/zen/v1" },
+      context,
+      undefined,
+      undefined,
+      "canonical-session",
+      "none",
+      `reset\r\n${"x".repeat(100)}`,
+    );
+    expect(headers["x-opencode-session"]).toBe("canonical-session");
+    expect(headers.session_id).not.toMatch(/[\r\n]/);
+    expect(Array.from(headers.session_id ?? "").length).toBeLessThanOrEqual(64);
+    expect(headers["x-client-request-id"]).toBe(headers.session_id);
+    expect(headers["x-openclaw-session-id"]).toBe(headers.session_id);
+  });
+
+  it("does not invent custom transport identity without a session or reset key", () => {
+    expect(buildOpenAIClientHeaders(proxyResponsesModel, context)).toEqual({});
+  });
+
   it("clamps long internal session ids to the backend's 64-char cache key limit", () => {
     const longSessionId = `internal-session-effects-session-companion-${"a".repeat(50)}`;
     const headers = buildOpenAIClientHeaders(
@@ -70,9 +145,9 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
     expect(headers.session_id).toBeUndefined();
   });
 
-  it("omits generated Responses session headers when caching is disabled", () => {
+  it("omits native generated Responses session headers when caching is disabled", () => {
     const headers = buildOpenAIClientHeaders(
-      proxyResponsesModel,
+      codexModel,
       context,
       undefined,
       undefined,

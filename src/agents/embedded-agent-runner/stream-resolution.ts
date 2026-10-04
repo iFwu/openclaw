@@ -135,6 +135,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
 } {
   const llmRuntime = resolveEmbeddedStreamRuntime(params);
   const wrapOptions = {
+    sessionId: params.sessionId,
     runSignal: params.signal,
     authProfileId: params.authProfileId,
     promptCacheKey: params.promptCacheKey,
@@ -187,7 +188,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     return {
       streamFn: wrapEmbeddedAgentStreamFn(nativeStreamFn, {
         ...wrapOptions,
-        sessionId: params.sessionId,
         transformContext: stripCacheBoundary,
       }),
       strategy: "openclaw-native-codex-responses",
@@ -213,7 +213,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       return {
         streamFn: wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
           ...wrapOptions,
-          sessionId: params.sessionId,
         }),
         strategy: `boundary-aware:${params.model.api}`,
         wrapApiKey: wrapRunApiKey,
@@ -224,9 +223,10 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal && !params.assertCurrent
+      !params.sessionId && !promptCacheKey && !params.signal && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
+            sessionId: params.sessionId,
             runSignal: params.signal,
             promptCacheKey,
             assertCurrent: params.assertCurrent,
