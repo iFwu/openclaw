@@ -41,6 +41,7 @@ type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "st
 
 type WorkboardLifecycleObservation = {
   state: WorkboardLifecycleState;
+  failureReason?: string;
   sourceUpdatedAt?: number;
   stale?: {
     detectedAt: number;
@@ -133,6 +134,7 @@ async function syncWorkboardCardLifecycle(params: {
     executionStatus: "execution" in target ? target.execution : undefined,
     sourceUpdatedAt: params.observation.sourceUpdatedAt,
     stale: params.observation.stale,
+    failureReason: params.observation.failureReason,
     now: params.now,
     ...(params.association ? { association: params.association } : {}),
   });
@@ -196,6 +198,11 @@ export async function syncWorkboardSubagentEnded(params: {
     source: { sessionKey: params.event.targetSessionKey, runId: params.event.runId },
     observation: {
       state: params.event.outcome === "ok" ? "succeeded" : "failed",
+      ...(params.event.outcome !== "ok"
+        ? {
+            failureReason: `Linked subagent run ended with outcome: ${params.event.outcome ?? "unknown"}.`,
+          }
+        : {}),
       sourceUpdatedAt: params.event.endedAt ?? now,
     },
     now,
@@ -223,6 +230,12 @@ export async function syncWorkboardAgentEnded(params: {
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
+  // agent_end is an attempt signal; a registered subagent can retry under the same run.
+  // Only subagent_ended owns that worker's terminal outcome.
+  const sessionKey = params.context.sessionKey?.trim();
+  if (sessionKey?.startsWith("subagent:") || sessionKey?.includes(":subagent:")) {
+    return 0;
+  }
   const now = params.now ?? Date.now();
   return (
     await syncWorkboardLifecycleEvent({

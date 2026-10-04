@@ -97,6 +97,65 @@ async function runSessionSweep(params: {
 }
 
 describe("Workboard gateway lifecycle sync", () => {
+  it("retains a linked subagent card across failed retry attempt events until terminal outcome", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:main:subagent:workboard-retrying";
+    const card = await createLinkedCard(store, { sessionKey, runId: "retry-run" });
+    await store.claim(card.id, { ownerId: "main", token: "retry-token" });
+    const before = await store.get(card.id);
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "retry-run", success: false },
+      context: { sessionKey, runId: "retry-run" },
+      now: before!.updatedAt + 1,
+    });
+    const retained = await store.get(card.id);
+    expect(retained?.status).toBe("running");
+    expect(retained?.metadata?.claim?.token).toBe("retry-token");
+    expect(
+      (retained?.metadata?.notifications ?? []).filter((n) => n.kind === "failed"),
+    ).toHaveLength(0);
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: sessionKey,
+        runId: "retry-run",
+        outcome: "ok",
+        endedAt: before!.updatedAt + 2,
+      },
+      now: before!.updatedAt + 2,
+    });
+    expect((await store.get(card.id))?.status).toBe("review");
+  });
+  it("persists terminal failure notification with status and claim release exactly once", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:main:subagent:workboard-terminal-failure";
+    const card = await createLinkedCard(store, { sessionKey, runId: "failure-run" });
+    await store.claim(card.id, { ownerId: "main", token: "failure-token" });
+    const before = await store.get(card.id);
+    const endedAt = before!.updatedAt + 1;
+    const event = {
+      targetSessionKey: sessionKey,
+      runId: "failure-run",
+      outcome: "timeout" as const,
+      endedAt,
+    };
+    await syncWorkboardSubagentEnded({ store, event, now: endedAt });
+    const failed = await store.get(card.id);
+    expect(failed?.status).toBe("blocked");
+    expect(failed?.metadata?.claim).toBeUndefined();
+    expect(failed?.metadata?.notifications?.filter((n) => n.kind === "failed")).toEqual([
+      expect.objectContaining({
+        runId: "failure-run",
+        sessionKey,
+        message: "Linked subagent run ended with outcome: timeout.",
+      }),
+    ]);
+    await syncWorkboardSubagentEnded({ store, event, now: endedAt + 100 });
+    expect(
+      (await store.get(card.id))?.metadata?.notifications?.filter((n) => n.kind === "failed"),
+    ).toHaveLength(1);
+  });
   it("nudges the attached board automation when a matching subagent ends", async () => {
     const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });

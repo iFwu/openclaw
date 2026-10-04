@@ -319,6 +319,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       executionStatus: WorkboardExecutionStatus | undefined;
       sourceUpdatedAt: number | undefined;
       stale: WorkboardStaleState | undefined;
+      failureReason?: string;
       now: number;
       association?: WorkboardLifecycleAssociation;
     },
@@ -409,6 +410,32 @@ export class WorkboardStore extends WorkboardNotificationStore {
             }
           } else if (associationIsCurrent && card.metadata?.stale) {
             metadata = { ...metadata, stale: null };
+          }
+          // Status and its failure record share this CAS update; held or replayed
+          // terminal observations cannot release a successor's claim or alert twice.
+          if (patch.status === "blocked") {
+            metadata = {
+              ...metadata,
+              claim: null,
+              notifications: [
+                ...(card.metadata?.notifications ?? []),
+                {
+                  id: randomUUID(),
+                  kind: "failed",
+                  createdAt: input.now,
+                  sequence: this.nextNotificationSequence(input.now),
+                  message:
+                    capText(input.failureReason, 240) ??
+                    "Linked session failed, timed out, or was interrupted.",
+                  ...(input.association?.sessionKey || cardSessionKey(card)
+                    ? { sessionKey: input.association?.sessionKey ?? cardSessionKey(card) }
+                    : {}),
+                  ...(input.association?.runId || cardRunId(card)
+                    ? { runId: input.association?.runId ?? cardRunId(card) }
+                    : {}),
+                },
+              ].slice(-MAX_CARD_NOTIFICATIONS),
+            };
           }
           if (metadata) {
             patch.metadata = metadata;

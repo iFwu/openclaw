@@ -535,3 +535,9 @@ owner.
 When dispatch supplies an explicit model, the worker runtime persists that authorized
 selection on its session before starting. Later interactive turns reuse it until a
 normal user model switch replaces it. The pin does not change agent or global defaults.
+
+Registered subagent workers wait for `subagent_ended` before their card moves to
+review or blocked; intermediate `agent_end` retry attempts do not complete the card.
+A terminal failure releases the claim and writes one bounded failure notification
+in the same canonical status mutation. Stale run events and manual status holds
+remain fenced by the current lifecycle association and CAS owner.
