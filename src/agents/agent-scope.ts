@@ -1,16 +1,13 @@
 /** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   resolveCollapsedSessionAuthPinSource,
   resolveSessionAuthProfileOverrideSource,
 } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -18,26 +15,28 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isSubagentSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
-  classifySessionKeyShape,
-  isSubagentSessionKey,
-  normalizeAgentId,
-  normalizeAgentIdStrict,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
-import {
-  AgentSelectionRequiredError,
   hasAgentRosterProperty,
   listAgentIds,
   resolveMutableAgentEntry,
   resolveAgentConfig,
   resolveAgentModelConfigForRuntime,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyDataOwnerAgentId,
   withAgentRosterFactsBatch,
 } from "./agent-scope-config.js";
+import {
+  resolveSelectedModelFallbackChain,
+  type ModelFallbackPolicyContext,
+} from "./model-fallback-policy.js";
+import { resolveSessionAgentIds } from "./session-agent-id-resolution.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
+export {
+  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
+  resolveSessionAgentId,
+  resolveSessionAgentIdStrict,
+} from "./session-agent-id-resolution.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { resolveEffectiveAgentSkillFilter as resolveAgentSkillsFilter } from "../skills/discovery/agent-filter.js";
 export {
@@ -290,96 +289,6 @@ export function clearAutoFallbackPrimaryProbeSelection(
   entry.updatedAt = now;
 }
 
-type SessionAgentResolutionParams = {
-  sessionKey?: string;
-  config?: OpenClawConfig;
-  agentId?: string | undefined;
-  fallbackAgentId?: string;
-};
-
-const SESSION_AGENT_SELECTION_CONTEXT = {
-  surface: "session agent resolution",
-  hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
-};
-
-function resolveSelectedSessionAgentId(params: SessionAgentResolutionParams): string | undefined {
-  if (classifySessionKeyShape(params.sessionKey) === "malformed_agent") {
-    throw new Error("Malformed agent session key; refusing default-agent resolution.");
-  }
-  const explicit = params.agentId === undefined ? null : normalizeAgentIdStrict(params.agentId);
-  if (explicit && !explicit.ok) {
-    throw new Error("Invalid explicit agent id; refusing default-agent resolution.");
-  }
-  const explicitAgentId = explicit?.value;
-  const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
-  const fallbackAgentId = fallbackAgentIdRaw ? normalizeAgentId(fallbackAgentIdRaw) : null;
-  const sessionKey = params.sessionKey?.trim();
-  const parsed = parseAgentSessionKey(sessionKey);
-  const sessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
-  const cfg = params.config ?? {};
-  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
-  if (sessionKeyAgentId && explicitAgentId && explicitAgentId !== sessionKeyAgentId) {
-    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
-      surface: "session agent resolution",
-      hint: `The agent-scoped session key belongs to "${sessionKeyAgentId}", not "${explicitAgentId}".`,
-    });
-  }
-  const requestedUnscopedAgentId = explicitAgentId ?? fallbackAgentId;
-  if (!sessionKeyAgentId && persistedStoreOwner.kind === "retired") {
-    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
-      surface: "session agent resolution",
-      hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
-    });
-  }
-  if (
-    !sessionKeyAgentId &&
-    persistedStoreOwner.kind === "configured" &&
-    requestedUnscopedAgentId &&
-    requestedUnscopedAgentId !== persistedStoreOwner.agentId
-  ) {
-    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
-      surface: "session agent resolution",
-      hint: `The shared fixed-store row belongs to "${persistedStoreOwner.agentId}", not "${requestedUnscopedAgentId}".`,
-    });
-  }
-  return (
-    sessionKeyAgentId ??
-    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-    requestedUnscopedAgentId ??
-    undefined
-  );
-}
-
-/** Strict session selection uses explicit context and legacy data ownership. */
-export function resolveSessionAgentIdsStrict(params: SessionAgentResolutionParams): {
-  defaultAgentId: string;
-  sessionAgentId: string;
-} {
-  const selectedAgentId = resolveSelectedSessionAgentId(params);
-  const cfg = params.config ?? {};
-  const compatibilityAgentId = tryResolveLegacyDataOwnerAgentId(cfg);
-  const sessionAgentId =
-    selectedAgentId ??
-    compatibilityAgentId ??
-    resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT);
-  const defaultAgentId = compatibilityAgentId ?? sessionAgentId;
-  return { defaultAgentId, sessionAgentId };
-}
-
-export const resolveSessionAgentIds = resolveSessionAgentIdsStrict;
-
-export function resolveSessionAgentIdStrict(params: SessionAgentResolutionParams): string {
-  const selectedAgentId = resolveSelectedSessionAgentId(params);
-  const cfg = params.config ?? {};
-  return (
-    selectedAgentId ??
-    tryResolveLegacyDataOwnerAgentId(cfg) ??
-    resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT)
-  );
-}
-
-export const resolveSessionAgentId = resolveSessionAgentIdStrict;
-
 export function resolveAgentExecutionContract(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
@@ -483,11 +392,11 @@ function resolveSelectedModelFallbacksOverride(
     return undefined;
   }
   if (typeof raw === "string") {
-    return resolvePrimaryStringValue(raw) ? [] : undefined;
+    return undefined;
   }
   // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
   if (!Object.hasOwn(raw, "fallbacks")) {
-    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
+    return undefined;
   }
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
@@ -589,14 +498,13 @@ export function resolveRunModelFallbacksOverride(params: {
 export type ModelFallbackAvailability =
   // `source` records whether an explicit fallbacks override owns the ladder or the
   // models were inherited from defaults; the run-override projection depends on it.
-  | { kind: "active"; models: string[]; source: "explicit" | "inherited" }
-  | { kind: "none_configured"; source: "explicit" | "inherited" }
-  | { kind: "disabled_by_model_override" }
+  | { kind: "active"; models: string[]; source: "explicit" | "inherited" | "per-model" }
+  | { kind: "none_configured"; source: "explicit" | "inherited" | "per-model" }
   | { kind: "disabled_by_model_selection_lock" };
 
 function modelFallbackAvailabilityFromModels(
   models: string[],
-  source: "explicit" | "inherited",
+  source: "explicit" | "inherited" | "per-model",
 ): ModelFallbackAvailability {
   return models.length > 0
     ? { kind: "active", models, source }
@@ -604,11 +512,9 @@ function modelFallbackAvailabilityFromModels(
 }
 
 /**
- * Projects availability onto the candidate-resolver override contract. Inherited
- * availability must project to `undefined`: the resolver then owns the ladder — it
- * re-derives the same configured fallbacks and appends the configured primary as the
- * final candidate (see model-fallback-candidates.ts). Collapsing inherited state into
- * an explicit list silently drops that last hop.
+ * Materialize known selected-model and authored ladders for the run. Legacy
+ * deferred selections remain undefined so the canonical candidate resolver owns
+ * their policy; they never authorize appending an unrelated configured primary.
  */
 export function modelFallbackOverrideFromAvailability(
   availability: ModelFallbackAvailability,
@@ -624,32 +530,29 @@ export function modelFallbackOverrideFromAvailability(
 }
 
 /**
- * Resolves fallback availability once for the run scope. A pinned model override disables the
- * configured ladder; splitting that fact from its models would report fallbacks that cannot run.
+ * Resolves the selected model ladder once per run; explicit lists and selection locks take precedence.
  */
-export function resolveModelFallbackAvailability(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey?: string | null;
-  hasSessionModelOverride: boolean;
-  modelOverrideSource?: "auto" | "user";
-  hasAutoFallbackProvenance?: boolean;
-  modelSelectionLocked?: boolean;
-  modelFallbacksOverride?: string[];
-  /** Declared child lineage includes visible sessions with dashboard keys. */
-  subagentSpawnLineage?: boolean;
-}): ModelFallbackAvailability {
+export function resolveModelFallbackAvailability(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey?: string | null;
+    hasSessionModelOverride: boolean;
+    modelOverrideSource?: "auto" | "user";
+    hasAutoFallbackProvenance?: boolean;
+    modelSelectionLocked?: boolean;
+    modelFallbacksOverride?: string[];
+    provider?: string;
+    model?: string;
+    /** Declared child lineage includes visible sessions with dashboard keys. */
+    subagentSpawnLineage?: boolean;
+  } & ModelFallbackPolicyContext,
+): ModelFallbackAvailability {
   if (params.modelSelectionLocked) {
     return { kind: "disabled_by_model_selection_lock" };
   }
   if (params.modelFallbacksOverride !== undefined) {
     return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride, "explicit");
-  }
-  const canUseConfiguredFallbacks =
-    params.modelOverrideSource === "auto" ||
-    (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
-  if (params.hasSessionModelOverride && !canUseConfiguredFallbacks) {
-    return { kind: "disabled_by_model_override" };
   }
   const hiddenSubagent = isSubagentSessionKey(params.sessionKey);
   // Hidden children without an effective override retain their existing agent policy.
@@ -661,24 +564,28 @@ export function resolveModelFallbackAvailability(params: {
   const fallbacksOverride = useSubagentFallbacks
     ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
     : resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-  // Auto overrides consume an explicit list, preventing a configured-primary append.
-  const source =
-    fallbacksOverride !== undefined || params.hasSessionModelOverride ? "explicit" : "inherited";
+  if (fallbacksOverride !== undefined) {
+    return modelFallbackAvailabilityFromModels(fallbacksOverride, "explicit");
+  }
   return modelFallbackAvailabilityFromModels(
-    fallbacksOverride ?? resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
-    source,
+    resolveSelectedModelFallbackChain(params),
+    "per-model",
   );
 }
 
-export function resolveEffectiveModelFallbacks(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey?: string | null;
-  hasSessionModelOverride: boolean;
-  modelOverrideSource?: "auto" | "user";
-  hasAutoFallbackProvenance?: boolean;
-  subagentSpawnLineage?: boolean;
-}): string[] | undefined {
+export function resolveEffectiveModelFallbacks(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey?: string | null;
+    hasSessionModelOverride: boolean;
+    modelOverrideSource?: "auto" | "user";
+    hasAutoFallbackProvenance?: boolean;
+    provider?: string;
+    model?: string;
+    subagentSpawnLineage?: boolean;
+  } & ModelFallbackPolicyContext,
+): string[] | undefined {
   return modelFallbackOverrideFromAvailability(resolveModelFallbackAvailability(params));
 }
 

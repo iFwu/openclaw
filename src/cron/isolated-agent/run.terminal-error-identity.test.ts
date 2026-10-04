@@ -119,7 +119,7 @@ describe("persistent automation terminal error identity", () => {
       })),
     );
 
-    // Exact replay stays idempotent, but another response under the same key is corruption.
+    // Exact replay stays idempotent; a different terminal result gets its own fingerprint.
     const [firstMessage, secondMessage] = messages;
     const [firstRunId] = runIds;
     assert(firstMessage && secondMessage && firstRunId);
@@ -129,7 +129,13 @@ describe("persistent automation terminal error identity", () => {
     expect(readErrors()).toHaveLength(2);
     const conflict = createAssistantErrorTranscript({ runId: firstRunId });
     conflict.record(secondMessage, target);
-    await expect(conflict.settle(true)).rejects.toThrow("conflicts with the admitted message");
-    expect(readErrors()).toHaveLength(2);
+    await conflict.settle(true);
+    expect(readErrors()).toHaveLength(3);
+    expect(readErrors()[2]).toMatchObject({
+      message: {
+        errorMessage: secondMessage.errorMessage,
+        __openclaw: { runId: firstRunId },
+      },
+    });
   });
 });

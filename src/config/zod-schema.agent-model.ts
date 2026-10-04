@@ -13,7 +13,7 @@ export const DecisionModelSchema = z
   );
 
 /** Schema for agent model config accepting a string or fallback object. */
-export const AgentModelSchema = z.union([
+export const AgentFallbackModelSchema = z.union([
   z.string(),
   z
     .object({
@@ -23,6 +23,13 @@ export const AgentModelSchema = z.union([
       fallbacks: z.array(z.string()).optional(),
     })
     .strict(),
+]);
+
+export const AgentModelSchema = z.union([
+  AgentFallbackModelSchema.options[0],
+  AgentFallbackModelSchema.options[1].extend({
+    fallbackChains: z.record(z.string(), z.array(z.string())).optional(),
+  }),
 ]);
 
 export const AgentToolModelSchema = z.union([

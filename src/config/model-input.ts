@@ -16,6 +16,7 @@ import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shar
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
+  fallbackChains?: Record<string, string[]>;
 };
 
 type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
@@ -31,6 +32,23 @@ export function resolveAgentModelFallbackValues(model?: AgentModelInput): string
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
+}
+
+export function resolveAgentModelFallbackChainsValue(
+  model?: AgentModelConfig,
+): Record<string, string[]> | undefined {
+  return typeof model === "object" ? model.fallbackChains : undefined;
+}
+
+export function resolveAgentModelFallbackChainRefs(model?: AgentModelConfig): string[] {
+  const refs: string[] = [];
+  for (const [primary, chain] of Object.entries(
+    resolveAgentModelFallbackChainsValue(model) ?? {},
+  )) {
+    refs.push(primary);
+    refs.push(...chain);
+  }
+  return refs;
 }
 
 /** Returns a positive finite tool timeout rounded down to whole milliseconds. */
@@ -102,6 +120,32 @@ export function normalizeAgentModelSelectionForConfig(value: unknown): unknown {
     );
     if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
       assign("fallbacks", fallbacks);
+    }
+  }
+  if (isPlainRecord(value.fallbackChains)) {
+    const chains = value.fallbackChains;
+    let changed = false;
+    const entries = new Map<string, unknown>();
+    for (const [key, chain] of Object.entries(chains)) {
+      const normalizedKey = normalizeAgentModelRefForConfig(key);
+      const normalizedChain = Array.isArray(chain)
+        ? chain.map((ref) => (typeof ref === "string" ? normalizeAgentModelRefForConfig(ref) : ref))
+        : chain;
+      changed ||=
+        normalizedKey !== key ||
+        (Array.isArray(chain) &&
+          Array.isArray(normalizedChain) &&
+          normalizedChain.some((ref, index) => ref !== chain[index]));
+      if (
+        (normalizedKey !== key && Object.hasOwn(chains, normalizedKey)) ||
+        entries.has(normalizedKey)
+      ) {
+        continue;
+      }
+      entries.set(normalizedKey, normalizedChain);
+    }
+    if (changed) {
+      assign("fallbackChains", Object.fromEntries(entries));
     }
   }
   return next;

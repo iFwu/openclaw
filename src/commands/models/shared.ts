@@ -26,6 +26,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
   mergeAgentModelEntryForConfig,
   normalizeAgentModelRefForConfig,
+  normalizeAgentModelSelectionForConfig,
   toAgentModelListLike,
 } from "../../config/model-input.js";
 import { resolveIncludeRoots } from "../../config/paths.js";
@@ -273,7 +274,11 @@ export function resolveModelsTargetAgent(
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */
-type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
+type PrimaryFallbackConfig = {
+  primary?: string;
+  fallbacks?: string[];
+  fallbackChains?: Record<string, string[]>;
+};
 
 /** Upserts the canonical model entry and folds legacy key metadata into it. */
 export function upsertCanonicalModelConfigEntry(
@@ -316,7 +321,7 @@ export function upsertCanonicalModelConfigEntry(
 /** Merges primary/fallback patches while normalizing refs for config storage. */
 export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
-  patch: { primary?: string; fallbacks?: string[] },
+  patch: PrimaryFallbackConfig,
 ): PrimaryFallbackConfig {
   const next: PrimaryFallbackConfig = { ...existing };
   if (patch.primary !== undefined) {
@@ -326,7 +331,10 @@ export function mergePrimaryFallbackConfig(
   if (fallbacks !== undefined) {
     next.fallbacks = fallbacks.map(normalizeAgentModelRefForConfig);
   }
-  return next;
+  if (patch.fallbackChains !== undefined) {
+    next.fallbackChains = patch.fallbackChains;
+  }
+  return normalizeAgentModelSelectionForConfig(next) as PrimaryFallbackConfig;
 }
 
 /** Applies a default text/image primary-model update and ensures the model entry exists. */

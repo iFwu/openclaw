@@ -15,7 +15,8 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
+  resolveModelFallbackAvailability,
+  modelFallbackOverrideFromAvailability,
 } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import {
@@ -32,6 +33,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { findModelInCatalog, prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { captureModelFallbackPolicyContext } from "../model-fallback-policy.js";
 import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,
@@ -251,21 +253,23 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         ? getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId)
         : new Set<string>();
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-      const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
-        ? []
-        : (params.opts.modelFallbacksOverride ??
-          resolveEffectiveModelFallbacks({
-            cfg,
-            agentId: sessionAgentId,
-            sessionKey,
-            hasSessionModelOverride:
-              hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
-            modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
-            subagentSpawnLineage: (sessionEntry?.spawnDepth ?? 0) > 0,
-            hasAutoFallbackProvenance: hasExplicitRunOverride
-              ? false
-              : hasStoredAutoFallbackProvenance,
-          }));
+      const modelFallbackAvailability = resolveModelFallbackAvailability({
+        ...captureModelFallbackPolicyContext({ cfg }),
+        cfg,
+        agentId: sessionAgentId,
+        provider,
+        model,
+        sessionKey,
+        hasSessionModelOverride:
+          hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+        modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+        subagentSpawnLineage: (sessionEntry?.spawnDepth ?? 0) > 0,
+        hasAutoFallbackProvenance: hasExplicitRunOverride ? false : hasStoredAutoFallbackProvenance,
+        modelSelectionLocked: isModelSelectionLocked(sessionEntry),
+        modelFallbacksOverride: params.opts.modelFallbacksOverride,
+      });
+      const effectiveFallbacksOverride =
+        modelFallbackOverrideFromAvailability(modelFallbackAvailability);
 
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;
@@ -284,6 +288,11 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          fallbackPolicyRoot:
+            modelFallbackAvailability.kind !== "disabled_by_model_selection_lock" &&
+            modelFallbackAvailability.source === "per-model"
+              ? { provider, model }
+              : undefined,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride

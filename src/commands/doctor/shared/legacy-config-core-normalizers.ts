@@ -16,6 +16,7 @@ import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
+import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
 import {
   mergeModelRefMapEntries,
   rewriteModelRefs,
@@ -343,6 +344,24 @@ function normalizeLegacyRuntimeAgentModelConfig(
       return fallback;
     });
   }
+  if (isRecord(raw.fallbackChains)) {
+    const container = { model: { fallbackChains: structuredClone(raw.fallbackChains) } };
+    rewriteModelReferenceSlot({
+      container,
+      key: "model",
+      path: "model",
+      resolve: (ref) => {
+        const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+        if (!migrated) {
+          return undefined;
+        }
+        selectedRefs.push({ ref: migrated.ref, runtime: migrated.runtime });
+        changed = true;
+        return migrated.ref;
+      },
+    });
+    next.fallbackChains = container.model.fallbackChains;
+  }
   if (!changed) {
     return { value: raw, changed: false, selectedRefs: [] };
   }
@@ -518,12 +537,16 @@ function normalizeLegacyRuntimeAgentContainer(
     changes.push(`Preserved runtime policy for ${path}.modelPolicy.allow entries.`);
   }
 
-  if (model.selectedRuntime) {
+  if (model.selectedRefs.length > 0) {
     const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, model.selectedRefs);
     if (modelRuntimes.changed) {
       next.models = modelRuntimes.value;
       changed = true;
-      changes.push(`Selected ${model.selectedRuntime} runtime for ${path}.models entries.`);
+      changes.push(
+        model.selectedRuntime
+          ? `Selected ${model.selectedRuntime} runtime for ${path}.models entries.`
+          : `Preserved runtime policy for ${path}.model references.`,
+      );
     }
   }
 

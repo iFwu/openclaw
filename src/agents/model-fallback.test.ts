@@ -49,6 +49,7 @@ import {
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
@@ -704,7 +705,19 @@ describe("runWithModelFallback", () => {
     const glmOverload = new Error("[1305][该模型当前访问量过大，请您稍后再试]");
     const run = vi.fn().mockRejectedValueOnce(glmOverload).mockResolvedValueOnce("ok");
 
-    const result = await runWithModelFallback({ provider: "glm", model: "GLM-5.2", run });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbackChains: {
+              "glm/GLM-5.2": ["anthropic/claude-haiku-3-5", "openai/gpt-4.1-mini"],
+            },
+          },
+        },
+      },
+    };
+    const result = await runWithModelFallback({ cfg, provider: "glm", model: "GLM-5.2", run });
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]).toMatchObject([
@@ -1281,8 +1294,19 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("tries inherited fallbacks before primary for override credential validation errors", async () => {
-    const cfg = makeCfg();
+  it("tries the selected root's authored ladder for credential validation errors", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbackChains: {
+              "anthropic/claude-opus-4": ["anthropic/claude-haiku-3-5", "openai/gpt-4.1-mini"],
+            },
+          },
+        },
+      },
+    };
     const run = vi.fn(async (provider: string, model: string) => {
       if (provider === "anthropic" && model === "claude-opus-4") {
         throw new Error('No credentials found for profile "anthropic:default".');
@@ -1290,7 +1314,7 @@ describe("runWithModelFallback", () => {
       if (provider === "openai" && model === "gpt-4.1-mini") {
         return "ok";
       }
-      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+      throw new Error(`No credentials found for profile "${provider}:default".`);
     });
 
     const result = await runWithModelFallback({
@@ -1298,6 +1322,8 @@ describe("runWithModelFallback", () => {
       fallbacksOverride: resolveEffectiveModelFallbacks({
         cfg,
         agentId: "main",
+        provider: "anthropic",
+        model: "claude-opus-4",
         hasSessionModelOverride: false,
       }),
       provider: "anthropic",
@@ -1306,6 +1332,7 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
+    expect(result.attempts.map((attempt) => attempt.reason)).toEqual(["auth", "auth"]);
     expect(run.mock.calls).toMatchObject([
       ["anthropic", "claude-opus-4", { isFinalFallbackAttempt: false }],
       ["anthropic", "claude-haiku-3-5", { isFinalFallbackAttempt: false }],
@@ -1352,7 +1379,11 @@ describe("runWithModelFallback", () => {
         .mockRejectedValueOnce(new Error("Model not found: openai/gpt-6"))
         .mockResolvedValueOnce("ok");
 
-      const result = await runWithModelFallback({ model: "gpt-6\u001B[31m\nspoof", run });
+      const result = await runWithModelFallback({
+        model: "gpt-6\u001B[31m\nspoof",
+        fallbacksOverride: ["anthropic/claude-haiku-3-5"],
+        run,
+      });
 
       expect(result.result).toBe("ok");
       const warning = await warnLogs.findText('Model "openai/gpt-6spoof" not found');
@@ -1817,13 +1848,25 @@ describe("runWithModelFallback", () => {
       unmarkedAbortError.name = "AbortError";
       const run = vi.fn().mockRejectedValueOnce(unmarkedAbortError).mockResolvedValueOnce("ok");
 
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbackChains: { "anthropic/claude-sonnet-4-6": ["anthropic/claude-haiku-3-5"] },
+            },
+          },
+        },
+      };
       const result = await runWithModelFallback({
+        cfg,
         provider: "anthropic",
         model: "claude-sonnet-4-6",
         run,
       });
 
       expect(result.result).toBe("ok");
+      expect(result.attempts[0]?.reason).toBe("timeout");
       expect(run).toHaveBeenCalledTimes(2);
     });
   });
@@ -1982,7 +2025,7 @@ describe("model fallback live selection", () => {
     ]);
   });
 
-  it("preserves a later live-session model switch through subsequent failure (#57471)", async () => {
+  it("preserves live-session redirects inside an explicit fixed ladder (#57471)", async () => {
     const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", [
       "anthropic/claude-haiku-3-5",
       "anthropic/claude-sonnet-4-6",
@@ -2006,7 +2049,17 @@ describe("model fallback live selection", () => {
     });
     const onError = vi.fn();
 
-    const result = await runWithModelFallback({ skipAuthProfileRuntime: true, cfg, run, onError });
+    const result = await runWithModelFallback({
+      skipAuthProfileRuntime: true,
+      cfg,
+      run,
+      onError,
+      fallbacksOverride: [
+        "anthropic/claude-haiku-3-5",
+        "anthropic/claude-sonnet-4-6",
+        "openrouter/deepseek-chat",
+      ],
+    });
 
     expect(result.result).toBe("ok");
     expect(result.provider).toBe("openrouter");
@@ -2207,5 +2260,113 @@ describe("runWithModelFallback quota recovery", () => {
     const run = vi.fn();
     await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("selected per-model turn recovery", () => {
+  it("retries A on each new turn, keeps A's flat ladder, and changes root only after a manual selection", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "chain-test/a",
+            fallbackChains: { "chain-test/a": ["chain-test/b"], "chain-test/b": ["chain-test/c"] },
+          },
+        },
+      },
+    };
+    const attempts: string[] = [];
+    let primaryHealthy = false;
+    const run = async (_provider: string, model: string) => {
+      attempts.push(model);
+      if (model === "a" && !primaryHealthy) {
+        throw new FailoverError("provider unavailable", { reason: "server_error" });
+      }
+      return model;
+    };
+    const invoke = (model: string) =>
+      runWithModelFallback({ cfg, provider: "chain-test", model, run });
+    expect((await invoke("a")).model).toBe("b");
+    expect((await invoke("a")).model).toBe("b");
+    primaryHealthy = true;
+    expect((await invoke("a")).model).toBe("a");
+    expect((await invoke("b")).model).toBe("b");
+    expect(attempts).toEqual(["a", "b", "a", "b", "a", "b"]);
+  });
+
+  it("returns a manual selection of the active fallback to the outer owner for its own chain", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "chain-test/a",
+            fallbackChains: { "chain-test/a": ["chain-test/b"], "chain-test/b": ["chain-test/c"] },
+          },
+        },
+      },
+    };
+    const change = new LiveSessionModelSwitchError({ provider: "chain-test", model: "b" });
+    const run = vi.fn(async (_provider: string, model: string) => {
+      if (model === "a") {
+        throw new FailoverError("provider unavailable", { reason: "server_error" });
+      }
+      throw change;
+    });
+    await expect(
+      runWithModelFallback({ cfg, provider: "chain-test", model: "a", run }),
+    ).rejects.toBe(change);
+    expect(run.mock.calls.map(([, model]) => model)).toEqual(["a", "b"]);
+  });
+});
+
+describe("selected-policy live switch outer owner", () => {
+  it("rebuilds B's own ladder after the first owner returns an explicit selection change", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "chain-test/a",
+            fallbackChains: {
+              "chain-test/a": ["chain-test/old-tail"],
+              "chain-test/b": ["chain-test/new-tail"],
+            },
+          },
+        },
+      },
+    };
+    const changed = new LiveSessionModelSwitchError({ provider: "chain-test", model: "b" });
+    const onError = vi.fn();
+    const first = vi.fn(async () => {
+      throw changed;
+    });
+    await expect(
+      runWithModelFallback({ cfg, provider: "chain-test", model: "a", run: first, onError }),
+    ).rejects.toBe(changed);
+    expect(first).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    const run = vi.fn(
+      async (_provider: string, model: string, options?: ModelFallbackRunOptions) => {
+        expect(options?.modelRoutingProvenance.fallbackPolicyRoot).toEqual({
+          provider: "chain-test",
+          model: "b",
+        });
+        if (model === "b") {
+          throw new FailoverError("rate limited", { reason: "rate_limit" });
+        }
+        return "ok";
+      },
+    );
+    const result = await runWithModelFallback({
+      cfg,
+      provider: changed.provider,
+      model: changed.model,
+      run,
+      onError,
+    });
+    expect(run.mock.calls.map(([, model]) => model)).toEqual(["b", "new-tail"]);
+    expect(result.attempts).toMatchObject([
+      { provider: "chain-test", model: "b", reason: "rate_limit" },
+    ]);
+    expect(onError).toHaveBeenCalledOnce();
   });
 });

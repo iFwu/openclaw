@@ -335,11 +335,11 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     },
   );
 
-  it("keeps a pinned model on its rate-limit surface instead of escalating to fallback", async () => {
+  it("keeps an explicit empty ladder on its rate-limit surface instead of escalating to fallback", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeFallbackMultiProfileAuthStore(agentDir);
-      // Same rate-limit rotation-cap scenario as #58572, but the session pins
-      // the model (empty effective ladder + disabled availability). Pre-fix the
+      // Same rotation-cap scenario as #58572, with an authored empty ladder.
+      // It is not an implicit consequence of manually selecting a model. Pre-fix the
       // run derived fallbackConfigured from config defaults, so the rotation
       // cap escalated to fallback_model over the empty ladder and threw the
       // escalation error ("temporarily rate-limited") before spending the
@@ -353,9 +353,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         sessionKey: "agent:test:user-model-override-rate-limit",
         runId: "run:user-model-override-rate-limit",
         fallbacksOverride: [],
-        // Prepared by the session model selection path for
-        // hasSessionModelOverride=true and modelOverrideSource="user".
-        modelFallbackAvailability: { kind: "disabled_by_model_override" },
+        // The caller explicitly disabled model fallback while preserving same-model recovery.
+        modelFallbackAvailability: { kind: "none_configured", source: "explicit" },
         onFallbackStep: (step) => fallbackSteps.push(step),
       });
 

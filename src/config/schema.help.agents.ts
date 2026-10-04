@@ -68,7 +68,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
-    "Ordered fallback models (provider/model). Used when the primary model fails.",
+    "Ordered global fallback tail (provider/model), appended only when the selected model equals agents.defaults.model.primary. Explicit run/job/subagent/agent fallback lists take precedence.",
+  "agents.defaults.model.fallbackChains":
+    "Flat fallback lists keyed by the selected provider/model or model id. Applies to automatic and manual selections. Only the global primary appends its global tail; unmatched non-default models have no fallback. Explicit lists, including [], override this map.",
+  "agents.entries.*.model.fallbackChains":
+    "Per-agent replacement of the default selected-model chain map. This map does not apply to an ACP agent's external harness selection.",
   "agents.defaults.embeddedAgent.cyberFailover":
     "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
   "agents.defaults.embeddedAgent.cyberFailover.mode":

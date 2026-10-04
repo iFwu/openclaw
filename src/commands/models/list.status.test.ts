@@ -1997,12 +1997,14 @@ describe("modelsStatusCommand auth overview", () => {
           expect(payload.defaultModel).toBe(primary);
           expect(payload.resolvedDefault).toBe(primary);
           expect(payload.fallbacks).toEqual(fallbacks);
+          // Native calls use the selected-model policy, even when the only
+          // configured portion of that policy is the global primary's tail.
           expect(payload.modelConfig).toEqual({
             defaultSource: "defaults",
-            fallbacksSource: "defaults",
+            fallbacksSource: "per-model",
           });
           expect(output).toContain("Default (defaults)");
-          expect(output).toContain(`Fallbacks (${fallbacks.length}) (defaults)`);
+          expect(output).toContain(`Fallbacks (${fallbacks.length}) (per-model)`);
           expect(mocks.ensureAuthProfileStore).toHaveBeenLastCalledWith("/tmp/openclaw-agent");
         },
       );

@@ -34,6 +34,7 @@ import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import type {
   FallbackAttempt,
+  ModelCandidate,
   ModelFallbackAttemptProvenance,
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
@@ -121,6 +122,7 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
+    fallbackPolicyRoot?: ModelCandidate;
     agentDir?: string;
     userLockedAuthProfileId?: string;
   } & ModelManifestNormalizationContext;

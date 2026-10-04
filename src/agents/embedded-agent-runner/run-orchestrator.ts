@@ -45,6 +45,7 @@ import { createAssistantErrorTranscript } from "../assistant-error-transcript.js
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import { captureModelFallbackPolicyContext } from "../model-fallback-policy.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -464,17 +465,18 @@ async function runEmbeddedAgentInternal(
                 params.modelFallbackAvailability ??
                 resolveModelFallbackAvailability({
                   cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+                  ...captureModelFallbackPolicyContext({
+                    cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+                  }),
                   agentId: workspaceResolution.agentId,
+                  provider,
+                  model: modelId,
                   sessionKey: normalizedSessionKey,
                   hasSessionModelOverride: false,
+                  modelSelectionLocked: params.modelSelectionLocked,
                   modelFallbacksOverride: params.modelFallbacksOverride,
                 });
               const fallbackConfigured = modelFallbackAvailability.kind === "active";
-              if (modelFallbackAvailability.kind === "disabled_by_model_override") {
-                log.warn(
-                  `[model-fallback] configured fallbacks disabled by user model override run=${params.runId} session=${redactedSessionId}`,
-                );
-              }
               const resolvedSessionKey = normalizedSessionKey ?? runSessionTarget.sessionKey;
               const hookRunner = getGlobalHookRunner();
               const hookCtx = {

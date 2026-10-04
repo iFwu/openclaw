@@ -84,3 +84,48 @@ describe.each([
     ]);
   });
 });
+
+describe("models selected fallback chain CLI", () => {
+  beforeEach(() => {
+    mocks.loadModelsConfig.mockReset();
+    mocks.loadModelsConfig.mockResolvedValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "alpha/main",
+            fallbacks: ["global/tail"],
+            fallbackChains: { "beta/backup": ["gamma/last"] },
+          },
+          models: { "beta/backup": { alias: "chosen" } },
+        },
+      },
+    });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+  it.each([
+    ["fallbacks", "--model", "chosen", "list", "--json"],
+    ["fallbacks", "list", "--model", "beta/backup", "--json"],
+  ])("resolves alias or canonical primary on the registered CLI", async (...args) => {
+    await runRegisteredCli({ register: registerModelsCli, argv: ["models", ...args] });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      {
+        model: "beta/backup",
+        fallbacks: ["gamma/last"],
+      },
+      2,
+    );
+  });
+  it("exposes per-model maps through the registered chains command", async () => {
+    await runRegisteredCli({
+      register: registerModelsCli,
+      argv: ["models", "fallbacks", "chains", "--json"],
+    });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      {
+        chains: { "beta/backup": ["gamma/last"] },
+      },
+      2,
+    );
+  });
+});

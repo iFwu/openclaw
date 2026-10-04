@@ -2,10 +2,7 @@ import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/nu
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
-import {
-  modelFallbackOverrideFromAvailability,
-  resolveModelFallbackAvailability,
-} from "../../agent-scope.js";
+import { resolveSubagentSpawnModelFallbacksOverride } from "../../agent-scope.js";
 import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   type ModelRef,
@@ -97,15 +94,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
       ...(inheritedModel ? { resolvedRef: inheritedModel } : {}),
       ...(modelOverrideSource === "auto"
         ? {
-            fallbacks: modelFallbackOverrideFromAvailability(
-              resolveModelFallbackAvailability({
-                cfg: params.cfg,
-                agentId: params.targetAgentId,
-                hasSessionModelOverride: true,
-                modelOverrideSource: "auto",
-                subagentSpawnLineage: true,
-              }),
-            ),
+            fallbacks: resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.targetAgentId),
           }
         : {}),
     });

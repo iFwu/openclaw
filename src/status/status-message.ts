@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId, resolveModelFallbackAvailability } from "../agents/agent-scope.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
@@ -944,14 +945,22 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const selectedEndpoint = args.selectedEndpoint
     ? formatModelEndpointUrl(args.selectedEndpoint)
     : undefined;
-  // Show configured fallback models (from agent model config)
-  const configuredFallbacks = (() => {
-    const modelConfig = args.agent?.model;
-    if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
-      return sessionHasPersistedModelSelection ? undefined : modelConfig.fallbacks;
-    }
-    return undefined;
-  })();
+  const fallbackAvailability = resolveModelFallbackAvailability({
+    cfg: args.config ?? contextConfig,
+    agentId:
+      args.agentId ??
+      resolveAgentIdFromSessionKey(
+        args.sessionKey,
+        resolveDefaultAgentId(args.config ?? contextConfig),
+      ),
+    sessionKey: args.sessionKey,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
+    hasSessionModelOverride: sessionHasPersistedModelSelection || sessionHasAutoFallback,
+    modelSelectionLocked: entry?.modelSelectionLocked,
+  });
+  const configuredFallbacks =
+    fallbackAvailability.kind === "active" ? fallbackAvailability.models : undefined;
   const configuredFallbacksLine = configuredFallbacks?.length
     ? `🔄 Fallbacks: ${configuredFallbacks.join(", ")}`
     : null;

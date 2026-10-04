@@ -414,12 +414,12 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
     expect(warnings).toStrictEqual([
       [
-        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
-        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. Global fallbacks (openai/gpt-5.4) belong only to the global primary, leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] or a selected-model fallbackChains entry, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
       [
-        '- agents.list[1].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
-        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+        '- agents.list[1].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. Global fallbacks (openai/gpt-5.4) belong only to the global primary, leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] or a selected-model fallbackChains entry, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);
   });
@@ -512,5 +512,51 @@ describe("noteMcpOriginWarning", () => {
       }),
     ).toHaveLength(0);
     expect(warningsFor({})).toHaveLength(0);
+  });
+});
+
+describe("Doctor selected-model chain warnings", () => {
+  it("does not claim an agent's explicit global-primary string drops the global tail", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "alpha/main",
+            fallbacks: ["global/tail"],
+          },
+        },
+        list: [{ id: "worker", model: "alpha/main" }],
+      },
+    };
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
+  });
+  it("does not claim a non-global model with its own chain has no fallback", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "alpha/main",
+            fallbacks: ["global/tail"],
+            fallbackChains: { "beta/backup": ["own/tail"] },
+          },
+        },
+        list: [{ id: "worker", model: "beta/backup" }],
+      },
+    };
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
+  });
+  it("retains a warning for a non-global primary without an authored list or matching chain", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "alpha/main",
+            fallbacks: ["global/tail"],
+          },
+        },
+        list: [{ id: "worker", model: "beta/backup" }],
+      },
+    };
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toHaveLength(1);
   });
 });

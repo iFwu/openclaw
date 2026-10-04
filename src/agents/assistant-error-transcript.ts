@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
@@ -9,6 +10,7 @@ import {
   hasAssistantDisplayableNonTextContent,
   isAssistantTextContentType,
 } from "../gateway/chat-display-projection.helpers.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
@@ -144,7 +146,7 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
             expectedSessionId: target.sessionId,
             message,
             runId: params.runId,
-            idempotencyKey: `${params.runId}:terminal-error`,
+            idempotencyKey: terminalErrorIdempotencyKey(params.runId, message),
             config: params.config,
           });
           if (!result.ok) {
@@ -157,3 +159,12 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
 }
 
 export type AssistantErrorTranscript = ReturnType<typeof createAssistantErrorTranscript>;
+
+function terminalErrorIdempotencyKey(runId: string, message: AssistantMessage): string {
+  const { timestamp: _timestamp, ...stable } = message;
+  // JSON storage drops undefined fields; structuredClone would change replay equality.
+  // eslint-disable-next-line unicorn/prefer-structured-clone
+  const serializedShape: unknown = JSON.parse(JSON.stringify(stable));
+  const fingerprint = sha256HexPrefixCore(stableStringify(serializedShape), 16);
+  return `${runId}:terminal-error:${fingerprint}`;
+}

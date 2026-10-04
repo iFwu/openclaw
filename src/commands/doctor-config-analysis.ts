@@ -7,6 +7,7 @@ import {
   listAgentEntriesWithSource,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
+import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
@@ -303,6 +304,9 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
       continue;
     }
     const id = agent.id?.trim() || (source.kind === "list" ? String(source.index) : source.key);
+    if (resolveConfiguredModelFallbacks({ cfg, agentId: id, manifestPlugins: [] }).length > 0) {
+      continue;
+    }
     const primary = resolvePrimaryStringValue(agent.model);
     const location =
       source.kind === "entries"
@@ -316,8 +320,8 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
         : 'object with no explicit "fallbacks" key';
     warnings.push(
       [
-        `- ${location} is ${modelStr}, a ${shape}. At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,
-        `  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.`,
+        `- ${location} is ${modelStr}, a ${shape}. Global fallbacks (${defaultFallbacks.join(", ")}) belong only to the global primary, leaving the agent with no fallbacks.`,
+        `  Fix: add "fallbacks": [...] or a selected-model fallbackChains entry, or "fallbacks": [] to explicitly disable.`,
       ].join("\n"),
     );
   }

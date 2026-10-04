@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findProviderRuntimeRegistrationInRegistry } from "../plugins/provider-registry-selection.js";
 import type { ProviderNormalizeModelIdContext } from "../plugins/provider-runtime.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 
@@ -9,9 +10,13 @@ import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generatio
 export function normalizeProviderModelIdWithRuntime(params: {
   provider: string;
   context: ProviderNormalizeModelIdContext;
+  registry?: PluginRegistry | null;
 }): string | undefined {
   // An exact generation, including an empty one, cannot borrow ambient hooks.
-  const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
+  const registry =
+    params.registry === undefined
+      ? (getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext())
+      : params.registry;
   if (!registry) {
     return undefined;
   }

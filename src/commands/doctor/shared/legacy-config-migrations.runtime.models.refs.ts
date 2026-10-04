@@ -35,6 +35,18 @@ function pathKey(path: string): string {
   return path.slice(path.lastIndexOf(".") + 1);
 }
 
+function isAgentFallbackChainsPath(path: string): boolean {
+  return /^(?:config)?\.?agents\.(?:defaults|(?:entries|list)\.[^.]+)\.model\.fallbackChains$/.test(
+    path,
+  );
+}
+
+function isAgentFallbackChainPath(path: string): boolean {
+  const marker = ".fallbackChains.";
+  const index = path.indexOf(marker);
+  return index >= 0 && isAgentFallbackChainsPath(path.slice(0, index + marker.length - 1));
+}
+
 function isChannelModelOverridePath(path: string): boolean {
   return path.includes(".modelByChannel.");
 }
@@ -81,7 +93,9 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
     return value.some((entry, index) =>
       typeof entry === "string" &&
       key &&
-      (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+      (MODEL_REF_ARRAY_KEYS.has(key) ||
+        isModelPolicyAllowPath(path) ||
+        isAgentFallbackChainPath(path))
         ? Boolean(normalizeKnownModelRef(entry))
         : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
     );
@@ -98,6 +112,14 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
   }
   if (isProviderCatalogsPath(path) && scanProviderCatalogModelIds(record)) {
     return true;
+  }
+  if (isAgentFallbackChainsPath(path)) {
+    return Object.entries(record).some(
+      ([entryKey, chain]) =>
+        Boolean(normalizeKnownModelRef(entryKey)) ||
+        (Array.isArray(chain) &&
+          chain.some((ref) => typeof ref === "string" && normalizeKnownModelRef(ref))),
+    );
   }
   if (key && MODEL_REF_MAP_KEYS.has(key)) {
     return Object.keys(record).some((entryKey) => Boolean(normalizeKnownModelRef(entryKey)));
@@ -391,7 +413,9 @@ export function rewriteModelRefs(
     const next = value.map((entry, index) => {
       if (
         typeof entry === "string" &&
-        (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+        (MODEL_REF_ARRAY_KEYS.has(key) ||
+          isModelPolicyAllowPath(path) ||
+          isAgentFallbackChainPath(path))
       ) {
         const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes, normalize);
         changed ||= rewritten !== entry;
@@ -433,7 +457,7 @@ export function rewriteModelRefs(
     working = rewrittenCatalogs.value;
     changed ||= rewrittenCatalogs.changed;
   }
-  if (MODEL_REF_MAP_KEYS.has(key)) {
+  if (MODEL_REF_MAP_KEYS.has(key) || isAgentFallbackChainsPath(path)) {
     const rewrittenKeys = rewriteModelRefMapKeys(working, path, changes, normalize);
     working = rewrittenKeys.value;
     changed ||= rewrittenKeys.changed;

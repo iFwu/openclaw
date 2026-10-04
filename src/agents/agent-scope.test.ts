@@ -182,63 +182,64 @@ describe("resolveAgentConfig", () => {
   });
 
   describe("resolveModelFallbackAvailability", () => {
-    const cfgWithFallbacks: OpenClawConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
-        defaults: { model: { fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+        defaults: {
+          model: {
+            primary: "alpha/main",
+            fallbacks: ["global/tail"],
+            fallbackChains: { "alpha/main": ["beta/backup"], "beta/backup": ["gamma/last"] },
+          },
+        },
         list: [{ id: "main" }],
       },
     };
-
     it.each([
       {
-        name: "uses auto fallback provenance",
+        name: "uses auto fallback provenance from the original root",
         params: {
           hasSessionModelOverride: true,
           modelOverrideSource: "auto" as const,
+          provider: "alpha",
+          model: "main",
         },
-        expected: {
-          kind: "active" as const,
-          models: ["anthropic/claude-sonnet-4-6"],
-          source: "explicit" as const,
-        },
+        expected: { kind: "active", source: "per-model", models: ["beta/backup", "global/tail"] },
       },
       {
-        name: "recovers auto fallback provenance without a source marker",
+        name: "recovers original root provenance without a source marker",
         params: {
           hasSessionModelOverride: true,
           hasAutoFallbackProvenance: true,
+          provider: "alpha",
+          model: "main",
         },
-        expected: {
-          kind: "active" as const,
-          models: ["anthropic/claude-sonnet-4-6"],
-          source: "explicit" as const,
-        },
+        expected: { kind: "active", source: "per-model", models: ["beta/backup", "global/tail"] },
       },
       {
-        name: "disables configured fallbacks for a user model override",
+        name: "uses the manually selected model's own chain",
         params: {
           hasSessionModelOverride: true,
           modelOverrideSource: "user" as const,
+          provider: "beta",
+          model: "backup",
         },
-        expected: { kind: "disabled_by_model_override" as const },
+        expected: { kind: "active", source: "per-model", models: ["gamma/last"] },
       },
       {
-        name: "reports no configured fallbacks",
-        params: { hasSessionModelOverride: false },
-        expected: { kind: "none_configured" as const, source: "inherited" as const },
+        name: "reports an empty selected chain without appending global primary",
+        params: {
+          hasSessionModelOverride: false,
+          provider: "empty",
+          model: "none",
+        },
+        expected: { kind: "none_configured", source: "per-model" },
       },
     ])("$name", ({ params, expected }) => {
-      const cfg =
-        expected.kind === "none_configured"
-          ? { agents: { list: [{ id: "main" }] } }
-          : cfgWithFallbacks;
-      expect(
-        resolveModelFallbackAvailability({
-          cfg,
-          agentId: "main",
-          ...params,
-        }),
-      ).toEqual(expected);
+      const availability = resolveModelFallbackAvailability({ cfg, agentId: "main", ...params });
+      expect(availability).toEqual(expected);
+      expect(modelFallbackOverrideFromAvailability(availability)).toEqual(
+        "models" in expected ? expected.models : [],
+      );
     });
   });
 
@@ -269,9 +270,9 @@ describe("resolveAgentConfig", () => {
         expected: undefined,
       },
       {
-        name: "disables fallbacks for a user model override",
-        availability: { kind: "disabled_by_model_override" },
-        expected: [],
+        name: "materializes the selected model's ladder",
+        availability: { kind: "active", source: "per-model", models: ["own/tail"] },
+        expected: ["own/tail"],
       },
       {
         name: "disables fallbacks under a model selection lock",
@@ -303,27 +304,41 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentEffectiveModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.4"]);
 
-    // If an agent owns a primary, missing fallbacks means no model fallback.
-    const cfgNoOverride = withModel({ primary: "anthropic/claude-sonnet-4-6" });
-    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toStrictEqual([]);
+    // Missing lists defer to the selected-model policy; only authored lists override it.
+    const ownPolicy: AgentModelConfig = {
+      primary: "other/main",
+      fallbacks: ["global/tail"],
+      fallbackChains: { "anthropic/claude-sonnet-4-6": ["specific/next"] },
+    };
+    const cfgNoOverride = withModel({ primary: "anthropic/claude-sonnet-4-6" }, ownPolicy);
+    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toBeUndefined();
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
         agentId: "linus",
         hasSessionModelOverride: false,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["specific/next"]);
 
-    const cfgStringModel = withModel("anthropic/claude-sonnet-4-6");
-    expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toStrictEqual([]);
+    const cfgStringModel = withModel("anthropic/claude-sonnet-4-6", ownPolicy);
+    expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toBeUndefined();
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg: cfgStringModel,
+        agentId: "linus",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        hasSessionModelOverride: false,
+      }),
+    ).toEqual(["specific/next"]);
 
     const cfgStrictAgentWithDefaultFallbacks = withModel(
       { primary: "opencode-go/minimax-m2.7" },
       { fallbacks: ["custom-opencode-go-extras/deepseek-v4-flash"] },
     );
-    expect(resolveAgentModelFallbacksOverride(cfgStrictAgentWithDefaultFallbacks, "linus")).toEqual(
-      [],
-    );
+    expect(
+      resolveAgentModelFallbacksOverride(cfgStrictAgentWithDefaultFallbacks, "linus"),
+    ).toBeUndefined();
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgStrictAgentWithDefaultFallbacks,
@@ -362,14 +377,14 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
@@ -386,14 +401,14 @@ describe("resolveAgentConfig", () => {
         modelOverrideSource: "user",
         hasAutoFallbackProvenance: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["specific/next"]);
 
     const cfgInheritDefaultsWithoutAgentModel: OpenClawConfig = {
       agents: {
@@ -913,7 +928,18 @@ describe("resolveAgentConfig", () => {
       "openai/gpt-5.4",
       "zai/glm-5",
     ]);
-    expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toBeUndefined();
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "strict",
+        provider: "kimi",
+        model: "kimi-code",
+        sessionKey: "agent:strict:subagent:child",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "auto",
+      }),
+    ).toEqual(["openai/gpt-5.4", "zai/glm-5"]);
   });
 
   it("uses subagent model fallbacks for auto-selected spawned subagent models", () => {
@@ -956,6 +982,8 @@ describe("resolveAgentConfig", () => {
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "research",
+        provider: "kimi",
+        model: "kimi-code",
         sessionKey: "agent:research:subagent:child",
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
@@ -965,15 +993,19 @@ describe("resolveAgentConfig", () => {
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "research",
+        provider: "kimi",
+        model: "kimi-code",
         sessionKey: "agent:research:subagent:child",
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4", "zai/glm-5"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "fallback-only-subagent",
+        provider: "kimi",
+        model: "kimi-code",
         sessionKey: "agent:fallback-only-subagent:subagent:child",
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",

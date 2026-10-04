@@ -1,5 +1,6 @@
 /** Projects effective configured model refs, aliases, and role tags for one agent. */
 import {
+  resolveAgentModelFallbackChainRefs,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
@@ -111,6 +112,15 @@ export function resolveConfiguredModelEntries(
   resolveConfiguredModelFallbacks({ cfg: params.cfg, agentId: params.agentId }).forEach(
     (raw, index) => addRaw(raw, `fallback#${index + 1}`),
   );
+
+  const agentModel = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.model
+    : undefined;
+  for (const model of [params.cfg.agents?.defaults?.model, agentModel]) {
+    for (const raw of resolveAgentModelFallbackChainRefs(model)) {
+      addRaw(raw, "fallback-chain");
+    }
+  }
 
   // Image-model configuration remains global; per-agent image inheritance is
   // outside this projection's model-metadata contract.

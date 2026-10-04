@@ -68,7 +68,7 @@ import {
   runCliAgent,
 } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
+import { resolveCronFallbackPolicy } from "./run-fallback-policy.js";
 import {
   setCronSessionAgentHarnessId,
   setCronSessionRuntimeModel,
@@ -140,15 +140,20 @@ function createCronPromptExecutor(
   },
 ) {
   const sessionFile = params.runSessionKey;
-  const cronFallbacksOverride =
-    params.modelFallbacksOverride ??
-    resolveCronFallbacksOverride({
-      cfg: params.cfg,
-      job: params.job,
-      agentId: params.agentId,
-      useSubagentFallbacks: params.useSubagentFallbacks,
-      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-    });
+  const fallbackRoot = params.fallbackPolicyRoot ?? {
+    provider: params.liveSelection.provider,
+    model: params.liveSelection.model,
+  };
+  const initialPolicy = resolveCronFallbackPolicy({
+    cfg: params.modelPolicyConfig,
+    job: params.job,
+    agentId: params.agentId,
+    useSubagentFallbacks: params.useSubagentFallbacks,
+    provider: fallbackRoot.provider,
+    model: fallbackRoot.model,
+  });
+  let fallbackPolicyRoot = initialPolicy.fallbackPolicyRoot;
+  let cronFallbacksOverride = params.modelFallbacksOverride ?? initialPolicy.fallbacksOverride;
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -215,7 +220,10 @@ function createCronPromptExecutor(
 
   const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
 
-  return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
+  const runPrompt = async (
+    promptText: string,
+    runStartedAt: number,
+  ): Promise<CronCompletedPromptRun> => {
     // A retry can fail during preparation, before any backend start callback.
     params.lifecycle.beginAttempt();
     const sessionTarget = {
@@ -289,6 +297,7 @@ function createCronPromptExecutor(
             ? params.liveSelection.authProfileId
             : undefined,
         fallbacksOverride: cronFallbacksOverride,
+        fallbackPolicyRoot,
       },
       identity: {
         runId,
@@ -636,6 +645,7 @@ function createCronPromptExecutor(
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
+          modelRoutingProvenance: runOptions.modelRoutingProvenance,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
@@ -711,6 +721,29 @@ function createCronPromptExecutor(
     pendingUserTurn = undefined;
     return completed;
   };
+  return {
+    runPrompt,
+    applyModelSelection: (selection: InstanceType<typeof LiveSessionModelSwitchError>) => {
+      // Only a genuine user switch changes the policy root; an observed fallback does not.
+      const policy = resolveCronFallbackPolicy({
+        cfg: params.modelPolicyConfig,
+        job: params.job,
+        agentId: params.agentId,
+        useSubagentFallbacks: params.useSubagentFallbacks,
+        provider: selection.provider,
+        model: selection.model,
+      });
+      fallbackPolicyRoot = policy.fallbackPolicyRoot;
+      cronFallbacksOverride = policy.fallbacksOverride;
+      params.liveSelection.provider = selection.provider;
+      params.liveSelection.model = selection.model;
+      params.liveSelection.agentRuntimeOverride = selection.agentRuntimeOverride;
+      params.liveSelection.authProfileId = selection.authProfileId;
+      params.liveSelection.authProfileIdSource = selection.authProfileId
+        ? selection.authProfileIdSource
+        : undefined;
+    },
+  };
 }
 
 /** Executes an isolated cron prompt, including live model-switch and interim-ack retries. */
@@ -726,7 +759,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
   });
   const runStartedAt = params.runStartedAt ?? Date.now();
   const completedPromptRuns: CronCompletedPromptRun[] = [];
-  const runPrompt = createCronPromptExecutor({
+  const executor = createCronPromptExecutor({
     ...params,
     resolvedVerboseLevel,
     onPromptCompleted: (run) => {
@@ -735,6 +768,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     },
   });
 
+  const runPrompt = executor.runPrompt;
   const MAX_MODEL_SWITCH_RETRIES = 2;
   let modelSwitchRetries = 0;
   let promptMediaTaskIds: ReadonlySet<string> = new Set();
@@ -758,13 +792,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
         );
         throw err;
       }
-      params.liveSelection.provider = err.provider;
-      params.liveSelection.model = err.model;
-      params.liveSelection.agentRuntimeOverride = err.agentRuntimeOverride;
-      params.liveSelection.authProfileId = err.authProfileId;
-      params.liveSelection.authProfileIdSource = err.authProfileId
-        ? err.authProfileIdSource
-        : undefined;
+      executor.applyModelSelection(err);
       syncCronSessionLiveSelection({
         entry: params.cronSession.sessionEntry,
         liveSelection: params.liveSelection,

@@ -1,5 +1,9 @@
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../failover/classify.js";
+import {
+  UPSTREAM_STREAM_IDLE_RE,
+  TRANSIENT_SCHEMA_REJECTION_RE,
+} from "../failover/message-patterns.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
@@ -171,8 +175,12 @@ function classifyProviderErrorPayloadReason(
     case "rate_limit":
     case "server_error":
     case "overloaded":
-    case "timeout":
       return failoverReason;
+    case "timeout":
+      return UPSTREAM_STREAM_IDLE_RE.test(errorText) ||
+        TRANSIENT_SCHEMA_REJECTION_RE.test(errorText)
+        ? failoverReason
+        : null;
     default:
       return null;
   }

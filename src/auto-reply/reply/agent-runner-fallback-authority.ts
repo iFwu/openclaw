@@ -35,7 +35,6 @@ export function resolveReplySteeringAuthority(
     routeOnlyMismatch &&
     selectedRoute !== undefined &&
     !selectionChanged &&
-    fallbackSelection?.kind !== "disabled_by_model_override" &&
     fallbackSelection?.kind !== "disabled_by_model_selection_lock" &&
     fallbackRoute?.provider === activeRoute?.provider &&
     fallbackRoute?.model === activeRoute?.model

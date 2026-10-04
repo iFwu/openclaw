@@ -446,7 +446,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("classifies generic 'LLM request failed.' payloads as timeout fallback (#138531)", () => {
+  it("does not infer provider replay permission from generic 'LLM request failed.' copy", () => {
     const rawError = "LLM request failed.";
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
@@ -457,12 +457,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       },
     });
 
-    expect(result).toEqual({
-      message: `custom/llama-3.1 ended with a provider error: ${rawError}`,
-      reason: "timeout",
-      code: "embedded_error_payload",
-      rawError,
-    });
+    expect(result).toBeNull();
   });
 
   it("does not retry non-business transport error payloads", () => {

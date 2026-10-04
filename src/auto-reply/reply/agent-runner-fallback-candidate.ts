@@ -139,6 +139,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        fallbackPolicyRoot:
+          selection.modelFallbackAvailability.kind !== "disabled_by_model_selection_lock" &&
+          selection.modelFallbackAvailability.source === "per-model"
+            ? { provider: selection.provider, model: selection.model }
+            : undefined,
         userLockedAuthProfileId:
           turn.followupRun.run.authProfileIdSource === "user"
             ? turn.followupRun.run.authProfileId
@@ -297,6 +302,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             runAbortSignal: params.runAbortSignal,
             runLane,
             isFallbackRetry: runOptions.isFallbackRetry,
+            modelRoutingProvenance: runOptions.modelRoutingProvenance,
             isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
             suppressQueuedUserPersistenceForCandidate:
               (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||

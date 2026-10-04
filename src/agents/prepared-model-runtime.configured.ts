@@ -12,13 +12,14 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveAgentModelFallbackChainRefs } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentEntry } from "./agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -363,6 +364,8 @@ function resolveConfiguredRuntimePluginSelections(
     // their owners once so nested execution never expands an already frozen generation.
     fallbacksOverride: [
       ...resolveConfiguredModelFallbacks({ cfg: config, agentId }),
+      ...resolveAgentModelFallbackChainRefs(config.agents?.defaults?.model),
+      ...resolveAgentModelFallbackChainRefs(resolveAgentConfig(config, agentId)?.model),
       ...(subagentModel ? [subagentModel] : []),
       ...(resolveSubagentSpawnModelFallbacksOverride(config, agentId) ?? []),
     ],

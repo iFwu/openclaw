@@ -1,5 +1,6 @@
 import {
   listModelRefsFromConfigValue,
+  type ModelSelectorRefRole,
   visitModelSelectorRefs,
 } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -166,7 +167,7 @@ export function rewriteModelReferenceSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  resolve: (model: string, path: string, role: "primary" | "fallback") => string | null | undefined;
+  resolve: (model: string, path: string, role: ModelSelectorRefRole) => string | null | undefined;
 }): boolean {
   const { container, key, path, resolve } = params;
   if (!container) {
@@ -203,6 +204,42 @@ export function rewriteModelReferenceSlot(params: {
       const replacement = resolve(entry.trim(), `${path}.fallbacks.${index}`, "fallback");
       return replacement === null ? [] : [replacement ?? entry];
     });
+  }
+  const chains = asMutableRecord(record.fallbackChains);
+  if (chains) {
+    const entries = Object.entries(chains).map(([chainKey, chain]) => {
+      const replacement = resolve(
+        chainKey.trim(),
+        `${path}.fallbackChains.${chainKey}`,
+        "chain-key",
+      );
+      return {
+        key: chainKey,
+        chain,
+        replacement: replacement === undefined ? chainKey : replacement,
+      };
+    });
+    const byKey = new Map(entries.map((entry) => [entry.key, entry]));
+    const rewritten = new Map<string, unknown>();
+    for (const entry of entries) {
+      if (entry.replacement === null || rewritten.has(entry.replacement)) {
+        continue;
+      }
+      const canonical = byKey.get(entry.replacement);
+      const selected = canonical && canonical.replacement === canonical.key ? canonical : entry;
+      const chainPath = `${path}.fallbackChains.${selected.key}`;
+      const chain = Array.isArray(selected.chain)
+        ? selected.chain.flatMap((fallback, index) => {
+            if (typeof fallback !== "string") {
+              return [fallback];
+            }
+            const replacement = resolve(fallback.trim(), `${chainPath}.${index}`, "fallback");
+            return replacement === null ? [] : [replacement ?? fallback];
+          })
+        : selected.chain;
+      rewritten.set(entry.replacement, chain);
+    }
+    record.fallbackChains = Object.fromEntries(rewritten);
   }
   return primaryChanged;
 }

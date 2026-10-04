@@ -20,11 +20,13 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "pdfModel",
 ] as const;
 
+export type ModelSelectorRefRole = "primary" | "fallback" | "chain-key";
+
 /** Visit raw selector refs without changing values, order, or fallback indices. */
 export function visitModelSelectorRefs(
   value: unknown,
   path: string,
-  visit: (path: string, value: string, role: "primary" | "fallback") => void,
+  visit: (path: string, value: string, role: ModelSelectorRefRole) => void,
 ): void {
   if (typeof value === "string") {
     visit(path, value, "primary");
@@ -40,6 +42,18 @@ export function visitModelSelectorRefs(
     for (const [index, fallback] of value.fallbacks.entries()) {
       if (typeof fallback === "string") {
         visit(`${path}.fallbacks.${index}`, fallback, "fallback");
+      }
+    }
+  }
+  if (isRecord(value.fallbackChains)) {
+    for (const [primary, chain] of Object.entries(value.fallbackChains)) {
+      visit(`${path}.fallbackChains.${primary}`, primary, "chain-key");
+      if (Array.isArray(chain)) {
+        for (const [index, fallback] of chain.entries()) {
+          if (typeof fallback === "string") {
+            visit(`${path}.fallbackChains.${primary}.${index}`, fallback, "fallback");
+          }
+        }
       }
     }
   }

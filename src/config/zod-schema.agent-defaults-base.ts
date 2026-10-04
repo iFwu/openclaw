@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
 import {
+  AgentFallbackModelSchema,
   AgentModelSchema,
   AgentToolModelSchema,
   DecisionModelSchema,
@@ -296,7 +297,7 @@ export const AgentDefaultsBaseSchema = z
             "Maximum number of active children a single agent session can spawn (default: 5).",
           ),
         archiveAfterMinutes: z.number().int().min(0).optional(),
-        model: AgentModelSchema.optional(),
+        model: AgentFallbackModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),

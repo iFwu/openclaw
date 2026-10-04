@@ -586,5 +586,5 @@ export const MODEL_REF_CANONICALIZATION_RULES: LegacyConfigRule[] = [
 ].map((section) => ({
   path: [section],
   message: MODEL_REF_CANONICALIZATION_MESSAGE,
-  match: (value) => scanKnownModelRefs(value),
+  match: (value) => scanKnownModelRefs(value, undefined, `config.${section}`),
 }));

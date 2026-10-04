@@ -30,6 +30,10 @@ export const INCOMPLETE_ASSISTANT_STREAM_RE =
   /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
+export const UPSTREAM_STREAM_IDLE_RE = /\bupstream stream idle for (?:\d+(?:\.\d+)?(?:h|m|s))+\b/i;
+// This exact gateway diagnostic is transient; ordinary schema validation remains terminal.
+export const TRANSIENT_SCHEMA_REJECTION_RE =
+  /input_schema\.required:\s*input should be a valid list\b[^\r\n]*\bcode=30000\b/i;
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
 // These exact transport diagnostics identify rejection, not whether replay is safe.
 const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
@@ -178,6 +182,8 @@ const ERROR_PATTERNS = {
     /^stream disconnected before completion(?::[\s\S]*)?$/i,
     /^premature close of server response while trying to fetch\b/i,
     INCOMPLETE_ASSISTANT_STREAM_RE,
+    UPSTREAM_STREAM_IDLE_RE,
+    TRANSIENT_SCHEMA_REJECTION_RE,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",
@@ -293,6 +299,7 @@ export function isTimeoutErrorMessage(raw: string): boolean {
 
 // Provider-completed errors stay failover-eligible without claiming a timeout.
 const PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS = [
+  /^upstream request failed[.!]?$/i,
   /\bfinish_reason:\s*error\b/i,
   // Symmetric with the timeout stop-reason family; scoped to the word `error`
   // only so `reason: network_error` stays in the timeout lane.

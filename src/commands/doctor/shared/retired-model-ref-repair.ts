@@ -1,7 +1,17 @@
 // Doctor consumes provider retirement facts only after selecting the exact auth route.
+import {
+  listModelRefsFromConfigValue,
+  type ModelSelectorRefRole,
+} from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentModelFallbacksOverride } from "../../../agents/agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import {
+  buildModelAliasIndex,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../../../agents/model-selection-resolve.js";
 import {
   isModelKeyAllowedBySet,
   resolveConfiguredModelPolicyAllow,
@@ -276,6 +286,7 @@ type ModelRefRewriteContext = {
   changes: string[];
   warnings?: string[];
   preservePrimaryWithoutSuccessor?: boolean;
+  preserveModelSelector?: boolean;
   authProfileOnly?: boolean;
 };
 type RetiredModelSlotRepair = ModelRefRewriteContext & {
@@ -286,7 +297,11 @@ type RetiredModelSlotRepair = ModelRefRewriteContext & {
 };
 
 function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
-  return (modelRef: string, path: string): string | null | undefined => {
+  return (
+    modelRef: string,
+    path: string,
+    role: ModelSelectorRefRole,
+  ): string | null | undefined => {
     const decision = params.resolve({
       modelRef,
       agentId: params.agentId,
@@ -310,7 +325,11 @@ function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
         ? decision.reason === "reference-preservation"
           ? `Preserved ${path} model "${modelRef}" as "${decision.modelRef}" after config repair.`
           : `Replaced retired ${path} "${modelRef}" with "${decision.modelRef}".`
-        : `Removed retired ${path} "${modelRef}" so it inherits the configured default model.`,
+        : role === "primary"
+          ? `Removed retired ${path} "${modelRef}" so it inherits the configured default model.`
+          : role === "chain-key"
+            ? `Removed retired ${path} chain for "${modelRef}".`
+            : `Removed retired ${path} fallback "${modelRef}".`,
     );
     return decision.kind === "replace" ? decision.modelRef : null;
   };
@@ -333,6 +352,9 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
   const rewriteSlot = createRetiredModelSlotRewriter(params);
   // Speech and media generation select their own capability provider routes.
   for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
+    if (key === "model" && params.preserveModelSelector) {
+      continue;
+    }
     rewriteSlot(params.owner, key, `${params.path}.${key}`);
     const selector = asOptionalRecord(params.owner[key]);
     if (selector && Object.keys(selector).length === 0) {
@@ -349,7 +371,9 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     );
   }
   // Cron stores fallback refs beside payload.model, rather than inside its selector.
-  rewriteSlot({ selector: params.owner }, "selector", params.path);
+  if (!params.preserveModelSelector) {
+    rewriteSlot({ selector: params.owner }, "selector", params.path);
+  }
   for (const key of ["heartbeat", "subagents", "compaction"] as const) {
     rewriteSlot(params.owner[key], "model", `${params.path}.${key}.model`);
   }
@@ -364,6 +388,9 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     `${params.path}.tools.exec.reviewer.model`,
   );
   rewriteSlot(params.owner.tts, "summaryModel", `${params.path}.tts.summaryModel`);
+  if (params.preserveModelSelector) {
+    return;
+  }
   let models = asOptionalRecord(params.owner.models);
   for (const [modelRef, inherited] of Object.entries(params.inheritedModels ?? {})) {
     const decision = params.resolve({ modelRef, agentId: params.agentId });
@@ -460,6 +487,36 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
   }
 }
 
+export function modelRefIdentityForRepair(
+  cfg: OpenClawConfig,
+  raw: string | undefined,
+  agentId?: string,
+): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const options = {
+    cfg,
+    agentId,
+    manifestPlugins: [],
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  };
+  const selected = resolveConfiguredModelRef({
+    ...options,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const aliasIndex = buildModelAliasIndex({ ...options, defaultProvider: selected.provider });
+  const resolved = resolveModelRefFromString({
+    ...options,
+    raw,
+    defaultProvider: selected.provider,
+    aliasIndex,
+  })?.ref;
+  return resolved ? `${resolved.provider}/${resolved.model}` : undefined;
+}
+
 export function repairRetiredConfigModelRefs(
   cfg: OpenClawConfig,
   resolve: ModelRefRepairResolver,
@@ -469,41 +526,143 @@ export function repairRetiredConfigModelRefs(
   const changes: string[] = [];
   const defaults = asOptionalRecord(config.agents?.defaults);
   if (defaults) {
+    const plannedConfig = structuredClone(cfg);
+    rewriteModelReferenceSlot({
+      container: asOptionalRecord(plannedConfig.agents?.defaults),
+      key: "model",
+      path: "agents.defaults.model",
+      resolve: createRetiredModelRefRewriter({
+        path: "agents.defaults",
+        resolve,
+        changes: [],
+        preservePrimaryWithoutSuccessor: true,
+      }),
+    });
+    const beforeGlobalRef = readModelConfigPrimaryRef(defaults.model);
+    const afterGlobalRef = readModelConfigPrimaryRef(plannedConfig.agents?.defaults?.model);
+    const beforeGlobal = modelRefIdentityForRepair(cfg, beforeGlobalRef);
+    const afterGlobal = modelRefIdentityForRepair(plannedConfig, afterGlobalRef);
+    const hasGlobalTail = [defaults.model, plannedConfig.agents?.defaults?.model].some((value) => {
+      const fallbacks = asOptionalRecord(value)?.fallbacks;
+      return Array.isArray(fallbacks) && fallbacks.length > 0;
+    });
+    const affectedOwners: string[] = [];
+    if (hasGlobalTail && beforeGlobal !== afterGlobal) {
+      for (const { agent, agentId, path } of listMutableCodexRouteAgentEntries(cfg)) {
+        if (resolveAgentModelFallbacksOverride(cfg, agentId) !== undefined) {
+          continue;
+        }
+        const ownPrimary = readModelConfigPrimaryRef(agent.model);
+        const decision = ownPrimary ? resolve({ modelRef: ownPrimary, agentId }) : undefined;
+        const nextPrimary =
+          decision?.kind === "replace"
+            ? decision.modelRef
+            : !ownPrimary || decision?.kind === "clear"
+              ? afterGlobalRef
+              : ownPrimary;
+        const before = modelRefIdentityForRepair(cfg, ownPrimary ?? beforeGlobalRef, agentId);
+        const after = modelRefIdentityForRepair(plannedConfig, nextPrimary, agentId);
+        if (
+          !before ||
+          !beforeGlobal ||
+          !after ||
+          !afterGlobal ||
+          (before === beforeGlobal) !== (after === afterGlobal)
+        ) {
+          affectedOwners.push(`${path}.model`);
+        }
+      }
+    }
+    const preserveModelSelector = affectedOwners.length > 0;
+    if (preserveModelSelector) {
+      warnings.push(
+        `Retained agents.defaults.model and its model policy: repairing its primary would change which per-model selections inherit global fallbacks (${affectedOwners.join(", ")}). Choose supported model references explicitly and rerun openclaw doctor --fix.`,
+      );
+    }
     repairRetiredModelSlots({
       owner: defaults,
       path: "agents.defaults",
       resolve,
       changes,
       warnings,
+      preserveModelSelector,
       preservePrimaryWithoutSuccessor: true,
     });
   }
+  const originalAgents = new Map(
+    listMutableCodexRouteAgentEntries(cfg).map(({ agent, agentId }) => [agentId, agent]),
+  );
   for (const { agent, agentId, path } of listMutableCodexRouteAgentEntries(config)) {
     const inheritedModelRef = readModelConfigPrimaryRef(defaults?.model);
-    const repairInheritedPrimary =
-      !readModelConfigPrimaryRef(agent.model) &&
-      inheritedModelRef &&
-      resolve({ modelRef: inheritedModelRef, agentId }).kind === "replace";
-    const inheritedFallbacks =
-      resolveAgentModelFallbacksOverride(config, agentId) === undefined
-        ? asOptionalRecord(defaults?.model)?.fallbacks
-        : undefined;
+    const ownPrimary = readModelConfigPrimaryRef(agent.model);
+    const ownModel: Record<string, unknown> | undefined =
+      typeof agent.model === "string" ? { primary: agent.model } : asOptionalRecord(agent.model);
+    const defaultModel = asOptionalRecord(defaults?.model);
+    const fallbackOverride = resolveAgentModelFallbacksOverride(config, agentId);
+    const inheritedFallbacks = fallbackOverride === undefined ? defaultModel?.fallbacks : undefined;
+    const mapEnabled = fallbackOverride === undefined;
+    const effectivePrimary = ownPrimary ?? inheritedModelRef;
+    const primaryDecision = effectivePrimary
+      ? resolve({ modelRef: effectivePrimary, agentId })
+      : { kind: "unchanged" as const };
+    const repairInheritedPrimary = !ownPrimary && primaryDecision.kind === "replace";
     const repairInheritedFallbacks =
       Array.isArray(inheritedFallbacks) &&
       inheritedFallbacks.some(
         (modelRef) =>
           typeof modelRef === "string" && resolve({ modelRef, agentId }).kind !== "unchanged",
       );
-    if (repairInheritedPrimary || repairInheritedFallbacks) {
-      // A new explicit primary disables fallback inheritance. Carry inherited
-      // fallbacks when pinning it, but keep a healthy shared primary inherited.
-      const ownModel = asOptionalRecord(agent.model);
+    const inheritedChains =
+      mapEnabled && !asOptionalRecord(ownModel?.fallbackChains)
+        ? asOptionalRecord(defaultModel?.fallbackChains)
+        : undefined;
+    const repairInheritedChains =
+      inheritedChains !== undefined &&
+      listModelRefsFromConfigValue({ fallbackChains: inheritedChains }).some(
+        (modelRef) => resolve({ modelRef, agentId }).kind !== "unchanged",
+      );
+    let changesGlobalTailSelection = false;
+    if (mapEnabled && primaryDecision.kind !== "unchanged") {
+      const originalGlobalModel = asOptionalRecord(cfg.agents?.defaults?.model);
+      const hasGlobalTail = [originalGlobalModel?.fallbacks, defaultModel?.fallbacks].some(
+        (fallbacks) => Array.isArray(fallbacks) && fallbacks.length > 0,
+      );
+      if (hasGlobalTail) {
+        const originalGlobalRef = readModelConfigPrimaryRef(cfg.agents?.defaults?.model);
+        const originalPrimary =
+          readModelConfigPrimaryRef(originalAgents.get(agentId)?.model) ?? originalGlobalRef;
+        const nextPrimary =
+          primaryDecision.kind === "replace" ? primaryDecision.modelRef : inheritedModelRef;
+        const before = modelRefIdentityForRepair(cfg, originalPrimary, agentId);
+        const beforeGlobal = modelRefIdentityForRepair(cfg, originalGlobalRef);
+        const after = modelRefIdentityForRepair(config, nextPrimary, agentId);
+        const afterGlobal = modelRefIdentityForRepair(config, inheritedModelRef);
+        changesGlobalTailSelection =
+          !before ||
+          !beforeGlobal ||
+          !after ||
+          !afterGlobal ||
+          (before === beforeGlobal) !== (after === afterGlobal);
+      }
+    }
+    const preserveModelSelector =
+      mapEnabled && (repairInheritedFallbacks || changesGlobalTailSelection);
+    if (preserveModelSelector) {
+      warnings.push(
+        `Retained ${path}.model and its model policy: repairing the shared primary or global fallback tail for agent "${agentId}" would change its per-model fallback policy. Choose supported model references explicitly and rerun openclaw doctor --fix.`,
+      );
+    } else if (repairInheritedPrimary || repairInheritedFallbacks || repairInheritedChains) {
       agent.model =
-        typeof defaults?.model === "string" && !ownModel
+        typeof defaults?.model === "string" && !ownModel && !repairInheritedChains
           ? defaults.model
           : {
               ...(repairInheritedPrimary ? { primary: inheritedModelRef } : {}),
-              ...(Array.isArray(inheritedFallbacks) ? { fallbacks: [...inheritedFallbacks] } : {}),
+              ...(!mapEnabled && Array.isArray(inheritedFallbacks)
+                ? { fallbacks: [...inheritedFallbacks] }
+                : {}),
+              ...(repairInheritedChains
+                ? { fallbackChains: structuredClone(inheritedChains) }
+                : {}),
               ...ownModel,
             };
     }
@@ -514,6 +673,7 @@ export function repairRetiredConfigModelRefs(
       resolve,
       changes,
       warnings,
+      preserveModelSelector,
       inheritedModelRef,
       inheritedModels: asOptionalRecord(defaults?.models),
       inheritedModelPolicy: asOptionalRecord(defaults?.modelPolicy),

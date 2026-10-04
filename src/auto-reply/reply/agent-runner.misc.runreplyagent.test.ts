@@ -2550,3 +2550,43 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("auto-reply fallback root propagation", () => {
+  it("carries the outer selection root to an embedded fallback attempt", async () => {
+    const provenance = {
+      requestedProvider: "anthropic",
+      requestedModel: "claude",
+      fallbackPolicyRoot: { provider: "anthropic", model: "claude" },
+      stage: "fallback" as const,
+      selectionChanged: false,
+      fallbackReason: "server_error" as const,
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
+      result: await params.run("google", "gemini-2.5-pro", { modelRoutingProvenance: provenance }),
+      provider: "google",
+      model: "gemini-2.5-pro",
+      attempts: [],
+    }));
+    await createBaseRun({
+      run: {
+        agentId: "main",
+        sessionKey: "main",
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude",
+                fallbackChains: { "anthropic/claude": ["google/gemini-2.5-pro"] },
+              },
+            },
+          },
+        },
+      },
+    }).run();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(firstMockCallArg(runEmbeddedAgentMock, "embedded fallback")).toMatchObject({
+      modelRoutingProvenance: provenance,
+    });
+  });
+});

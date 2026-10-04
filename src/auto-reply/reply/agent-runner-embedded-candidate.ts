@@ -148,6 +148,7 @@ export async function runEmbeddedFallbackCandidate(
         fastModeStartedAtMs: params.fastModeStartedAtMs,
         fastModeAutoProgressState: params.fastModeAutoProgressState,
         isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+        modelRoutingProvenance: params.modelRoutingProvenance,
         sandboxSessionKey: turn.runtimePolicySessionKey,
         prompt: turn.commandBody,
         transcriptPrompt: turn.transcriptCommandBody,

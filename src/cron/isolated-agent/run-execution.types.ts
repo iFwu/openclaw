@@ -12,6 +12,7 @@ import type { CronCompletedPromptRun, CronRunnerStartedInfo } from "./run.types.
 export type CronRunExecutionParams = Pick<
   PreparedCronRunContext,
   | "cfgWithAgentDefaults"
+  | "modelPolicyConfig"
   | "agentId"
   | "agentDir"
   | "agentSessionKey"
@@ -31,8 +32,8 @@ export type CronRunExecutionParams = Pick<
   | "skillsSnapshot"
   | "agentPayload"
   | "useSubagentFallbacks"
-  | "inheritDefaultFallbacksForAgentStringModel"
   | "modelFallbacksOverride"
+  | "fallbackPolicyRoot"
   | "liveSelection"
   | "cronSession"
   | "commandBody"

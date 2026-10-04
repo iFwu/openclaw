@@ -180,7 +180,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toBeUndefined();
+    ).toStrictEqual([]);
   });
 
   it("inherits default fallbacks for cron runs when the agent model is a string", () => {
@@ -203,7 +203,6 @@ describe("resolveCronFallbacksOverride", () => {
           },
         },
         agentId: "main",
-        inheritDefaultFallbacksForAgentStringModel: true,
         job: makeJob({
           kind: "agentTurn",
           message: "summarize",
@@ -212,7 +211,7 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"]);
   });
 
-  it("does not infer inheritance from rewritten cron agent defaults", () => {
+  it("does not give a non-global agent string primary the global tail", () => {
     expect(
       resolveCronFallbacksOverride({
         cfg: {
@@ -226,7 +225,7 @@ describe("resolveCronFallbacksOverride", () => {
             list: [
               {
                 id: "main",
-                model: "anthropic/claude-sonnet-4-6",
+                model: "agent/primary",
               },
             ],
           },
@@ -249,6 +248,7 @@ describe("resolveCronFallbacksOverride", () => {
               model: {
                 primary: "anthropic/claude-opus-4-6",
                 fallbacks: ["openai/gpt-5.4"],
+                fallbackChains: { "google/gemini-3-pro": ["selected/backup"] },
               },
               subagents: {
                 model: {
@@ -260,13 +260,14 @@ describe("resolveCronFallbacksOverride", () => {
           },
         },
         agentId: "main",
+        useSubagentFallbacks: true,
         job: makeJob({
           kind: "agentTurn",
           message: "summarize",
           model: "google/gemini-3-pro",
         }),
       }),
-    ).toEqual(["openai/gpt-5.4"]);
+    ).toEqual(["selected/backup"]);
   });
 
   it("plans the full configured candidate chain for cron preflight", () => {
@@ -333,5 +334,41 @@ describe("resolveCronFallbacksOverride", () => {
         routeResolution: "resolved",
       },
     ]);
+  });
+});
+
+describe("per-model cron selection", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: {
+          primary: "first/a",
+          fallbacks: ["global/tail"],
+          fallbackChains: { "first/a": ["backup/b"], "selected/b": ["third/c"] },
+        },
+      },
+    },
+  };
+  it("uses the payload model's chain, not the global primary", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg,
+        agentId: "main",
+        provider: "selected",
+        model: "b",
+        job: makeJob({ kind: "agentTurn", message: "test", model: "selected/b" }),
+      }).map(({ provider, model }) => `${provider}/${model}`),
+    ).toEqual(["selected/b", "third/c"]);
+  });
+  it("keeps payload empty fallbacks stronger than the per-model map", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg,
+        agentId: "main",
+        provider: "selected",
+        model: "b",
+        job: makeJob({ kind: "agentTurn", message: "test", model: "selected/b", fallbacks: [] }),
+      }).map(({ provider, model }) => `${provider}/${model}`),
+    ).toEqual(["selected/b"]);
   });
 });

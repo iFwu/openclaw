@@ -34,16 +34,25 @@ describe("fallback candidates across provider generations", () => {
       resolveModelCandidateChain({
         cfg,
         agentId: "worker",
-        provider: "native",
-        model: "primary",
+        provider: "",
+        model: "",
         allowPluginNormalization: false,
       }).map(({ provider, model }) => `${provider}/${model}`);
     withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
-      expect(resolve()).toEqual(["native/primary", "agent/pinned"]);
+      expect(resolve()).toEqual(["agent/pinned"]);
       agent.runtime = { type: "acp" };
       expect(resolve()).toEqual(["native/primary", "native/backup"]);
+      expect(
+        resolveModelCandidateChain({
+          cfg,
+          agentId: "worker",
+          provider: "native",
+          model: "primary",
+          allowPluginNormalization: false,
+        }).map(({ provider, model }) => `${provider}/${model}`),
+      ).toEqual(["native/primary", "native/backup"]);
       agent.runtime = undefined;
-      expect(resolve()).toEqual(["native/primary", "agent/pinned"]);
+      expect(resolve()).toEqual(["agent/pinned"]);
     });
   });
 
@@ -74,12 +83,12 @@ describe("fallback candidates across provider generations", () => {
         scope === "defaults" ? cfg.agents?.defaults : cfg.agents?.entries?.worker,
         "utility config owner",
       );
-      const resolve = () =>
+      const resolve = (selectedProvider = "", model = "") =>
         resolveModelCandidateChain({
           cfg,
           agentId: "worker",
-          provider: "ordinary",
-          model: "requested",
+          provider: selectedProvider,
+          model,
           requestedRouteResolution: "resolved",
           allowPluginNormalization: false,
         });
@@ -101,14 +110,14 @@ describe("fallback candidates across provider generations", () => {
               model,
               routeOrigin,
             })),
-          ).toEqual([
-            { provider: "ordinary", model: "requested", routeOrigin: "requested" },
-            { provider, model: primaryModel, routeOrigin: "configured-primary" },
-          ]);
+          ).toEqual([{ provider, model: primaryModel, routeOrigin: "requested" }]);
         }
         owner.utilityModel = `${provider}/small`;
-        owner.model = { fallbacks: [`${provider}/small`] };
-        expect(resolve()).toEqual(
+        owner.model =
+          scope === "defaults"
+            ? { fallbackChains: { "ordinary/requested": [`${provider}/small`] } }
+            : { fallbacks: [`${provider}/small`] };
+        expect(resolve("ordinary", "requested")).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               provider,
@@ -247,7 +256,7 @@ describe("fallback candidates across provider generations", () => {
 
   it.each(
     (["generation", "request"] as const).flatMap((scope) =>
-      (["requested", "configured-fallback", "configured-primary"] as const).flatMap((origin) =>
+      (["requested", "configured-fallback", "selected-primary"] as const).flatMap((origin) =>
         [false, true].map((manifestAlias) => ({ scope, origin, manifestAlias })),
       ),
     ),
@@ -255,12 +264,11 @@ describe("fallback candidates across provider generations", () => {
     "uses the $scope registry for $origin with manifest alias=$manifestAlias",
     ({ scope, origin, manifestAlias }) => {
       const provider = `fallback-${scope}`;
-      const requestedModel =
-        origin === "requested" ? "latest" : origin === "configured-primary" ? "other" : "primary";
+      const requestedModel = origin === "configured-fallback" ? "primary" : "latest";
       const runtimeInput = manifestAlias ? "release" : "latest";
       const cfg: OpenClawConfig = createModelFallbackConfig(
-        `${provider}/${origin === "configured-primary" ? "latest" : "primary"}`,
-        origin === "configured-primary" ? [] : [`${provider}/latest`],
+        `${provider}/${origin === "selected-primary" ? "latest" : "primary"}`,
+        origin === "selected-primary" ? [] : [`${provider}/latest`],
       );
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: [
@@ -324,7 +332,7 @@ describe("fallback candidates across provider generations", () => {
         return candidates;
       };
       const expected = (model: string) =>
-        origin === "requested"
+        origin !== "configured-fallback"
           ? [{ provider, model, routeOrigin: "requested", routeResolution: "resolved" }]
           : [
               {
@@ -369,13 +377,20 @@ describe("fallback candidates across provider generations", () => {
     "plugins-disabled-with-config",
     "configured-row",
     "fallbacks-overridden",
-  ] as const)("preserves appended-primary normalization guard: %s", (guard) => {
+  ] as const)("preserves authored-fallback normalization guard: %s", (guard) => {
     const provider = "guarded-primary";
     const hasProviderConfig =
       guard === "plugins-disabled-with-config" || guard === "configured-row";
     const cfg: OpenClawConfig = {
       plugins: { enabled: !guard.startsWith("plugins-disabled") },
-      agents: { defaults: { model: { primary: `${provider}/latest`, fallbacks: [] } } },
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/latest`,
+            fallbackChains: { [`${provider}/other`]: [`${provider}/latest`] },
+          },
+        },
+      },
       models: hasProviderConfig
         ? {
             providers: {
@@ -432,7 +447,7 @@ describe("fallback candidates across provider generations", () => {
             {
               provider,
               model: "latest",
-              routeOrigin: "configured-primary",
+              routeOrigin: "configured-fallback",
               routeResolution: "resolved",
             },
           ]),

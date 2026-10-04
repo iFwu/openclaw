@@ -6,6 +6,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
+import { captureModelFallbackPolicyContext } from "../../agents/model-fallback-policy.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
@@ -21,8 +22,11 @@ export function resolveModelFallbackOptions(
 ) {
   const config = configOverride;
   const modelFallbackAvailability = resolveModelFallbackAvailability({
+    ...captureModelFallbackPolicyContext({ cfg: config }),
     cfg: config,
     agentId: run.agentId,
+    provider: run.provider,
+    model: run.model,
     sessionKey: run.sessionKey,
     hasSessionModelOverride: run.hasSessionModelOverride === true,
     modelOverrideSource: run.modelOverrideSource,

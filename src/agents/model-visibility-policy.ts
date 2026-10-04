@@ -2,6 +2,7 @@
  * Builds model visibility policies while retaining configured automatic fallbacks.
  */
 import {
+  resolveAgentModelFallbackChainRefs,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
@@ -29,6 +30,8 @@ function resolveAdditionalConfiguredModelRefs(params: {
     ...resolveAgentModelFallbackValues(defaults?.model),
     resolveAgentModelPrimaryValue(agent?.model),
     ...resolveAgentModelFallbackValues(agent?.model),
+    ...resolveAgentModelFallbackChainRefs(defaults?.model),
+    ...resolveAgentModelFallbackChainRefs(agent?.model),
     ...Object.keys(defaults?.models ?? {}),
     ...Object.keys(agent?.models ?? {}),
     agent?.utilityModel ?? defaults?.utilityModel,

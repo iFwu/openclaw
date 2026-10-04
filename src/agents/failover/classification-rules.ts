@@ -324,6 +324,9 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     case "RATE_LIMITED":
     case "RATE_LIMIT_EXCEEDED":
     case "TOO_MANY_REQUESTS":
+    case "GATEWAY_CONCURRENCY_LIMIT":
+    case "GATEWAY_QUEUE_FULL":
+    case "CONCURRENCY_LIMIT_EXCEEDED":
     case "THROTTLED":
     case "THROTTLING":
     case "THROTTLINGEXCEPTION":

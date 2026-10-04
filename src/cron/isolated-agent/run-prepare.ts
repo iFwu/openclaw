@@ -8,7 +8,6 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -296,25 +295,17 @@ export async function prepareCronRunContext(params: {
       };
     }
     const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-    const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
-    const matchesDefaultFallbackAgentStringModel =
-      typeof ownerAgentConfig?.model === "string" &&
-      resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
-        resolveAgentModelPrimaryValue(modelOwner.config.agents?.defaults?.model);
     const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
-    const inheritDefaultFallbacksForAgentStringModel =
-      matchesDefaultFallbackAgentStringModel &&
-      (resolvedModelSelection.modelSource === "default" ||
-        resolvedModelSelection.modelSource === "agent");
 
     const preflight = await resolveCronPreflight({
-      cfg: cfgWithAgentDefaults,
+      cfg: modelOwner.config,
+      manifestPlugins: modelOwner.metadataSnapshot.plugins,
+      policyRegistry: modelOwner.pluginRegistry ?? null,
       job: input.job,
       agentId: modelOwner.agentId,
       provider: resolvedModelSelection.provider,
       model: resolvedModelSelection.model,
       useSubagentFallbacks,
-      inheritDefaultFallbacksForAgentStringModel,
     });
     if (!preflight.ok) {
       logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
@@ -332,7 +323,8 @@ export async function prepareCronRunContext(params: {
         }),
       };
     }
-    const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+    const { provider, model, modelFallbacksOverride, fallbackPolicyRoot, runtimePluginCandidates } =
+      preflight;
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -589,6 +581,7 @@ export async function prepareCronRunContext(params: {
       context: {
         input,
         cfgWithAgentDefaults,
+        modelPolicyConfig: modelOwner.config,
         agentId,
         agentCfg,
         agentDir,
@@ -633,8 +626,8 @@ export async function prepareCronRunContext(params: {
         skillsSnapshot,
         liveSelection,
         useSubagentFallbacks,
-        inheritDefaultFallbacksForAgentStringModel,
         modelFallbacksOverride,
+        fallbackPolicyRoot,
         thinkingSelection,
         timeoutMs,
         preflightDiagnostics,

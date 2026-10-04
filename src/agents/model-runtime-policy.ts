@@ -19,9 +19,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveSessionAgentIds } from "./session-agent-id-resolution.js";
 
 /** A stored-row owner is already selected; request hints still require normal admission. */
 export type AgentRuntimePolicyScope = { sessionKey?: string } & (

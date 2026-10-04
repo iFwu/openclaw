@@ -11,7 +11,7 @@ sidebarTitle: "Model failover"
 OpenClaw handles failures in two stages:
 
 1. **Auth-profile rotation** within the current provider.
-2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
+2. **Model fallback** to the next model in the selected model's effective fallback chain.
 
 Before rotating profiles or changing models, the runner attempts bounded
 same-model recovery for temporary rate limits and provider failures. It continues
@@ -32,7 +32,7 @@ policy. OpenClaw does not retry them with thinking disabled.
     Resolve the active session model and auth-profile preference.
   </Step>
   <Step title="Build candidate chain">
-    Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks. Explicit user session selections are strict.
+    Build the selected model's flat candidate chain. Manual selections use their own chain too. A model-selection lock or an explicit empty fallback list disables fallback.
   </Step>
   <Step title="Try the current provider">
     Try the current provider with auth-profile rotation/cooldown rules. Runs apply bounded recovery to eligible transient failures before rotating profiles or advancing model fallback.
@@ -120,22 +120,47 @@ or any replay-unsafe attempt remains terminal under the existing refusal policy.
 
 ## Selection source policy
 
-The selection source controls whether the fallback chain is allowed:
+Fallback policy is resolved in this order: model-selection lock, explicit run or job fallback list, explicit subagent fallback list, explicit agent fallback list, then the selected-model chain with its eligible global tail. Without a chain map, only the global primary can use the global tail; other models have no configured chain. An explicit run, job, subagent, or agent `fallbacks: []` stops this lookup and disables fallback. A model primary without a fallback list does not implicitly disable it.
 
-- **Configured default**: `agents.defaults.model.primary` uses `agents.defaults.model.fallbacks`.
-- **Native agent primary**: `agents.entries.*.model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
-- **ACP agent primary**: for `runtime.type: "acp"`, the agent primary selects its external harness model. Native OpenClaw calls inherit the primary and fallbacks from `agents.defaults.model`; an explicit agent `model.fallbacks` replaces the native fallback list, including `[]` to disable it. Explicit native session and subagent selections retain their normal precedence and strictness. This does not add fallback to commands such as `/btw` that run only their selected model.
+Configure `fallbackChains` only on `agents.defaults.model` or `agents.entries.*.model`. Subagent and exec-reviewer model selectors accept `primary` and `fallbacks`, not separate per-model maps. Subagents without an explicit fallback list use the selected model's agent/default chain.
+
+- **Configured default**: when the selected provider/model equals `agents.defaults.model.primary`, append `agents.defaults.model.fallbacks` after its per-model chain. This includes manually selecting the global primary. Changing the global primary removes this tail from the old primary and gives it to the new one. Compare resolved provider/model identities, not display names or selection sources.
+- **Native agent primary**: `agents.entries.*.model.fallbacks`, when present, takes precedence over per-model chains. An agent-local `fallbackChains` map replaces the default map for that agent.
+- **ACP agent primary**: for `runtime.type: "acp"`, the agent primary selects its external harness model. Native OpenClaw calls inherit the default native primary and resolve its selected-model fallback policy; an explicit agent `model.fallbacks` replaces the native fallback list, including `[]` to disable it. Explicit native session and subagent selections retain their existing admission and runtime rules. This does not add fallback to commands such as `/btw` that run only their selected model.
 - **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes `modelOverrideSource: "auto"` entries stored by v2026.4.26 through v2026.6.0. It probes their configured origin every 5 minutes, and clears them once the origin recovers. Automatic clearing shipped in v2026.6.1. `/new`, `/reset`, and `sessions.reset` also clear those entries.
-- **User session override**: selecting a specific model with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch` writes `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
+- **User session override**: `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` change the selected primary. They also select that model's fallback chain. A temporary fallback does not become the next turn's primary.
 - **Explicit configured default**: choosing **Default** through the same surfaces writes `modelOverrideSource: "default"` without storing a provider/model override. This prevents a child session from inheriting a parent model pin while preserving the configured default's normal fallback policy.
-- **Legacy session override**: session entries written before v2026.4.26 may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
-- **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`. `payload.fallbacks: []` makes the cron run strict.
+- **Legacy session override**: session entries written before v2026.4.26 may have `modelOverride` without `modelOverrideSource`. These entries use the same selected-model fallback policy.
+- **Cron payload model**: `payload.model` / `--model` selects the job primary. An explicit `payload.fallbacks`, including `[]`, overrides its configured chain.
 
 An agent can override only its fallback chain with `model: { fallbacks: [...] }`
 and keep inheriting the shared primary. Setting `fallbacks: []` explicitly disables
 fallbacks without pinning that primary. In **Settings → Agents → Overview**, editing
 fallback chips preserves primary inheritance. Removing every chip saves an empty
 chain instead of restoring the shared fallbacks.
+
+For example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: ["google/gemini-2.5-flash"],
+        fallbackChains: {
+          "anthropic/claude-sonnet-4-6": ["openai/gpt-4.1"],
+          "openai/gpt-4.1": ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    },
+  },
+}
+```
+
+Selecting Sonnet, automatically or manually, tries Sonnet, GPT-4.1, then Gemini. Selecting GPT-4.1 tries only GPT-4.1 and Sonnet: reaching Sonnet as a fallback does not append Gemini or expand Sonnet's own chain. The combined candidates are deduplicated in first-occurrence order. To make Gemini exclusive to the default role, keep it only in the global list. A model's own chain still applies after that model stops being the default.
+
+Full canonical `provider/model` keys take precedence over bare model-id keys. If the selected non-default model has no matching key or its chain is empty, it has no fallback. The global primary can still use its global tail. An empty global list removes only that tail, not the per-model chain. An agent-local primary does not gain the global tail unless it is also the global primary. Use canonical model references as keys. Fallback values may also be configured aliases. `/status` shows the effective combined fallback list separately from the model that answered.
 
 ## Auth storage (keys + OAuth)
 
@@ -208,7 +233,7 @@ across compaction; auth failures and unavailable profiles still use the normal f
 Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. Explicitly removing a saved credential clears its affected agent model and conversation account selections while retaining the selected models. Other accounts, including independent credentials owned by another agent, keep their selections. A temporarily missing or expired credential does not clear a user pin; refresh can restore access. If an older configuration still names a deleted account, choose an available account in Models. OpenClaw also clears an incompatible pin when the selected provider changes, or replaces it when the user selects another account. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 
 <Note>
-Auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. This auth rotation does not loosen model selection: an explicit user provider/model selection remains strict and reports failure after its same-provider auth profiles are exhausted.
+Auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. After same-provider profiles are exhausted, the selected model's effective fallback policy controls whether another model may answer.
 </Note>
 
 ### OpenAI Codex subscription plus API-key backup
@@ -332,7 +357,7 @@ Overloaded and rate-limit errors allow one same-provider auth-profile rotation b
 
 ## Model fallback
 
-If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses. It does not include a 404 whose response body identifies a more specific condition, such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state. `empty_response` means the provider returned no usable message or status. `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`. `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
+If all profiles for a provider fail, OpenClaw moves to the next model in the effective fallback chain when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses. It does not include a 404 whose response body identifies a more specific condition, such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state. `empty_response` means the provider returned no usable message or status. `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`. `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
 
@@ -348,7 +373,7 @@ Gateway transcript-validation failures are local format errors. They do not rota
 
 Provider overloads and HTTP 5xx failures use transient recovery guidance. A message saying only that a model is "not available" does not establish that it was retired or that your configuration needs to change. Configuration guidance requires a missing-model response or an explicit account/model restriction. Codex turn errors retain their overload and HTTP-status information even after Codex stops retrying the turn.
 
-When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks are strict. Explicit user selections are also strict: `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, and one-off CLI provider/model overrides. If that provider or model is unreachable, or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
+Configured primaries and manual model selections use the chain described in [Selection source policy](/concepts/model-failover#selection-source-policy). A selection lock, an explicit empty list, or an empty effective chain makes the run strict.
 
 ### Candidate chain rules
 
@@ -358,9 +383,9 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   <Accordion title="Rules">
     - The requested model is always first.
     - Explicit configured fallbacks are deduplicated but not filtered by the model allowlist. They are treated as explicit operator intent.
-    - If the current run is already on a configured fallback in the same provider family, OpenClaw keeps using the full configured chain.
-    - When no explicit fallback override is supplied, configured fallbacks are tried before the configured primary even if the requested model uses a different provider.
-    - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end. The chain can then settle back onto the normal default once earlier candidates are exhausted.
+    - Only the selected global primary appends the global fallback tail. This rule also applies when no per-model map exists.
+    - The combined ladder is flat: fallback candidates do not expand their own chains, and the configured primary is never silently appended as a retry target.
+    - A real user selection change returns to the existing outer retry owner and rebuilds the new root's chain. Merely observing a fallback response does not change the root.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
 
   </Accordion>

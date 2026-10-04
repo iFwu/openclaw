@@ -9,6 +9,7 @@ import {
   assertOperatorModelAllowed,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
@@ -40,7 +41,6 @@ import {
 } from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
-  appendFailedCandidateAttempt,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -53,7 +53,6 @@ import {
   type ModelFallbackRunResult,
   type ModelFallbackRuntimeContext,
   type ModelFallbackStepHandler,
-  recordFailedCandidateAttempt,
   resolveFallbackAuthScope,
   resolveFallbackSoonestCooldownExpiry,
   resolveLiveSessionModelSwitchRedirectIndex,
@@ -70,18 +69,20 @@ import {
   resolveCooldownDecision,
   resolveProbeThrottleKey,
 } from "./model-fallback-cooldown.js";
+import type { ModelFallbackDecisionParams } from "./model-fallback-observation.js";
 import {
-  isModelFallbackDecisionLogEnabled,
-  logModelFallbackDecision,
-  type ModelFallbackDecisionParams,
-} from "./model-fallback-observation.js";
+  resolveSelectedModelFallbackChain,
+  captureModelFallbackPolicyContext,
+  type ModelFallbackPolicyContext,
+} from "./model-fallback-policy.js";
+import { createModelFallbackRunObservers } from "./model-fallback-run-observers.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
+  type ModelCandidate,
   type ModelFallbackCandidate,
   type ModelFallbackRouteResolution,
 } from "./model-fallback.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
   resolveSessionSuspensionReason,
   suspendSession,
@@ -105,6 +106,7 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  fallbackPolicyRoot?: ModelCandidate;
   requestedRouteResolution?: ModelFallbackRouteResolution;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
@@ -118,7 +120,7 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-} & ModelManifestNormalizationContext;
+} & ModelFallbackPolicyContext;
 
 type DeferredSessionSuspensionState = {
   pending?: SessionSuspensionParams;
@@ -136,9 +138,17 @@ function flushDeferredSessionSuspension(state: DeferredSessionSuspensionState): 
 export async function runWithModelFallback<T>(
   params: RunWithModelFallbackParams<T>,
 ): Promise<ModelFallbackRunResult<T>> {
+  const capturedParams = {
+    ...params,
+    ...captureModelFallbackPolicyContext({
+      cfg: params.cfg,
+      manifestPlugins: params.manifestPlugins,
+      policyRegistry: params.policyRegistry,
+    }),
+  };
   const deferredSuspension: DeferredSessionSuspensionState = {};
   try {
-    const result = await runWithModelFallbackInternal(params, deferredSuspension);
+    const result = await runWithModelFallbackInternal(capturedParams, deferredSuspension);
     if (result.outcome === "exhausted") {
       flushDeferredSessionSuspension(deferredSuspension);
     }
@@ -168,6 +178,7 @@ async function runWithModelFallbackInternal<T>(
     fallbacksOverride: params.fallbacksOverride,
     requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
+    policyRegistry: params.policyRegistry,
   });
   const operatorModelPolicy = operatorAuthority?.modelPolicy;
   const candidates = operatorModelPolicy
@@ -203,56 +214,29 @@ async function runWithModelFallbackInternal<T>(
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
   const tlsFailedProviders = new Set<string>();
-  const notifyFallbackStep: ModelFallbackStepHandler = async (step) => {
-    // Observations cannot replace candidate outcomes or stop a usable fallback.
-    // Policy-bearing callbacks such as onError retain their own failure semantics.
-    try {
-      await params.onFallbackStep?.(step);
-    } catch {
-      log.warn("Model fallback observer failed; preserving execution outcome.");
-    }
-  };
-  const observeDecision = async (decision: ModelFallbackDecisionParams) => {
-    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
-      return;
-    }
-    const fallbackStep = logModelFallbackDecision(decision);
-    if (fallbackStep) {
-      await notifyFallbackStep(fallbackStep);
-    }
-  };
-  const observeFailedCandidate = async (
-    failedAttempt: Parameters<typeof recordFailedCandidateAttempt>[0],
-  ) => {
-    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
-      appendFailedCandidateAttempt(failedAttempt);
-    } else {
-      const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
-      if (fallbackStep) {
-        await notifyFallbackStep(fallbackStep);
-      }
-    }
-    // Emit only real candidate-to-candidate transitions. Terminal candidates
-    // have no destination; cooldown suspension has its own diagnostic path.
-    if (params.sessionId && failedAttempt.nextCandidate) {
-      const described = describeFailoverError(failedAttempt.error);
-      emitFailoverEvent({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        lane: params.lane,
-        fromProvider: failedAttempt.candidate.provider,
-        fromModel: failedAttempt.candidate.model,
-        toProvider: failedAttempt.nextCandidate.provider,
-        toModel: failedAttempt.nextCandidate.model,
-        reason: described.reason ?? "unknown",
-        cascadeDepth: failedAttempt.attempt - 1,
-        suspended: false,
-      });
-    }
-  };
+  const { observeDecision, observeFailedCandidate } = createModelFallbackRunObservers(params);
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
+  const fallbackPolicyRoot =
+    params.fallbackPolicyRoot ??
+    (params.cfg &&
+    params.fallbacksOverride === undefined &&
+    (!params.agentId ||
+      resolveAgentModelFallbacksOverride(params.cfg, params.agentId) === undefined) &&
+    resolveSelectedModelFallbackChain({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider: requestedCandidate?.provider ?? params.provider,
+      model: requestedCandidate?.model ?? params.model,
+      manifestPlugins: params.manifestPlugins,
+      policyRegistry: params.policyRegistry,
+    }) !== undefined
+      ? {
+          provider: requestedCandidate?.provider ?? params.provider,
+          model: requestedCandidate?.model ?? params.model,
+        }
+      : undefined);
   const runAttribution = { sessionId: params.sessionId, lane: params.lane };
   const runObs = {
     runId: params.runId,
@@ -513,6 +497,7 @@ async function runWithModelFallbackInternal<T>(
         modelRoutingProvenance: {
           requestedProvider: params.provider,
           requestedModel: params.model,
+          ...(fallbackPolicyRoot ? { fallbackPolicyRoot } : {}),
           stage: isPrimary ? "initial" : "fallback",
           selectionChanged,
           fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
@@ -634,6 +619,12 @@ async function runWithModelFallbackInternal<T>(
           error: err,
           currentAgentHarnessRuntimeOverride: candidateHarnessAuth.agentHarnessRuntimeOverride,
         })
+      ) {
+        throw err;
+      }
+      if (
+        fallbackPolicyRoot &&
+        (err.provider !== fallbackPolicyRoot.provider || err.model !== fallbackPolicyRoot.model)
       ) {
         throw err;
       }

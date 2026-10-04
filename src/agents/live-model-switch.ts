@@ -13,6 +13,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { ModelCandidate } from "./model-fallback.types.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -147,6 +148,7 @@ export function shouldSwitchToLiveModel(params: {
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
+  fallbackPolicyRoot?: ModelCandidate;
   currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
@@ -177,7 +179,12 @@ export function shouldSwitchToLiveModel(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
   });
+  const changesFallbackPolicyRoot =
+    params.fallbackPolicyRoot !== undefined &&
+    (params.fallbackPolicyRoot.provider !== persisted.provider ||
+      params.fallbackPolicyRoot.model !== persisted.model);
   if (
+    !changesFallbackPolicyRoot &&
     !hasDifferentLiveSessionModelSelection(
       {
         provider: params.currentProvider,

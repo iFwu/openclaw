@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { inheritOptionFromParent } from "./command-options.js";
 import { registerModelsAccountsCli } from "./models-accounts-cli.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -29,6 +30,13 @@ async function withModelsRuntime(
 ): Promise<void> {
   const runtime = await loadModelsRuntime();
   return runtime.runModelsCommand(() => action(runtime));
+}
+
+function resolveFallbackModelOption(command: Command): string | undefined {
+  const source = command.getOptionValueSource("model");
+  return source && source !== "default"
+    ? command.opts<{ model?: string }>().model
+    : inheritOptionFromParent<string>(command, "model");
 }
 
 export function registerModelsCli(program: Command) {
@@ -239,12 +247,12 @@ export function registerModelsCli(program: Command) {
       .description(`List ${noun} models`)
       .option("--json", "Output JSON", false)
       .option("--plain", "Plain output", false)
-      .action(async (opts) => {
+      .action(async (opts, command: Command) => {
         await withModelsRuntime(async ({ defaultRuntime }) => {
           const { listFallbacksCommand } = await loadModelsFallbacksCommands();
           await listFallbacksCommand(
             params,
-            { ...opts, json: hasJsonOutput(opts) },
+            { ...opts, json: hasJsonOutput(opts), model: resolveFallbackModelOption(command) },
             defaultRuntime,
           );
         });
@@ -258,10 +266,14 @@ export function registerModelsCli(program: Command) {
         .command(action)
         .description(`${action === "add" ? "Add" : "Remove"} ${article} ${noun} model`)
         .argument("<model>", "Model id or alias")
-        .action(async (model: string) => {
+        .action(async (model: string, _opts: unknown, command: Command) => {
           await withModelsRuntime(async ({ defaultRuntime }) => {
             const commands = await loadModelsFallbacksCommands();
-            await commands[handler](params, model, defaultRuntime);
+            await commands[handler](
+              { ...params, model: resolveFallbackModelOption(command) },
+              model,
+              defaultRuntime,
+            );
           });
         });
     }
@@ -269,12 +281,32 @@ export function registerModelsCli(program: Command) {
     group
       .command("clear")
       .description(`Clear all ${noun} models`)
-      .action(async () => {
+      .action(async (_opts: unknown, command: Command) => {
         await withModelsRuntime(async ({ defaultRuntime }) => {
           const { clearFallbacksCommand } = await loadModelsFallbacksCommands();
-          await clearFallbacksCommand(params, defaultRuntime);
+          await clearFallbacksCommand(
+            { ...params, model: resolveFallbackModelOption(command) },
+            defaultRuntime,
+          );
         });
       });
+
+    if (params.key === "model") {
+      for (const command of [group, ...group.commands]) {
+        command.option("--model <id>", "Manage the per-model fallback chain for this model");
+      }
+      group
+        .command("chains")
+        .description("List all configured per-model fallback chains")
+        .option("--json", "Output JSON", false)
+        .option("--plain", "Plain output", false)
+        .action(async (opts) => {
+          await withModelsRuntime(async ({ defaultRuntime }) => {
+            const { listFallbackChainsCommand } = await loadModelsFallbacksCommands();
+            await listFallbackChainsCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
+          });
+        });
+    }
   }
 
   models

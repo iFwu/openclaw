@@ -14,7 +14,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentEntryBaseSchema } from "./zod-schema.agent-entry-base.js";
-import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { AgentFallbackModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
@@ -400,7 +400,7 @@ const ToolExecBaseShape = {
   reviewer: z
     .object({
       /** Optional reviewer model override (provider/model or agent model config). */
-      model: AgentModelSchema.optional(),
+      model: AgentFallbackModelSchema.optional(),
       /** Optional reasoning effort for model-backed approval reviews. */
       thinking: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
       /** Optional Fast processing for supported provider requests. */

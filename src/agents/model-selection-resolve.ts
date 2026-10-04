@@ -3,10 +3,14 @@
  *
  * This module resolves configured fallbacks and explicit model selections.
  */
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
-import { type ModelRef, normalizeProviderId } from "./model-ref-shared.js";
+import { resolveSelectedModelFallbackChain } from "./model-fallback-policy.js";
+import {
+  type ModelManifestNormalizationContext,
+  type ModelRef,
+  normalizeProviderId,
+} from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
   getModelRefStatus,
@@ -51,17 +55,21 @@ export function resolveModelAliasFromPair(
 }
 
 /** Resolve agent-owned fallback overrides without loading the full selection facade. */
-export function resolveConfiguredModelFallbacks(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): string[] {
+export function resolveConfiguredModelFallbacks(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    provider?: string;
+    model?: string;
+  } & ModelManifestNormalizationContext,
+): string[] {
   if (params.agentId) {
     const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
     if (override !== undefined) {
       return override;
     }
   }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  return resolveSelectedModelFallbackChain(params);
 }
 
 /** Resolves a raw model string into an allowed model ref or an explanatory error. */

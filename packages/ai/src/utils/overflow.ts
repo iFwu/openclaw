@@ -40,7 +40,7 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /invalid_argument[\s\S]*maximum number of tokens/i, // Google/Vertex
   /request exceeds the maximum size/i, // Anthropic
-  /context length exceeded/i,
+  /context[_ ]length[_ ]exceeded/i,
   /maximum context length/i,
   /prompt is too long/i,
   /prompt too long/i,

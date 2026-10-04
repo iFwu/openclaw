@@ -13,6 +13,7 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { CronJob } from "../types.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 import {
@@ -40,7 +41,13 @@ type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "pay
 
 type CronModelSelectionOwner = Pick<
   ResolvedPublishedModelCatalogOwner,
-  "agentId" | "agentDir" | "workspaceDir" | "config" | "metadataSnapshot" | "modelCatalog"
+  | "agentId"
+  | "agentDir"
+  | "workspaceDir"
+  | "config"
+  | "metadataSnapshot"
+  | "modelCatalog"
+  | "pluginRegistry"
 >;
 
 type ResolveCronModelSelectionParams = {
@@ -102,6 +109,7 @@ export async function resolveCronModelSelectionOwner(params: {
     ? Object.freeze({
         ...params.publishedRuntime,
         metadataSnapshot: params.publishedRuntime.pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry: params.publishedRuntime.pluginGeneration.pluginRegistry,
         modelCatalog:
           params.publishedRuntime.readFullModelCatalog?.() ?? params.publishedRuntime.modelCatalog,
       })
@@ -201,121 +209,125 @@ export async function resolveCronModelSelection(
           }
         : {}),
     }));
-  const ownerAgentId = owner.agentId;
-  const ownerAgentConfigOverride = params.agentConfigOverride
-    ? owner.config === params.cfg && (!params.agentId || ownerAgentId === params.agentId)
-      ? params.agentConfigOverride
-      : resolveAgentConfig(owner.config, ownerAgentId)
-    : undefined;
-  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
-    config: owner.config,
-    agentConfigOverride: ownerAgentConfigOverride,
-  });
-  const resolvedDefault = resolveConfiguredModelRef({
-    cfg: cfgWithAgentDefaults,
-    agentId: ownerAgentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    manifestPlugins: owner.metadataSnapshot,
-  });
-  // Overrides keep the owner's agent policy; flattened defaults only select the default model.
-  const selectionParams = {
-    cfg: owner.config,
-    catalog: owner.modelCatalog.entries,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault,
-    agentId: ownerAgentId,
-    manifestPlugins: owner.metadataSnapshot,
-  };
-  const selection = (
-    ref: { provider: string; model: string },
-    modelSource: CronModelSelectionSource,
-    profileModel?: string,
-  ): Extract<ResolveCronModelSelectionResult, { ok: true }> => {
-    const configuredProfileId = splitTrailingAuthProfile(profileModel ?? "").profile;
-    return {
-      ok: true,
-      provider: ref.provider,
-      model: ref.model,
-      modelSource,
-      ...(configuredProfileId ? { configuredProfileId } : {}),
-      cfgWithAgentDefaults,
-      owner,
-    };
-  };
-  const override = (
-    raw: string | undefined,
-    source: "payload" | "session" | "agent" | "subagent",
-  ): ResolveCronModelSelectionResult | undefined => {
-    if (!raw) {
-      return undefined;
-    }
-    const resolved = resolveAllowedModelRefCore({ ...selectionParams, raw });
-    if (!("error" in resolved)) {
-      return selection(resolved.ref, source, source === "session" ? undefined : raw);
-    }
-    // Payload overrides are explicit; invalid advisory config falls through.
-    return source === "payload"
-      ? {
-          ok: false,
-          error: formatCronPayloadModelRejection({
-            cfg: owner.config,
-            agentId: ownerAgentId,
-            modelOverride: raw,
-            error: resolved.error,
-          }),
-        }
+  // Raw default, payload, hook and session refs belong to this captured owner,
+  // including an explicit empty registry. Never borrow ambient executable hooks.
+  return withPluginRuntimeGenerationScope(owner, () => {
+    const ownerAgentId = owner.agentId;
+    const ownerAgentConfigOverride = params.agentConfigOverride
+      ? owner.config === params.cfg && (!params.agentId || ownerAgentId === params.agentId)
+        ? params.agentConfigOverride
+        : resolveAgentConfig(owner.config, ownerAgentId)
       : undefined;
-  };
+    const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+      config: owner.config,
+      agentConfigOverride: ownerAgentConfigOverride,
+    });
+    const resolvedDefault = resolveConfiguredModelRef({
+      cfg: cfgWithAgentDefaults,
+      agentId: ownerAgentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      manifestPlugins: owner.metadataSnapshot,
+    });
+    // Overrides keep the owner's agent policy; flattened defaults only select the default model.
+    const selectionParams = {
+      cfg: owner.config,
+      catalog: owner.modelCatalog.entries,
+      defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault,
+      agentId: ownerAgentId,
+      manifestPlugins: owner.metadataSnapshot,
+    };
+    const selection = (
+      ref: { provider: string; model: string },
+      modelSource: CronModelSelectionSource,
+      profileModel?: string,
+    ): Extract<ResolveCronModelSelectionResult, { ok: true }> => {
+      const configuredProfileId = splitTrailingAuthProfile(profileModel ?? "").profile;
+      return {
+        ok: true,
+        provider: ref.provider,
+        model: ref.model,
+        modelSource,
+        ...(configuredProfileId ? { configuredProfileId } : {}),
+        cfgWithAgentDefaults,
+        owner,
+      };
+    };
+    const override = (
+      raw: string | undefined,
+      source: "payload" | "session" | "agent" | "subagent",
+    ): ResolveCronModelSelectionResult | undefined => {
+      if (!raw) {
+        return undefined;
+      }
+      const resolved = resolveAllowedModelRefCore({ ...selectionParams, raw });
+      if (!("error" in resolved)) {
+        return selection(resolved.ref, source, source === "session" ? undefined : raw);
+      }
+      // Payload overrides are explicit; invalid advisory config falls through.
+      return source === "payload"
+        ? {
+            ok: false,
+            error: formatCronPayloadModelRejection({
+              cfg: owner.config,
+              agentId: ownerAgentId,
+              modelOverride: raw,
+              error: resolved.error,
+            }),
+          }
+        : undefined;
+    };
 
-  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
-  const payloadSelection = override(
-    typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined,
-    "payload",
-  );
-  if (payloadSelection) {
-    return payloadSelection;
-  }
+    const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
+    const payloadSelection = override(
+      typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined,
+      "payload",
+    );
+    if (payloadSelection) {
+      return payloadSelection;
+    }
 
-  const hooksGmailModelRef = params.isGmailHook
-    ? resolveHooksGmailModel({
-        cfg: owner.config,
-        defaultProvider: DEFAULT_PROVIDER,
-        manifestPlugins: owner.metadataSnapshot,
-      })
-    : null;
-  if (
-    hooksGmailModelRef &&
-    getModelRefStatus({ ...selectionParams, ref: hooksGmailModelRef }).allowed
-  ) {
-    return selection(hooksGmailModelRef, "hook", owner.config.hooks?.gmail?.model);
-  }
+    const hooksGmailModelRef = params.isGmailHook
+      ? resolveHooksGmailModel({
+          cfg: owner.config,
+          defaultProvider: DEFAULT_PROVIDER,
+          manifestPlugins: owner.metadataSnapshot,
+        })
+      : null;
+    if (
+      hooksGmailModelRef &&
+      getModelRefStatus({ ...selectionParams, ref: hooksGmailModelRef }).allowed
+    ) {
+      return selection(hooksGmailModelRef, "hook", owner.config.hooks?.gmail?.model);
+    }
 
-  const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
-  const sessionSelection = override(
-    sessionModelOverride
-      ? `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`
-      : undefined,
-    "session",
-  );
-  if (sessionSelection) {
-    return sessionSelection;
-  }
+    const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
+    const sessionSelection = override(
+      sessionModelOverride
+        ? `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`
+        : undefined,
+      "session",
+    );
+    if (sessionSelection) {
+      return sessionSelection;
+    }
 
-  const subagentSelection = resolveSubagentModelConfigSelectionResult({
-    cfg: owner.config,
-    agentId: ownerAgentId,
-    agentConfigOverride: ownerAgentConfigOverride,
+    const subagentSelection = resolveSubagentModelConfigSelectionResult({
+      cfg: owner.config,
+      agentId: ownerAgentId,
+      agentConfigOverride: ownerAgentConfigOverride,
+    });
+    return (
+      override(
+        normalizeModelSelection(subagentSelection?.raw),
+        subagentSelection?.source === "agent" ? "agent" : "subagent",
+      ) ??
+      selection(
+        resolvedDefault,
+        "default",
+        resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
+      )
+    );
   });
-  return (
-    override(
-      normalizeModelSelection(subagentSelection?.raw),
-      subagentSelection?.source === "agent" ? "agent" : "subagent",
-    ) ??
-    selection(
-      resolvedDefault,
-      "default",
-      resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
-    )
-  );
 }

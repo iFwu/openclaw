@@ -41,7 +41,9 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import { resolveSelectedModelFallbackChain } from "../../agents/model-fallback-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { resolveConfiguredModelFallbacks } from "../../agents/model-selection-resolve.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
@@ -353,8 +355,18 @@ export async function modelsStatusCommand(
       const rawModel = agentModelPrimary ?? rawDefaultsModel;
       const resolvedLabel = modelKey(resolved.provider, resolved.model);
       const defaultLabel = rawModel || resolvedLabel;
-      const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-      const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
+      const selectedChain = resolveSelectedModelFallbackChain({
+        cfg,
+        agentId,
+        provider: resolved.provider,
+        model: resolved.model,
+      });
+      const fallbacks = resolveConfiguredModelFallbacks({
+        cfg,
+        agentId,
+        provider: resolved.provider,
+        model: resolved.model,
+      });
       const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
       const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
       // Narration/titles ride the utility model on a plain API auth path that can
@@ -1240,7 +1252,12 @@ export async function modelsStatusCommand(
             ? {
                 modelConfig: {
                   defaultSource: agentModelPrimary ? "agent" : "defaults",
-                  fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
+                  fallbacksSource:
+                    agentFallbacksOverride !== undefined
+                      ? "agent"
+                      : selectedChain !== undefined
+                        ? "per-model"
+                        : "defaults",
                 },
               }
             : {}),
@@ -1277,7 +1294,7 @@ export async function modelsStatusCommand(
       }
 
       const rich = isRich(opts);
-      type ModelConfigSource = "agent" | "defaults";
+      type ModelConfigSource = "agent" | "defaults" | "per-model";
       const label = (value: string) => colorize(rich, theme.accent, value.padEnd(14));
       const logField = (
         name: string,
@@ -1305,7 +1322,13 @@ export async function modelsStatusCommand(
         `Fallbacks (${fallbacks.length})`,
         fallbacks.length ? fallbacks.join(", ") : "-",
         fallbacks.length ? theme.warn : theme.muted,
-        agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
+        agentFallbacksOverride !== undefined
+          ? "agent"
+          : selectedChain !== undefined
+            ? "per-model"
+            : agentId
+              ? "defaults"
+              : undefined,
       );
       logField(
         "Utility model",

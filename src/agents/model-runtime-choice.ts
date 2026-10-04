@@ -233,8 +233,9 @@ export async function prepareModelChoice(params: {
           model: requested.model,
           requestedRouteResolution: "resolved",
           allowPluginNormalization: false,
+          policyRegistry: owner.pluginRegistry ?? null,
           manifestPlugins: owner.metadataSnapshot.plugins,
-          fallbacksOverride: params.fallbacks ?? [],
+          fallbacksOverride: params.fallbacks,
         }).slice(1);
         const choices = await Promise.all(fallbacks.map(prepare));
         if (!owner.isCurrent()) {

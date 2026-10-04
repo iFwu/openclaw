@@ -565,6 +565,133 @@ describe("prepared model support admission", () => {
     });
   }
 
+  it("admits automatic fallback from a runtime-only normalized primary without renormalizing the selected tuple", async () => {
+    const provider = "owned-admission";
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: provider,
+      source: "test",
+      provider: {
+        id: provider,
+        label: "Admission",
+        auth: [],
+        normalizeModelId: ({ modelId }) => {
+          if (modelId === "release") {
+            throw new Error("selected tuple re-entered input normalization");
+          }
+          return modelId === "latest" ? "release" : undefined;
+        },
+      },
+    });
+    const config: OpenClawConfig = {
+      models: custom.models,
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/latest`,
+            fallbackChains: { [`${provider}/latest`]: ["fixture/custom-unlisted"] },
+          },
+        },
+      },
+    };
+    publish(() => true, config, {
+      pluginRegistry: registry,
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: provider, providers: [provider] }],
+      }),
+    });
+    expect(
+      await prepareModelChoice({
+        ...selection,
+        cfg: config,
+        raw: `${provider}/latest`,
+        source: "automatic",
+      }),
+    ).toMatchObject({ kind: "automatic", ref: { provider, model: "release" } });
+  });
+
+  it("admits an automatic ladder when the fallback value is a runtime-only alias under its captured owner", async () => {
+    const source = "source-values";
+    const target = "target-values";
+    const registry = createEmptyPluginRegistry();
+    for (const id of [source, target]) {
+      registry.providers.push({
+        pluginId: id,
+        source: "test",
+        provider: {
+          id,
+          label: id,
+          auth: [],
+          normalizeModelId: ({ modelId }) => {
+            if (id === source && modelId === "release") {
+              throw new Error("resolved selection normalized twice");
+            }
+            return modelId === "latest" ? "release" : undefined;
+          },
+        },
+      });
+    }
+    registry.agentHarnesses.push({
+      pluginId: "native-values",
+      source: "test",
+      harness: {
+        id: "native-values",
+        label: "Native values",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => ({ accountType: "subscription", authMode: "oauth" }),
+        async runAttempt() {
+          throw new Error("Admission must not execute inference");
+        },
+      },
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: `${source}/latest`,
+            fallbackChains: { [`${source}/latest`]: [`${target}/latest`] },
+          },
+          models: { [`${target}/release`]: { agentRuntime: { id: "native-values" } } },
+        },
+      },
+    };
+    const row = {
+      provider: target,
+      id: "release",
+      name: "Release",
+      nativeRuntime: "native-values",
+    };
+    const owner = publish(() => true, config, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [row], routeVariants: [row] },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [source, target].map((id) => ({ id, providers: [id] })),
+      }),
+      configuredRuntimeModels: [
+        {
+          provider: target,
+          modelId: "release",
+          model: makeProviderModelFixture({
+            provider: target,
+            id: "release",
+            api: "openai-responses",
+            baseUrl: "https://native.invalid/v1",
+          }),
+        },
+      ],
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    expect(
+      await prepareModelChoice({
+        ...selection,
+        cfg: config,
+        raw: `${source}/latest`,
+        source: "automatic",
+      }),
+    ).toMatchObject({ kind: "automatic", ref: { provider: source, model: "release" } });
+  });
+
   it("keeps a retired primary local to the automatic plan", async () => {
     const owner = retiredXaiOwner();
     const raw = "xai/auto";
@@ -589,63 +716,74 @@ describe("prepared model support admission", () => {
     ).toMatchObject({ kind: "unavailable" });
   });
 
-  it("admits a visible spawn past a retired runtime-preferred fallback", async () => {
-    await withTestDir({ prefix: "openclaw-retired-spawn-fallback-" }, async (dir) => {
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "xai",
-        source: "test",
-        provider: {
-          id: "xai",
-          label: "Fixture",
-          auth: [],
-          preferRuntimeResolvedModel: ({ modelId }) => modelId === "auto",
-          resolveDynamicModel: ({ modelId }) =>
-            modelId === "auto"
-              ? makeProviderModelFixture({
-                  provider: "xai",
-                  id: modelId,
-                  api: "openai-responses",
-                  baseUrl: "https://api.x.ai/v1",
-                })
-              : undefined,
-        },
-      });
-      const owner = retiredXaiOwner(undefined, {
-        pluginRegistry: registry,
-        agentDir: path.join(dir, "agent"),
-        workspaceDir: dir,
-      });
-      const config = owner.config;
-      config.session = { store: path.join(dir, "sessions.json") };
-      config.agents = {
-        entries: { main: { workspace: dir } },
-        defaults: {
-          modelPolicy: { allow: [] },
-          subagents: {
-            model: { primary: "xai/unknown-primary", fallbacks: ["xai/auto", "fixture/custom"] },
+  it.each(["explicit", "selected"] as const)(
+    "admits a visible spawn past a retired runtime-preferred fallback: %s",
+    async (policy) => {
+      await withTestDir({ prefix: "openclaw-retired-spawn-fallback-" }, async (dir) => {
+        const registry = createEmptyPluginRegistry();
+        registry.providers.push({
+          pluginId: "xai",
+          source: "test",
+          provider: {
+            id: "xai",
+            label: "Fixture",
+            auth: [],
+            preferRuntimeResolvedModel: ({ modelId }) => modelId === "auto",
+            resolveDynamicModel: ({ modelId }) =>
+              modelId === "auto"
+                ? makeProviderModelFixture({
+                    provider: "xai",
+                    id: modelId,
+                    api: "openai-responses",
+                    baseUrl: "https://api.x.ai/v1",
+                  })
+                : undefined,
           },
-        },
-      };
-      const callGateway = vi.fn(async () => {
-        throw new Error("Reached session creation");
+        });
+        const owner = retiredXaiOwner(undefined, {
+          pluginRegistry: registry,
+          agentDir: path.join(dir, "agent"),
+          workspaceDir: dir,
+        });
+        const config = owner.config;
+        config.session = { store: path.join(dir, "sessions.json") };
+        config.agents = {
+          entries: { main: { workspace: dir } },
+          defaults: {
+            modelPolicy: { allow: [] },
+            model: {
+              primary: "unrelated/main",
+              fallbacks: ["unrelated/tail"],
+              fallbackChains: { "xai/unknown-primary": ["xai/auto", "fixture/custom"] },
+            },
+            subagents: {
+              model:
+                policy === "explicit"
+                  ? { primary: "xai/unknown-primary", fallbacks: ["xai/auto", "fixture/custom"] }
+                  : { primary: "xai/unknown-primary" },
+            },
+          },
+        };
+        const callGateway = vi.fn(async () => {
+          throw new Error("Reached session creation");
+        });
+        const tool = createSessionsSpawnTool({
+          agentSessionKey: "agent:main:main",
+          config,
+          callGateway,
+          registerRun: vi.fn(),
+          countActiveRuns: () => 0,
+        });
+        await expect(
+          tool.execute("retired-fallback", { task: "test", visible: true }),
+        ).rejects.toThrow("Reached session creation");
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+          "sessions.create",
+          expect.objectContaining({ model: "xai/unknown-primary" }),
+        );
       });
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config,
-        callGateway,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
-      await expect(
-        tool.execute("retired-fallback", { task: "test", visible: true }),
-      ).rejects.toThrow("Reached session creation");
-      expect(callGateway).toHaveBeenCalledExactlyOnceWith(
-        "sessions.create",
-        expect.objectContaining({ model: "xai/unknown-primary" }),
-      );
-    });
-  });
+    },
+  );
 
   it.each([
     { baseUrl: "https://api.x.ai/v1", kind: "unavailable", advertised: false },

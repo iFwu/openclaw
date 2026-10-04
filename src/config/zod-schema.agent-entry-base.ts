@@ -1,6 +1,10 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
-import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
+import {
+  AgentFallbackModelSchema,
+  AgentModelSchema,
+  DecisionModelSchema,
+} from "./zod-schema.agent-model.js";
 
 export const AgentRuntimePolicySchema = z
   .object({
@@ -135,7 +139,7 @@ export const AgentEntryBaseSchema = z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
-        model: AgentModelSchema.optional(),
+        model: AgentFallbackModelSchema.optional(),
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
       })

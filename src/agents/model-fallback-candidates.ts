@@ -12,18 +12,28 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
+import {
+  withPluginRuntimeGenerationRegistryScope,
+  getPluginRuntimeGenerationRegistry,
+} from "../plugins/runtime/generation-state.js";
 import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
+import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
 } from "./configured-provider-model.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import {
+  resolveSelectedModelFallbackChain,
+  captureModelFallbackPolicyContext,
+  type ModelFallbackPolicyContext,
+} from "./model-fallback-policy.js";
 import type {
   ModelCandidate,
   ModelFallbackCandidate,
@@ -38,7 +48,6 @@ import {
 } from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
-  resolveConfiguredModelFallbacks,
   resolveConfiguredModelRef,
   resolveModelAliasFromPair,
   resolveModelRefFromString,
@@ -52,7 +61,7 @@ const fallbackContextIds = new WeakMap<object, number>();
 let nextFallbackContextId = 0;
 const log = createSubsystemLogger("model-selection");
 
-type ModelCandidateChainParams = ModelManifestNormalizationContext & {
+type ModelCandidateChainParams = ModelFallbackPolicyContext & {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
   provider: string;
@@ -160,7 +169,25 @@ export function resolveModelCandidateChain(
   if (cached) {
     return cached.map((candidate) => Object.assign({}, candidate));
   }
-  const candidates = resolveFallbackCandidatesUncached({ ...params, manifestPlugins });
+  const policy = {
+    ...captureModelFallbackPolicyContext({
+      cfg: params.cfg,
+      manifestPlugins,
+      policyRegistry:
+        params.policyRegistry !== undefined
+          ? params.policyRegistry
+          : params.allowPluginNormalization === false
+            ? null
+            : undefined,
+    }),
+    // The candidate owner already decided whether ordinary metadata is compatible.
+    // Undefined is an authoritative cold/deferred view, not permission to borrow another one.
+    manifestPlugins,
+  };
+  const candidates = withPluginRuntimeGenerationRegistryScope(
+    policy.policyRegistry ?? createEmptyPluginRegistry(),
+    () => resolveFallbackCandidatesUncached({ ...params, ...policy }),
+  );
   if (cacheKey) {
     fallbackCandidateCache.set(
       cacheKey,
@@ -241,6 +268,12 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
       ? getFallbackContextId(providerLoadMetadata)
       : null,
     pluginRegistryIdentity: registry ? getFallbackContextId(registry) : null,
+    policyRegistryIdentity:
+      params.policyRegistry === undefined
+        ? "scope"
+        : params.policyRegistry === null
+          ? "empty"
+          : getFallbackContextId(params.policyRegistry),
     pluginRegistryKey: registryState?.key ?? null,
     pluginRegistryVersion: registryState?.activeVersion ?? null,
     pluginWorkspaceDir: workspaceDir ?? null,
@@ -339,12 +372,22 @@ function resolveFallbackCandidatesUncached(
     params.manifestPlugins !== undefined ? "resolved" : requestedRouteResolution,
   );
 
-  const modelFallbacks =
-    params.fallbacksOverride !== undefined
-      ? params.fallbacksOverride
-      : params.cfg
-        ? resolveConfiguredModelFallbacks({ cfg: params.cfg, agentId: params.agentId })
-        : [];
+  const agentFallbacksOverride =
+    params.cfg && params.agentId
+      ? resolveAgentModelFallbacksOverride(params.cfg, params.agentId)
+      : undefined;
+  const selectedChain =
+    params.cfg && params.fallbacksOverride === undefined && agentFallbacksOverride === undefined
+      ? resolveSelectedModelFallbackChain({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          provider: requestedCandidate.provider,
+          model: requestedCandidate.model,
+          manifestPlugins: params.manifestPlugins,
+          policyRegistry: params.policyRegistry,
+        })
+      : undefined;
+  const modelFallbacks = params.fallbacksOverride ?? agentFallbacksOverride ?? selectedChain ?? [];
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
@@ -358,25 +401,30 @@ function resolveFallbackCandidatesUncached(
     if (!resolved) {
       continue;
     }
+    let ref = resolved.ref;
+    // A resolved selection stays closed to input normalization, but authored
+    // values still use their explicitly captured executable owner. Ordinary
+    // parsing already refined values when enabled, so never run that hook twice.
+    if (
+      !allowPluginModelAliases &&
+      params.policyRegistry &&
+      params.cfg?.plugins?.enabled !== false &&
+      (ref.provider !== requestedCandidate.provider || ref.model !== requestedCandidate.model) &&
+      allowsPluginModelNormalization({ cfg: params.cfg, ...ref })
+    ) {
+      const model = normalizeProviderModelIdWithRuntime({
+        provider: ref.provider,
+        context: { provider: ref.provider, modelId: ref.model },
+        registry: params.policyRegistry,
+      });
+      if (model) {
+        ref = { provider: ref.provider, model };
+      }
+    }
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
-    addCandidate(resolved.ref, "configured-fallback", "resolved");
+    addCandidate(ref, "configured-fallback", "resolved");
   }
 
-  if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
-    // Primary resolution owns static normalization; refine only through its runtime hook.
-    let model = primary.model;
-    if (
-      allowPluginModelAliases &&
-      allowsPluginModelNormalization({ cfg: params.cfg, ...primary })
-    ) {
-      model =
-        normalizeProviderModelIdWithRuntime({
-          provider: primary.provider,
-          context: { provider: primary.provider, modelId: model },
-        }) ?? model;
-    }
-    addCandidate({ ...primary, model }, "configured-primary", "resolved");
-  }
   return candidates;
 }

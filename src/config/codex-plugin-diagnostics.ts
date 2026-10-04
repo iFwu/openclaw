@@ -11,7 +11,6 @@ import {
   listAgentIds,
   resolveAgentConfig,
   resolveNativeModelPrimary,
-  resolveAgentModelFallbacksOverride,
   resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
@@ -19,13 +18,13 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection-config.js";
+import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
 import {
   buildModelAliasIndex,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../agents/openai-routing.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentModelFallbackValues } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const CODEX_PLUGIN_ID = "codex";
@@ -101,16 +100,37 @@ function resolveEffectiveSelectedModelRefs(params: { cfg: OpenClawConfig; agentI
 } {
   const { cfg, agentId } = params;
   const mainPrimaryRaw = resolveNativeModelPrimary(cfg, agentId);
-  const mainFallbacks =
-    resolveAgentModelFallbacksOverride(cfg, agentId) ??
-    resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  const mainFallbacks = resolveConfiguredModelFallbacks({ cfg, agentId, manifestPlugins: [] });
   const subagentPrimaryRaw =
     resolveSubagentConfiguredModelSelection({ cfg, agentId }) ?? mainPrimaryRaw;
+  const primary = resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+    allowPluginNormalization: false,
+    manifestPlugins: [],
+  });
+  const context = {
+    cfg,
+    agentId,
+    defaultProvider: primary.provider,
+    allowPluginNormalization: false,
+    manifestPlugins: [],
+  };
+  const subagentRef = subagentPrimaryRaw
+    ? resolveModelRefFromString({
+        ...context,
+        raw: subagentPrimaryRaw,
+        aliasIndex: buildModelAliasIndex(context),
+      })?.ref
+    : undefined;
   const subagentFallbacks =
     resolveEffectiveModelFallbacks({
       cfg,
       agentId,
       sessionKey: `agent:${agentId}:subagent:codex-diagnostic`,
+      provider: subagentRef?.provider,
+      model: subagentRef?.model,
+      manifestPlugins: [],
       hasSessionModelOverride: true,
       modelOverrideSource: "auto",
     }) ?? [];

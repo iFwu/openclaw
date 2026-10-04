@@ -272,9 +272,16 @@ openclaw models fallbacks list [--json] [--plain]
 openclaw models fallbacks add <model-or-alias>
 openclaw models fallbacks remove <model-or-alias>
 openclaw models fallbacks clear
+openclaw models fallbacks list --model <model-or-alias> [--json]
+openclaw models fallbacks add <fallback-or-alias> --model <model-or-alias>
+openclaw models fallbacks remove <fallback-or-alias> --model <model-or-alias>
+openclaw models fallbacks clear --model <model-or-alias>
+openclaw models fallbacks chains [--json] [--plain]
 ```
 
 Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list|add|remove|clear` manages the parallel `agents.defaults.imageModel.fallbacks` list with the same subcommand shape.
+
+For text models, `--model` selects an entry in `agents.defaults.model.fallbackChains`, before or after the subcommand. `clear --model` removes that key but retains the chain map. An unmatched non-default model has no fallback; only the global primary appends its global tail. `fallbacks chains --json` returns the configured map. See [Model failover](/concepts/model-failover) for precedence and turn-local behavior.
 
 ## Personal model accounts
 

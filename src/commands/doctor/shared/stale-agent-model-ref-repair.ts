@@ -9,7 +9,6 @@ import {
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
-import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
@@ -19,8 +18,14 @@ import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.j
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
 import {
   createRetiredModelRefRepairResolver,
+  modelRefIdentityForRepair,
   repairRetiredConfigModelRefs,
 } from "./retired-model-ref-repair.js";
+import {
+  filterFallbacks,
+  filterFallbackChains,
+  findChangedGlobalFallbackTailOwners,
+} from "./stale-model-fallback-policy.js";
 
 type StaleAgentModelRefRepair = {
   config: OpenClawConfig;
@@ -201,31 +206,6 @@ function repairModelMap(params: {
   }
 }
 
-function filterFallbacks(params: {
-  model: Exclude<AgentModelConfig, string>;
-  path: string;
-  isStale: (ref: string) => string | undefined;
-  changes: string[];
-}): void {
-  if (!Array.isArray(params.model.fallbacks)) {
-    return;
-  }
-  // An empty array disables inherited fallbacks, including after stale refs are removed.
-  params.model.fallbacks = params.model.fallbacks.filter((ref) => {
-    if (typeof ref !== "string") {
-      return true;
-    }
-    const provider = params.isStale(ref);
-    if (!provider) {
-      return true;
-    }
-    params.changes.push(
-      `Removed stale ${params.path} fallback "${ref}" (provider "${provider}" is unavailable).`,
-    );
-    return false;
-  });
-}
-
 function firstExplicitModelRef(cfg: OpenClawConfig): string | undefined {
   if (!isRecord(cfg.models?.providers)) {
     return undefined;
@@ -377,6 +357,40 @@ export function repairStaleAgentModelRefs(
     }
     return available;
   };
+  const availabilityForDefaultFallbackPolicy = (
+    kind: "fallbacks" | "fallbackChains",
+  ): Set<string> | undefined => {
+    const entries = listAgentEntries(cfg);
+    const inheritingAgentIds = entries
+      .filter((agent) => {
+        const model = isRecord(agent.model) ? agent.model : undefined;
+        return (
+          !Array.isArray(model?.fallbacks) &&
+          (kind === "fallbacks" || !isRecord(model?.fallbackChains))
+        );
+      })
+      .map((agent) => agent.id);
+    if (entries.length === 0) {
+      const defaultAgentId = tryResolveDefaultAgentId(cfg);
+      if (defaultAgentId) {
+        inheritingAgentIds.push(defaultAgentId);
+      }
+    }
+    if (inheritingAgentIds.length === 0) {
+      return undefined;
+    }
+    const available = new Set(baseAvailableProviders);
+    for (const agentId of inheritingAgentIds) {
+      const agentAvailability = availabilityForAgent(agentId);
+      if (!agentAvailability) {
+        return undefined;
+      }
+      for (const providerId of agentAvailability) {
+        available.add(providerId);
+      }
+    }
+    return available;
+  };
   const makeStaleChecker = (available: ReadonlySet<string>) => (ref: string) => {
     const provider = providerFromModelRef(ref);
     return provider && !available.has(provider) ? provider : undefined;
@@ -388,6 +402,23 @@ export function repairStaleAgentModelRefs(
   let repairedDefaultPrimary =
     configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
   let defaultPrimaryChanged = false;
+  let preserveDefaultModelSelector = false;
+  const shouldPreserveDefaultModelSelector = (replacement: string | undefined): boolean => {
+    const affectedOwners = findChangedGlobalFallbackTailOwners({
+      config,
+      replacement,
+      availabilityForAgent,
+      makeStaleChecker,
+      modelPrimaryRef,
+    });
+    if (affectedOwners.length === 0) {
+      return false;
+    }
+    warnings.push(
+      `Retained stale agents.defaults.model and its model policy: replacing primary "${modelPrimaryRef(defaults?.model)}" would change which per-model selections inherit global fallbacks (${affectedOwners.join(", ")}). Choose an available default with openclaw models set and rerun openclaw doctor --fix.`,
+    );
+    return true;
+  };
   if (defaults && defaultAvailability) {
     const isStale = makeStaleChecker(defaultAvailability);
     const configuredReplacement = replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF;
@@ -423,7 +454,10 @@ export function repairStaleAgentModelRefs(
                   )
                 : undefined) ?? configuredReplacement)
             : configuredReplacement;
-          if (replacement) {
+          preserveDefaultModelSelector = shouldPreserveDefaultModelSelector(replacement);
+          if (preserveDefaultModelSelector) {
+            replacement = undefined;
+          } else if (replacement) {
             defaults.model.primary = replacement;
             defaultPrimaryChanged = true;
             changes.push(
@@ -437,36 +471,57 @@ export function repairStaleAgentModelRefs(
             );
           }
         }
-        filterFallbacks({
-          model: defaults.model,
-          path: "agents.defaults.model",
-          isStale,
-          changes,
-        });
-        if (
-          replacement &&
-          Array.isArray(defaults.model.fallbacks) &&
-          defaults.model.fallbacks.includes(replacement)
-        ) {
-          defaults.model.fallbacks = defaults.model.fallbacks.filter(
-            (fallback) => fallback !== replacement,
-          );
-          changes.push(
-            `Removed duplicate agents.defaults.model fallback "${replacement}" after selecting it as the default primary.`,
-          );
-          if (defaults.model.fallbacks.length === 0) {
-            delete defaults.model.fallbacks;
+        if (!preserveDefaultModelSelector) {
+          const fallbackAvailability = Array.isArray(defaults.model.fallbacks)
+            ? availabilityForDefaultFallbackPolicy("fallbacks")
+            : undefined;
+          if (fallbackAvailability) {
+            filterFallbacks({
+              model: defaults.model,
+              path: "agents.defaults.model",
+              isStale: makeStaleChecker(fallbackAvailability),
+              changes,
+            });
           }
-        }
-        if (!defaults.model.primary && !defaults.model.fallbacks) {
-          delete defaults.model;
+          const chainAvailability = isRecord(defaults.model.fallbackChains)
+            ? availabilityForDefaultFallbackPolicy("fallbackChains")
+            : undefined;
+          if (chainAvailability) {
+            filterFallbackChains({
+              model: defaults.model,
+              path: "agents.defaults.model",
+              isStale: makeStaleChecker(chainAvailability),
+              changes,
+            });
+          }
+          if (
+            replacement &&
+            Array.isArray(defaults.model.fallbacks) &&
+            defaults.model.fallbacks.includes(replacement)
+          ) {
+            defaults.model.fallbacks = defaults.model.fallbacks.filter(
+              (fallback) => fallback !== replacement,
+            );
+            changes.push(
+              `Removed duplicate agents.defaults.model fallback "${replacement}" after selecting it as the default primary.`,
+            );
+          }
+          if (
+            !defaults.model.primary &&
+            !defaults.model.fallbacks &&
+            !Object.hasOwn(defaults.model, "fallbackChains")
+          ) {
+            delete defaults.model;
+          }
         }
       }
     }
     repairedDefaultPrimary =
-      modelPrimaryRef(defaults.model) ??
+      modelPrimaryRef(defaults?.model) ??
       (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
-    const modelMapAvailability = availabilityForDefaultModelMap();
+    const modelMapAvailability = preserveDefaultModelSelector
+      ? undefined
+      : availabilityForDefaultModelMap();
     if (modelMapAvailability) {
       repairModelMap({
         models: defaults.models,
@@ -495,6 +550,36 @@ export function repairStaleAgentModelRefs(
       !isStale(repairedDefaultPrimary),
     );
     const canInheritDefault = inheritedDefaultAvailable;
+    const ownPrimary = modelPrimaryRef(agent.model);
+    const ownModel = isRecord(agent.model) ? agent.model : undefined;
+    const defaultModel = isRecord(defaults?.model) ? defaults.model : undefined;
+    if (
+      ownPrimary &&
+      isStale(ownPrimary) &&
+      repairedDefaultPrimary &&
+      !isStale(repairedDefaultPrimary) &&
+      !Array.isArray(ownModel?.fallbacks) &&
+      Array.isArray(defaultModel?.fallbacks) &&
+      defaultModel.fallbacks.length > 0
+    ) {
+      const originalGlobalRef = modelPrimaryRef(cfg.agents?.defaults?.model);
+      const before = modelRefIdentityForRepair(cfg, ownPrimary, entry.agentId);
+      const beforeGlobal = modelRefIdentityForRepair(cfg, originalGlobalRef);
+      const after = modelRefIdentityForRepair(config, repairedDefaultPrimary, entry.agentId);
+      const afterGlobal = modelRefIdentityForRepair(config, modelPrimaryRef(defaults?.model));
+      if (
+        !before ||
+        !beforeGlobal ||
+        !after ||
+        !afterGlobal ||
+        (before === beforeGlobal) !== (after === afterGlobal)
+      ) {
+        warnings.push(
+          `Retained stale ${modelPath} and its model policy: replacing primary "${ownPrimary}" would change its per-model global fallback tail. Choose an available model explicitly and rerun openclaw doctor --fix.`,
+        );
+        continue;
+      }
+    }
     let agentPrimaryChanged = false;
     if (typeof agent.model === "string") {
       const provider = isStale(agent.model);
@@ -554,6 +639,7 @@ export function repairStaleAgentModelRefs(
         }
       }
       filterFallbacks({ model, path: modelPath, isStale, changes });
+      filterFallbackChains({ model, path: modelPath, isStale, changes });
       if (
         agentReplacement &&
         Array.isArray(model.fallbacks) &&
@@ -566,11 +652,8 @@ export function repairStaleAgentModelRefs(
         changes.push(
           `Removed duplicate ${modelPath} fallback "${agentReplacement}" after selecting it as the primary.`,
         );
-        if (filteredFallbacks.length === 0) {
-          delete model.fallbacks;
-        }
       }
-      if (!model.primary && !model.fallbacks) {
+      if (!model.primary && !model.fallbacks && !Object.hasOwn(model, "fallbackChains")) {
         delete agent.model;
       }
     }
