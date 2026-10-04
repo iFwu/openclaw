@@ -1928,6 +1928,28 @@ describe("WorkboardStore", () => {
     expect(archived.events?.at(-1)).toMatchObject({ kind: "archived" });
   });
 
+  it("completes inline proof with null but still rejects empty and invented references", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Nullable inline proof", status: "running" });
+    await store.claim(card.id, { ownerId: "main", token: "nullable-proof-token" });
+    const input = {
+      ownerId: "main",
+      token: "nullable-proof-token",
+      proof: { status: "passed", label: "fixture" },
+    };
+    await expect(store.complete(card.id, { ...input, proofId: "" })).rejects.toThrow(
+      "proofId must be a non-empty string",
+    );
+    await expect(store.complete(card.id, { ...input, proofId: "invented-proof" })).rejects.toThrow(
+      /proof not found/,
+    );
+    const completed = await store.complete(card.id, { ...input, proofId: null });
+    expect(completed).toMatchObject({
+      status: "done",
+      metadata: { proof: [{ status: "passed", label: "fixture" }] },
+    });
+  });
+
   it("resolves matching unknown proof on completion without duplicating it", async () => {
     vi.useFakeTimers();
     try {

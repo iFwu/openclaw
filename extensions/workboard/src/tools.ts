@@ -338,14 +338,15 @@ export function createWorkboardTools(params: {
       name: "workboard_complete",
       label: "Workboard Complete",
       description:
-        "Complete a claimed Workboard card with a structured summary, proof, artifacts, and created-card manifest.",
+        "Complete a claimed card using inline proof or a proofId returned by workboard_proof. Omit proofId (or use null) for inline evidence; never invent a proof id.",
       parameters: strictObject({
         id: cardIdField(),
         token: claimTokenField(),
         summary: Type.Optional(Type.String({ description: "Completion summary." })),
         proofId: Type.Optional(
-          Type.String({
-            description: "Proof id returned by workboard_proof when resolving that pending proof.",
+          Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
+            description:
+              "Existing proof id returned by workboard_proof. Omit or use null for inline proof; empty strings and invented ids are invalid.",
           }),
         ),
         proof: Type.Optional(

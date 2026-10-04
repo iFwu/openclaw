@@ -15,6 +15,45 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("accepts a null inline proof reference while rejecting empty references at the tool boundary", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = new Map(
+      createWorkboardTools({
+        store,
+        context: { agentId: "main", sessionKey: "agent:main:subagent:workboard-null-proof" },
+      }).map((tool) => [tool.name, tool]),
+    );
+    const complete = expectDefined(tools.get("workboard_complete"), "complete tool");
+    expect(
+      Value.Check(complete.parameters, { id: "fixture", token: "fixture", proofId: null }),
+    ).toBe(true);
+    expect(Value.Check(complete.parameters, { id: "fixture", token: "fixture", proofId: "" })).toBe(
+      false,
+    );
+    const card = await store.create({
+      title: "Inline evidence",
+      status: "running",
+      sessionKey: "agent:main:subagent:workboard-null-proof",
+    });
+    const claim = readPayload(
+      await expectDefined(tools.get("workboard_claim"), "claim tool").execute("claim-null", {
+        id: card.id,
+      }),
+    );
+    const result = readPayload(
+      await complete.execute("complete-null", {
+        id: card.id,
+        token: claim.token,
+        summary: "Completed",
+        proofId: null,
+        proof: { status: "passed", label: "fixture" },
+      }),
+    );
+    expect(result.card).toMatchObject({
+      status: "done",
+      metadata: { proof: [{ status: "passed", label: "fixture" }] },
+    });
+  });
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = createWorkboardSqliteTestStore();
     const restrictedContext = {

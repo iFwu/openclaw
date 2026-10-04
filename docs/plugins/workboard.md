@@ -189,7 +189,10 @@ plugin using the linked run and session lifecycle (see
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded. Consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and
-run their own verifier. `workboard_proof` returns the new record's `proofId`. When
+run their own verifier. `workboard_proof` returns the new record's `proofId`.
+Workers receive `workboard_heartbeat`, `workboard_proof`, `workboard_complete`, and
+`workboard_block`. Inline completion evidence may omit `proofId` or use `null`;
+empty or invented proof references are rejected, and claim-token checks still apply. When
 `workboard_complete` reports that same proof's terminal status, pass `proofId` so the
 pending record is resolved in place without losing its identity or timestamp. A proof that
 already has the same terminal status is reused unchanged. Completion proof without
