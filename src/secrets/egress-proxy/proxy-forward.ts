@@ -1,4 +1,5 @@
 import {
+  request as httpRequest,
   ServerResponse,
   type ClientRequest,
   type IncomingHttpHeaders,
@@ -149,14 +150,15 @@ function sendSecretEgressRequest(
   let refused = false;
   let upgraded = false;
   const upstream = forward.ownResource(
-    httpsRequest(
+    (target.protocol === "http:" ? httpRequest : httpsRequest)(
       {
-        hostname: target.hostname,
-        port: target.port || 443,
+        // HTTP admission permits only loopback; pin localhost rather than resolving it again.
+        hostname: target.protocol === "http:" && host === "localhost" ? "127.0.0.1" : host,
+        port: target.port || (target.protocol === "http:" ? 80 : 443),
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: forward.upstreamTlsAgent,
+        agent: target.protocol === "http:" ? false : forward.upstreamTlsAgent,
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);

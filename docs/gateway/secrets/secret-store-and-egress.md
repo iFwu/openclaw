@@ -112,8 +112,10 @@ Process exit, failed startup, cancellation, and timeout revoke that process's gr
 Each process receives a fixed copy of the owning run's secret snapshot, including each sentinel's secret name and allowed hosts. Later commands cannot change an existing process's grant. After proxy authentication, the proxy looks up the matched sentinel in that process's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
 
 <Warning>
-Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, and HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
+Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Protected sentinels are refused on non-HTTPS requests. Ordinary loopback HTTP requests without sentinels remain usable, and HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
 </Warning>
+
+The upstream TLS client and child-process trust bundle retain the Gateway's default trusted CA set, including configured extra CAs. TLS certificate and hostname verification remain enabled.
 
 The CA is generated once per Gateway start under the state directory with a ten-year certificate validity window. Its key is still process-owned, not retained for ten years. One-day leaf certificates renew on demand within their final hour without replacing the CA or interrupting established TLS connections. This keeps already-running subprocesses trusting the same issuer across renewal. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests fail closed when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
 
@@ -147,7 +149,7 @@ Current limits:
 - Non-443 HTTPS substitution is not a supported compatibility target.
 - Identity-scoped secrets are not supported; only the team store participates.
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
-- Plain HTTP is refused; it is not upgraded or substituted.
+- Plain HTTP is permitted only for ordinary loopback requests without protected sentinels. `localhost` is pinned to loopback, and proxy authentication, traffic allowlists, and process-grant revocation still apply. Sentinel-bearing URLs, headers, and bodies are refused without decryption; streaming uploads may have sent earlier non-sentinel bytes before refusal. Non-loopback HTTP and plain HTTP upgrades remain refused. HTTP is never upgraded or used for protected-secret substitution.
 - Automatic shared-store secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy. The explicit Crabbox command below grants a configured model credential separately.
 - Background subprocesses retain their original secret snapshot until they exit or are stopped. Changes to stored credentials or destination bindings require a new run and a new command; stop existing commands to revoke their older grants immediately.
 

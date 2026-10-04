@@ -10,8 +10,9 @@ import { Agent as HttpsAgent } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { Readable, type Duplex, type Writable } from "node:stream";
-import { createSecureContext, createServer as createTlsServer, rootCertificates } from "node:tls";
+import { createSecureContext, createServer as createTlsServer, getCACertificates } from "node:tls";
 import { URL } from "node:url";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
   containsSecretSentinel,
@@ -235,11 +236,12 @@ export async function startSecretEgressProxyServer(params: {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
-  fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
+  const trustedRoots = getCACertificates("default");
+  fs.writeFileSync(trustBundlePath, `${trustedRoots.join("\n")}\n${caPem}`, { mode: 0o644 });
   // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
   // leaf renewal does not change it. Share only parsed CAs across process grants.
   const upstreamSecureContext = createSecureContext({
-    ca: [...rootCertificates, caPem],
+    ca: [...trustedRoots, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
   const allowedHosts =
@@ -374,7 +376,9 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
     const { host } = forward;
-    if (forward.target.protocol !== "https:") {
+    const plainHttp = forward.target.protocol === "http:";
+    const loopbackHttp = plainHttp && (host === "localhost" || isLoopbackIpAddress(host));
+    if (forward.target.protocol !== "https:" && (!loopbackHttp || forward.upgrade)) {
       audit({
         kind: "refused",
         host,
@@ -404,6 +408,31 @@ export async function startSecretEgressProxyServer(params: {
           error.message = hostNotAllowedBody(host).trimEnd();
           throw error;
         }
+        if (plainHttp) {
+          // Check original fields before header stripping or URL normalization.
+          const rawUrl = forward.request.url ?? forward.target.toString();
+          let decodedUrl = rawUrl;
+          try {
+            decodedUrl = decodeURIComponent(rawUrl);
+          } catch {
+            // Malformed escapes are sent literally; raw sentinel prefixes still fail.
+          }
+          if (
+            [rawUrl, decodedUrl, forward.target.toString(), ...forward.request.rawHeaders].some(
+              containsSecretSentinel,
+            )
+          ) {
+            throw new SecretEgressSubstitutionError("non-https-request");
+          }
+          // Plain HTTP never enters a credential substitution path.
+          const headers: IncomingHttpHeaders = {
+            ...forward.request.headers,
+            host: forward.target.host,
+          };
+          delete headers["proxy-authorization"];
+          delete headers["proxy-connection"];
+          return { target: forward.target, headers, substituted: false };
+        }
         const swappedUrl = swapRequestText({
           value: forward.target.toString(),
           urlMode: true,
@@ -429,8 +458,12 @@ export async function startSecretEgressProxyServer(params: {
       releaseResponse: () => {
         forward.registered.resources.delete(forward.response);
       },
-      resolveSentinel: (sentinel) =>
-        resolveRegisteredSentinel({ sentinel, host, registered: forward.registered }),
+      resolveSentinel: (sentinel) => {
+        if (plainHttp) {
+          throw new SecretEgressSubstitutionError("non-https-request");
+        }
+        return resolveRegisteredSentinel({ sentinel, host, registered: forward.registered });
+      },
       audit,
     });
   };
