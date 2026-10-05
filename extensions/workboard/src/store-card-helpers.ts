@@ -11,8 +11,7 @@ import {
   type WorkboardRunAttempt,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { assertWorkboardClaimScope } from "./store-claim-authority.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -345,15 +344,10 @@ export function assertCanMutateClaimedCard(
   if (!scope) {
     return;
   }
-  const claim = card.metadata?.claim;
-  if (!claim) {
-    return;
-  }
-  const ownerId = normalizeOptionalString(scope.ownerId);
-  const token = normalizeOptionalString(scope.token);
-  if (claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
-    throw new Error(`card is claimed by ${claim.ownerId}.`);
-  }
+  assertWorkboardClaimScope(card.metadata?.claim, scope, {
+    sessionKey: cardSessionKey(card),
+    runId: cardRunId(card),
+  });
 }
 
 export function retryBudgetExhausted(card: WorkboardCard): boolean {

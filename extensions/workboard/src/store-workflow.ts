@@ -273,6 +273,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
+    const completionProof = appendCompletionProof(existing.metadata?.proof, proof, proofId);
+    if (existing.status === "done" && !existing.metadata?.claim) {
+      return existing;
+    }
     const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
     const notification: WorkboardNotification = {
       id: randomUUID(),
@@ -311,7 +315,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: appendCompletionProof(metadata.proof, proof, proofId),
+          proof: completionProof,
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
@@ -323,6 +327,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       {
         enforceStatusHolds: true,
         preserveProofId: proofId ?? proof?.id,
+        expectedUpdatedAt: existing.updatedAt,
+        mutationScope: scope === null ? undefined : scope,
       },
     );
   }
@@ -383,7 +389,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const reason =
         normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
         "Workboard card blocked.";
-      return await this.updateCard(id, this.buildBlockedCardPatch(existing, reason, now, options));
+      return await this.updateCard(id, this.buildBlockedCardPatch(existing, reason, now, options), {
+        expectedUpdatedAt: existing.updatedAt,
+        mutationScope: scope === null ? undefined : scope,
+      });
     });
   }
 

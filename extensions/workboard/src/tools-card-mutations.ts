@@ -5,6 +5,7 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type, type TProperties } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
+import { cardRunId, cardSessionKey } from "./store-card-helpers.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import type { WorkboardStore } from "./store.js";
 
@@ -68,8 +69,16 @@ export function createWorkboardCardMutations(store: WorkboardStore, ownerId: str
   ): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
     const card = await requireScopedCard(store, input.id, ownerId, input.token);
-    if (requireClaim && !card.metadata?.claim) {
+    const claim = card.metadata?.claim;
+    if (requireClaim && !claim) {
       throw new Error("card must be claimed before lifecycle completion.");
+    }
+    if (claim) {
+      input.scope.capturedClaim = {
+        token: claim.token,
+        sessionKey: cardSessionKey(card),
+        runId: cardRunId(card),
+      };
     }
     return input;
   };

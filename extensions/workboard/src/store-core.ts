@@ -695,6 +695,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     options: WorkboardUpdateCardOptions = {},
   ): Promise<WorkboardCard> {
     const existing = await this.requireCard(id);
+    assertCanMutateClaimedCard(existing, options.mutationScope);
     if (
       options.expectedUpdatedAt !== undefined &&
       existing.updatedAt !== options.expectedUpdatedAt

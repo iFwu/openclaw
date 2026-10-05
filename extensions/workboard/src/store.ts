@@ -412,6 +412,11 @@ export class WorkboardStore extends WorkboardNotificationStore {
           } else if (associationIsCurrent && card.metadata?.stale) {
             metadata = { ...metadata, stale: null };
           }
+          // A successful execution no longer occupies a worker slot while the
+          // user reviews it. Use the same association-checked CAS as the status.
+          if (patch.status === "review") {
+            metadata = { ...metadata, claim: null };
+          }
           // Status and its failure record share this CAS update; held or replayed
           // terminal observations cannot release a successor's claim or alert twice.
           if (patch.status === "blocked") {

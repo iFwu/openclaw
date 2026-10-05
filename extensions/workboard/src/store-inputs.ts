@@ -49,6 +49,8 @@ export type WorkboardUpdateCardOptions = {
   expectedUpdatedAt?: number;
   ownerSlot?: { ownerId: string; now: number };
   preserveProofId?: string;
+  /** Trusted tool capture; revalidated against the final CAS row. */
+  mutationScope?: WorkboardMutationScope;
 };
 export type WorkboardCommentInput = { body?: unknown };
 export type WorkboardLinkInput = {
@@ -206,6 +208,8 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  /** Captured by the host from the checked row, never accepted from tool JSON. */
+  capturedClaim?: { token: string; sessionKey?: string; runId?: string };
 };
 
 export type WorkboardDiagnosticsResult = {
