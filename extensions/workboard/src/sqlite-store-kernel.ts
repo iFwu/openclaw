@@ -1,12 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type {
   WorkboardCard,
   WorkboardMetadata,
   WorkboardExecution,
+  WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
   executeSqliteQueryTakeFirstSync,
+  executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteDeferredTransactionSync,
@@ -25,6 +28,7 @@ import type {
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
   WorkboardSubscriptionStore,
+  WorkboardNotificationCursor,
 } from "./persistence-types.js";
 import {
   asBlobContent,
@@ -538,6 +542,7 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
       sessionKey: stringValue(row, "session_key"),
       runId: stringValue(row, "run_id"),
       target: stringValue(row, "target"),
+      wakeSessionKey: stringValue(row, "wake_session_key"),
       ...(eventKinds ? { eventKinds } : {}),
       lastEventAt: numberValue(row, "last_event_at"),
       lastEventId: stringValue(row, "last_event_id"),
@@ -574,6 +579,7 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
           session_key: parameter(() => bindNull(subscription.sessionKey)),
           run_id: parameter(() => bindNull(subscription.runId)),
           target: parameter(() => bindNull(subscription.target)),
+          wake_session_key: parameter(() => bindNull(subscription.wakeSessionKey)),
           event_kinds_json: parameter(() => jsonValue(subscription.eventKinds)),
           last_event_at: parameter(() => bindNull(subscription.lastEventAt)),
           last_event_id: parameter(() => bindNull(subscription.lastEventId)),
@@ -589,6 +595,7 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
             session_key: eb.ref("excluded.session_key"),
             run_id: eb.ref("excluded.run_id"),
             target: eb.ref("excluded.target"),
+            wake_session_key: eb.ref("excluded.wake_session_key"),
             event_kinds_json: eb.ref("excluded.event_kinds_json"),
             last_event_at: eb.ref("excluded.last_event_at"),
             last_event_id: eb.ref("excluded.last_event_id"),
@@ -600,6 +607,35 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
         ),
     );
     this.db.prepare(compiled.sql).run(...bind());
+  }
+
+  advanceCursorIfCurrent(
+    expected: WorkboardNotificationSubscription,
+    cursor: WorkboardNotificationCursor,
+  ): WorkboardNotificationSubscription | undefined {
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const entry = this.lookup(expected.id);
+      if (!entry || !isDeepStrictEqual(entry.subscription, expected)) {
+        return undefined;
+      }
+      const subscription = { ...entry.subscription, ...cursor, updatedAt: Date.now() };
+      if (cursor.lastEventSequence === undefined) {
+        delete subscription.lastEventSequence;
+      }
+      executeSqliteQuerySync(
+        this.db,
+        getNodeSqliteKysely<{ workboard_notification_subscriptions: Row }>(this.db)
+          .updateTable("workboard_notification_subscriptions")
+          .set({
+            last_event_at: cursor.lastEventAt ?? null,
+            last_event_id: cursor.lastEventId ?? null,
+            last_event_sequence: cursor.lastEventSequence ?? null,
+            updated_at: subscription.updatedAt,
+          })
+          .where("id", "=", expected.id),
+      );
+      return subscription;
+    });
   }
 
   lookup(key: string): PersistedWorkboardNotificationSubscription | undefined {

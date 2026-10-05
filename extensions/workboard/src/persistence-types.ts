@@ -42,10 +42,19 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   entries(): Promise<Array<{ key: string; value: T }>>;
 };
 
+export type WorkboardNotificationCursor = Pick<
+  WorkboardNotificationSubscription,
+  "lastEventAt" | "lastEventId" | "lastEventSequence"
+>;
+
 export type WorkboardSubscriptionStore = Omit<
   WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
   "entries"
 > & {
+  advanceCursorIfCurrent(
+    expected: WorkboardNotificationSubscription,
+    cursor: WorkboardNotificationCursor,
+  ): Promise<WorkboardNotificationSubscription | undefined>;
   entries(options?: {
     boardId?: string;
     cardId?: string;

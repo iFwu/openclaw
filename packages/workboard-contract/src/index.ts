@@ -341,6 +341,7 @@ export type WorkboardNotificationSubscription = {
   sessionKey?: string;
   runId?: string;
   target?: string;
+  wakeSessionKey?: string;
   eventKinds?: WorkboardNotificationKind[];
   lastEventAt?: number;
   lastEventId?: string;

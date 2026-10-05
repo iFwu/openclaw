@@ -32,6 +32,9 @@ export type WorkboardSqliteOperations = {
   "boards.delete": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["delete"]>;
   "boards.entries": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["entries"]>;
   "subscriptions.register": Operation<WorkboardSubscriptionStore["register"]>;
+  "subscriptions.advanceCursorIfCurrent": Operation<
+    WorkboardSubscriptionStore["advanceCursorIfCurrent"]
+  >;
   "subscriptions.lookup": Operation<WorkboardSubscriptionStore["lookup"]>;
   "subscriptions.delete": Operation<WorkboardSubscriptionStore["delete"]>;
   "subscriptions.entries": Operation<WorkboardSubscriptionStore["entries"]>;

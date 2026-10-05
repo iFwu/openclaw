@@ -250,6 +250,7 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT,
       target TEXT,
+      wake_session_key TEXT,
       event_kinds_json TEXT,
       last_event_at INTEGER,
       last_event_id TEXT,
@@ -264,6 +265,12 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(WORKBOARD_SCHEMA_SQL);
   ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
   ensureColumn(db, "workboard_boards", "default_model", "default_model TEXT");
+  ensureColumn(
+    db,
+    "workboard_notification_subscriptions",
+    "wake_session_key",
+    "wake_session_key TEXT",
+  );
   ensureColumn(
     db,
     "workboard_cards",

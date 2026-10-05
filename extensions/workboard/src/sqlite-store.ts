@@ -221,6 +221,9 @@ export function createWorkboardSqliteStores(options: {
       entries: bindOperation((connection, args) => execute("boards.entries", { connection, args })),
     },
     subscriptions: {
+      advanceCursorIfCurrent: bindOperation((connection, args) =>
+        execute("subscriptions.advanceCursorIfCurrent", { connection, args }, true),
+      ),
       register: bindOperation((connection, args) =>
         execute("subscriptions.register", { connection, args }, true),
       ),

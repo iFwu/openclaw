@@ -192,6 +192,7 @@ export type WorkboardNotificationSubscribeInput = {
   sessionKey?: unknown;
   runId?: unknown;
   target?: unknown;
+  wakeSessionKey?: unknown;
   eventKinds?: unknown;
 };
 export type WorkboardNotificationListOptions = {

@@ -117,6 +117,8 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     this.subscriptionStore = {
       ...this.track(stores.subscriptions, { notifyChanges: false }),
       entries: (options) => this.runOperation(() => stores.subscriptions.entries(options)),
+      advanceCursorIfCurrent: (...args) =>
+        this.runOperation(() => stores.subscriptions.advanceCursorIfCurrent(...args)),
     };
     this.attachmentStore = this.track(stores.attachments, { notifyChanges: false });
   }

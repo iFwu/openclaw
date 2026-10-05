@@ -232,8 +232,16 @@ export function normalizeNotificationSubscription(
   );
   const runId = normalizeBoundedString(input.runId, fallback?.runId, 160, "run id");
   const target = normalizeBoundedString(input.target, fallback?.target, 240, "notification target");
-  if (!cardId && !sessionKey && !runId && !target) {
-    throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
+  const wakeSessionKey = normalizeBoundedString(
+    input.wakeSessionKey,
+    fallback?.wakeSessionKey,
+    240,
+    "wake session key",
+  );
+  if (!cardId && !sessionKey && !runId && !target && !wakeSessionKey) {
+    throw new Error(
+      "notification subscription needs cardId, sessionKey, runId, target, or wakeSessionKey.",
+    );
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
   return {
@@ -243,6 +251,7 @@ export function normalizeNotificationSubscription(
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
+    ...(wakeSessionKey ? { wakeSessionKey } : {}),
     ...(eventKinds ? { eventKinds } : {}),
     ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
     ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),

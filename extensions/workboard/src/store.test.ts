@@ -4111,13 +4111,11 @@ describe("WorkboardStore", () => {
       store,
       stores: { subscriptions },
     } = createWorkboardSqliteTestHarness();
-    const registerSubscription = subscriptions.register.bind(subscriptions);
-    subscriptions.register = async (key, value) => {
-      if (value.subscription.lastEventId) {
-        markCursorWriteStarted();
-        await cursorWriteReleased;
-      }
-      await registerSubscription(key, value);
+    const advanceCursor = subscriptions.advanceCursorIfCurrent.bind(subscriptions);
+    subscriptions.advanceCursorIfCurrent = async (expected, cursor) => {
+      markCursorWriteStarted();
+      await cursorWriteReleased;
+      return await advanceCursor(expected, cursor);
     };
     const card = await store.create({ title: "Delete in-flight notification", boardId: "ops" });
     const subscription = await store.subscribeNotifications({

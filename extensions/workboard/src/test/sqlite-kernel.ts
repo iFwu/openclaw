@@ -38,7 +38,11 @@ export function createKernelStores(
       hasCards: async (boardId) => kernel.cards.hasCards(boardId),
     },
     boards: asyncKeyedStore(kernel.boards),
-    subscriptions: asyncKeyedStore(kernel.subscriptions),
+    subscriptions: {
+      ...asyncKeyedStore(kernel.subscriptions),
+      advanceCursorIfCurrent: async (...args) =>
+        kernel.subscriptions.advanceCursorIfCurrent(...args),
+    },
     attachments: asyncKeyedStore(kernel.attachments),
   };
 }

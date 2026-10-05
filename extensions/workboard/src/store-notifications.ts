@@ -166,21 +166,17 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
       }
       const last = result.events.at(-1)!;
       const lastSequence = notificationSequence(last);
-      const subscription: WorkboardNotificationSubscription = {
-        ...result.subscription,
-        lastEventAt: last.createdAt,
-        lastEventId: last.id,
-        ...(lastSequence !== undefined ? { lastEventSequence: lastSequence } : {}),
-        updatedAt: Date.now(),
-      };
-      delete subscription.deliveredEventIds;
-      if (lastSequence === undefined) {
-        delete subscription.lastEventSequence;
+      const subscription = await this.subscriptionStore.advanceCursorIfCurrent(
+        result.subscription,
+        {
+          lastEventAt: last.createdAt,
+          lastEventId: last.id,
+          ...(lastSequence !== undefined ? { lastEventSequence: lastSequence } : {}),
+        },
+      );
+      if (!subscription) {
+        return { events: [] };
       }
-      await this.subscriptionStore.register(subscription.id, {
-        version: 1,
-        subscription,
-      });
       return { subscription, events: result.events };
     });
   }
