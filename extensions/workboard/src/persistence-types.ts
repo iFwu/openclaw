@@ -3,6 +3,7 @@ import type {
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
+  WorkboardNotification,
 } from "@openclaw/workboard-contract";
 
 /**
@@ -47,10 +48,32 @@ export type WorkboardNotificationCursor = Pick<
   "lastEventAt" | "lastEventId" | "lastEventSequence"
 >;
 
+export type WorkboardNotificationWakeBatch = {
+  expected: WorkboardNotificationSubscription;
+  events: Array<{ key: string; notification: WorkboardNotification }>;
+  retainedEventKeys: string[];
+};
+export type WorkboardNotificationWakeResult = {
+  matched: boolean;
+  deliveredEventIds: string[];
+  unknownEventIds: string[];
+};
+export type WorkboardNotificationWakeAuthority = <T>(
+  assertCurrent: () => void,
+  deliver: (
+    subscription: WorkboardNotificationSubscription,
+    event: WorkboardNotification,
+  ) => boolean,
+  operation: () => Promise<T>,
+) => Promise<T>;
+
 export type WorkboardSubscriptionStore = Omit<
   WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
   "entries"
 > & {
+  deliverWakesIfCurrent(
+    batch: WorkboardNotificationWakeBatch,
+  ): Promise<WorkboardNotificationWakeResult>;
   advanceCursorIfCurrent(
     expected: WorkboardNotificationSubscription,
     cursor: WorkboardNotificationCursor,

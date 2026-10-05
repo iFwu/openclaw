@@ -705,3 +705,24 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
+
+export function notificationDeliveryKey(event: WorkboardNotification): string {
+  return `${event.id}:${notificationSequence(event) ?? event.createdAt}`;
+}
+
+export function notificationDeliveryKeys(cards: WorkboardCard[]): Set<string> {
+  const keys = new Set<string>();
+  for (const card of cards) {
+    if (card.metadata?.archivedAt) {
+      continue;
+    }
+    for (const event of card.metadata?.notifications ?? []) {
+      keys.add(notificationDeliveryKey(event));
+    }
+    const stale = card.metadata?.stale;
+    if (stale) {
+      keys.add(`stale:${card.id}:${stale.detectedAt}:${stale.detectedAt * 1000}`);
+    }
+  }
+  return keys;
+}

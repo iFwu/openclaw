@@ -74,6 +74,8 @@ export function createSqliteWorkerBackend(
         return kernel.boards.delete(...command.input.args);
       case "boards.entries":
         return kernel.boards.entries(...command.input.args);
+      case "subscriptions.deliverWakesIfCurrent":
+        return kernel.subscriptions.deliverWakesIfCurrent(command.input.batch, command.input.nonce);
       case "subscriptions.register":
         return kernel.subscriptions.register(...command.input.args);
       case "subscriptions.advanceCursorIfCurrent":

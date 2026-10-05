@@ -4,6 +4,8 @@ import type {
   WorkboardCardStore,
   WorkboardKeyedStore,
   WorkboardSubscriptionStore,
+  WorkboardNotificationWakeBatch,
+  WorkboardNotificationWakeResult,
 } from "./persistence-types.js";
 import type { WorkboardSqliteResult } from "./sqlite-store-errors.js";
 
@@ -32,6 +34,10 @@ export type WorkboardSqliteOperations = {
   "boards.delete": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["delete"]>;
   "boards.entries": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["entries"]>;
   "subscriptions.register": Operation<WorkboardSubscriptionStore["register"]>;
+  "subscriptions.deliverWakesIfCurrent": {
+    input: { connection: number; batch: WorkboardNotificationWakeBatch; nonce: string };
+    output: WorkboardNotificationWakeResult;
+  };
   "subscriptions.advanceCursorIfCurrent": Operation<
     WorkboardSubscriptionStore["advanceCursorIfCurrent"]
   >;

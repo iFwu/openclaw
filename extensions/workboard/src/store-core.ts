@@ -16,6 +16,7 @@ import type {
   WorkboardKeyedStore,
   WorkboardSubscriptionStore,
   WorkboardWriteAuthority,
+  WorkboardNotificationWakeAuthority,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import {
@@ -95,6 +96,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardSubscriptionStore;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+  protected readonly runWithNotificationWake?: WorkboardNotificationWakeAuthority;
 
   constructor(
     store: WorkboardCardStore,
@@ -106,17 +108,21 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       dataVersion?: () => number | Promise<number>;
       close?: () => void | Promise<void>;
       runWithWriteAuthority?: WorkboardWriteAuthority;
+      runWithNotificationWake?: WorkboardNotificationWakeAuthority;
       maxRunningPerOwner?: number;
     },
   ) {
     const maxRunningPerOwner = resolveWorkboardOwnerCapacity(stores.maxRunningPerOwner);
     super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
     this.maxRunningPerOwner = maxRunningPerOwner;
+    this.runWithNotificationWake = stores.runWithNotificationWake;
     this.store = this.trackCardStore(store);
     this.boardStore = this.track(stores.boards);
     this.subscriptionStore = {
       ...this.track(stores.subscriptions, { notifyChanges: false }),
       entries: (options) => this.runOperation(() => stores.subscriptions.entries(options)),
+      deliverWakesIfCurrent: (batch) =>
+        this.runOperation(() => stores.subscriptions.deliverWakesIfCurrent(batch)),
       advanceCursorIfCurrent: (...args) =>
         this.runOperation(() => stores.subscriptions.advanceCursorIfCurrent(...args)),
     };

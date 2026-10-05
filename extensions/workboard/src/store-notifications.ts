@@ -1,5 +1,6 @@
 import type {
   WorkboardNotification,
+  WorkboardCard,
   WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
 import type { PersistedWorkboardNotificationSubscription } from "./persistence-types.js";
@@ -8,6 +9,9 @@ import {
   cardSessionKey,
   compareNotifications,
   notificationSequence,
+  notificationDeliveryKey,
+  notificationDeliveryKeys,
+  cardBoardId,
 } from "./store-card-helpers.js";
 import type {
   WorkboardNotificationEventsInput,
@@ -22,6 +26,7 @@ import {
 import { WorkboardWorkflowStore } from "./store-workflow.js";
 
 export class WorkboardNotificationStore extends WorkboardWorkflowStore {
+  private readonly unknownWakeKeys = new Set<string>();
   async subscribeNotifications(
     input: WorkboardNotificationSubscribeInput,
   ): Promise<WorkboardNotificationSubscription> {
@@ -56,7 +61,11 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     }));
   }
 
-  async notificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
+  private async collectNotificationEvents(
+    input: WorkboardNotificationEventsInput = {},
+    snapshot?: WorkboardCard[],
+    wake = false,
+  ): Promise<{
     subscription?: WorkboardNotificationSubscription;
     events: WorkboardNotification[];
   }> {
@@ -84,12 +93,18 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const effectiveSessionKey = subscription?.sessionKey;
     const effectiveRunId = subscription?.runId;
     const events: WorkboardNotification[] = [];
-    const selectedCard = effectiveCardId ? await this.get(effectiveCardId) : undefined;
-    const cards = effectiveCardId
-      ? selectedCard
-        ? [selectedCard]
-        : []
-      : await this.list({ boardId: effectiveBoardId });
+    const selectedCard = !snapshot && effectiveCardId ? await this.get(effectiveCardId) : undefined;
+    const cards = snapshot
+      ? snapshot.filter((card) =>
+          effectiveCardId
+            ? card.id === effectiveCardId
+            : !effectiveBoardId || cardBoardId(card) === effectiveBoardId,
+        )
+      : effectiveCardId
+        ? selectedCard
+          ? [selectedCard]
+          : []
+        : await this.list({ boardId: effectiveBoardId });
     for (const card of cards) {
       if (card.metadata?.archivedAt || (effectiveCardId && card.id !== effectiveCardId)) {
         continue;
@@ -126,6 +141,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
         // Cursor advancement must use the same mixed-sequence ordering as
         // event delivery or valid same-millisecond notifications disappear.
         if (
+          !wake &&
           subscription?.lastEventAt !== undefined &&
           compareNotifications(event, {
             id: subscription.lastEventId ?? "",
@@ -142,8 +158,89 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
         events.push(event);
       }
     }
-    const sorted = events.toSorted(compareNotifications).slice(0, limit);
-    return { ...(subscription ? { subscription } : {}), events: sorted };
+    const sorted = events.toSorted(compareNotifications);
+    return {
+      ...(subscription ? { subscription } : {}),
+      events: wake ? sorted : sorted.slice(0, limit),
+    };
+  }
+
+  async notificationEvents(input: WorkboardNotificationEventsInput = {}) {
+    return await this.collectNotificationEvents(input);
+  }
+
+  async notificationWakeBaseline(): Promise<ReadonlySet<string>> {
+    return notificationDeliveryKeys(await this.list());
+  }
+
+  async deliverNotificationWakes(
+    deliver: (
+      subscription: WorkboardNotificationSubscription,
+      event: WorkboardNotification,
+    ) => boolean,
+    historicalEventKeys: ReadonlySet<string>,
+    assertCurrent: () => void,
+  ): Promise<{ unknownEventCount: number }> {
+    if (!this.runWithNotificationWake) {
+      throw new Error("Notification wakes require their atomic worker effect owner.");
+    }
+    return await this.runWithNotificationWake(assertCurrent, deliver, () =>
+      this.enqueueMutation(async () => {
+        const subscriptions = (await this.listNotificationSubscriptions()).subscriptions.filter(
+          (entry) => entry.wakeSessionKey,
+        );
+        if (!subscriptions.length) {
+          return { unknownEventCount: 0 };
+        }
+        const cards = await this.list();
+        const retainedEventKeys = [...notificationDeliveryKeys(cards)];
+        let unknownEventCount = 0;
+        for (const subscription of subscriptions) {
+          assertCurrent();
+          const result = await this.collectNotificationEvents(
+            { subscriptionId: subscription.id },
+            cards,
+            true,
+          );
+          if (!result.subscription?.wakeSessionKey) {
+            continue;
+          }
+          const expected = result.subscription;
+          const delivered = new Set(expected.deliveredEventIds ?? []);
+          const unique = new Set<string>();
+          const scopeKey = (key: string) =>
+            JSON.stringify([expected.id, expected.wakeSessionKey, key]);
+          const events = result.events
+            .map((notification) => ({ key: notificationDeliveryKey(notification), notification }))
+            .filter(({ key }) => {
+              if (
+                unique.has(key) ||
+                historicalEventKeys.has(key) ||
+                delivered.has(key) ||
+                this.unknownWakeKeys.has(scopeKey(key))
+              ) {
+                return false;
+              }
+              unique.add(key);
+              return true;
+            })
+            .slice(0, 200);
+          if (!events.length) {
+            continue;
+          }
+          const outcome = await this.subscriptionStore.deliverWakesIfCurrent({
+            expected,
+            events,
+            retainedEventKeys,
+          });
+          for (const key of outcome.unknownEventIds) {
+            this.unknownWakeKeys.add(scopeKey(key));
+            unknownEventCount += 1;
+          }
+        }
+        return { unknownEventCount };
+      }),
+    );
   }
 
   async advanceNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{

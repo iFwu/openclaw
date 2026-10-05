@@ -38,7 +38,7 @@ export default definePluginEntry({
     registerWorkboardStoreLifecycle(api, store, async () => {
       await Promise.all(resourceServices.map(async (service) => await service.stop()));
     });
-    const changeEvents = createWorkboardChangeEventService(store);
+    const changeEvents = createWorkboardChangeEventService(store, api.runtime.system);
     resourceServices.push(changeEvents);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,

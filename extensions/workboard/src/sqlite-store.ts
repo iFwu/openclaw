@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -12,7 +13,14 @@ import type {
   WorkboardKeyedStore,
   WorkboardSubscriptionStore,
   WorkboardWriteAuthority,
+  WorkboardNotificationWakeAuthority,
+  WorkboardNotificationWakeBatch,
+  WorkboardNotificationWakeResult,
 } from "./persistence-types.js";
+import {
+  createWorkboardNotificationWakeOwner,
+  type WorkboardNotificationWakeScope,
+} from "./sqlite-notification-wake.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
@@ -29,6 +37,7 @@ type WorkboardSqliteStores = {
   dataVersion(this: void): Promise<number>;
   close(this: void): Promise<void>;
   runWithWriteAuthority: WorkboardWriteAuthority;
+  runWithNotificationWake: WorkboardNotificationWakeAuthority;
 };
 
 export function createWorkboardSqliteStores(options: {
@@ -50,6 +59,7 @@ export function createWorkboardSqliteStores(options: {
   let closing: Promise<void> | undefined;
   const operations = new Set<Promise<unknown>>();
   const writeAuthority = new AsyncLocalStorage<{ active: boolean; assertCurrent?: () => void }>();
+  const notificationWake = new AsyncLocalStorage<WorkboardNotificationWakeScope>();
   async function cleanup() {
     // Rejected admission stays broker-owned; this facade received no lease to release.
     const store = await worker.catch(() => undefined);
@@ -134,6 +144,35 @@ export function createWorkboardSqliteStores(options: {
     }
     return result;
   }
+  async function deliverWakes(
+    connection: number,
+    batch: WorkboardNotificationWakeBatch,
+  ): Promise<WorkboardNotificationWakeResult> {
+    const authority = notificationWake.getStore();
+    if (!authority?.active) {
+      throw new Error("Workboard wake requires its retained host authority.");
+    }
+    const nonce = randomUUID();
+    const owner = createWorkboardNotificationWakeOwner(batch, nonce, databasePath, authority);
+    const store = await worker;
+    try {
+      return unwrapWorkboardSqliteResult(
+        await runSqliteWorkerStoreOperation(
+          store,
+          (scope) =>
+            scope.execute({
+              type: "subscriptions.deliverWakesIfCurrent",
+              input: { connection, batch, nonce },
+            }),
+          undefined,
+          owner.assertCurrent,
+          owner.createAdmission,
+        ),
+      );
+    } catch (error) {
+      return owner.recover(error);
+    }
+  }
   async function run<Args, T>(
     args: Args,
     operation: (connection: number, captured: Args) => Promise<T>,
@@ -159,6 +198,14 @@ export function createWorkboardSqliteStores(options: {
     return (...args) => run(args, operation);
   }
   return {
+    async runWithNotificationWake(assertCurrent, deliver, operation) {
+      const scope: WorkboardNotificationWakeScope = { active: true, assertCurrent, deliver };
+      try {
+        return await notificationWake.run(scope, operation);
+      } finally {
+        scope.active = false;
+      }
+    },
     async runWithWriteAuthority(assertCurrent, operation) {
       const authority: { active: boolean; assertCurrent?: () => void } = {
         active: true,
@@ -221,6 +268,7 @@ export function createWorkboardSqliteStores(options: {
       entries: bindOperation((connection, args) => execute("boards.entries", { connection, args })),
     },
     subscriptions: {
+      deliverWakesIfCurrent: bindOperation((connection, args) => deliverWakes(connection, args[0])),
       advanceCursorIfCurrent: bindOperation((connection, args) =>
         execute("subscriptions.advanceCursorIfCurrent", { connection, args }, true),
       ),

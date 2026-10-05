@@ -7,6 +7,7 @@ import type {
   PersistedWorkboardCard,
   WorkboardCardStore,
   WorkboardWriteAuthority,
+  WorkboardNotificationWakeAuthority,
 } from "../persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "../sqlite-store.js";
@@ -16,8 +17,11 @@ const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint
 
 type WorkboardSqliteTestStores = Omit<
   ReturnType<typeof createWorkboardSqliteStores>,
-  "runWithWriteAuthority"
-> & { runWithWriteAuthority?: WorkboardWriteAuthority };
+  "runWithWriteAuthority" | "runWithNotificationWake"
+> & {
+  runWithWriteAuthority?: WorkboardWriteAuthority;
+  runWithNotificationWake?: WorkboardNotificationWakeAuthority;
+};
 
 type WorkboardSqliteTestOptions = {
   createStores?: (dbPath: string) => WorkboardSqliteTestStores;

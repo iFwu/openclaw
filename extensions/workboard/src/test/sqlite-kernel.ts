@@ -19,7 +19,10 @@ function asyncKeyedStore<T>(store: {
 
 export function createKernelStores(
   dbPath: string,
-): Omit<ReturnType<typeof createWorkboardSqliteStores>, "runWithWriteAuthority"> {
+): Omit<
+  ReturnType<typeof createWorkboardSqliteStores>,
+  "runWithWriteAuthority" | "runWithNotificationWake"
+> {
   const kernel = createWorkboardSqliteKernel(dbPath);
   return {
     ready: Promise.resolve(kernel.dataVersion()),
@@ -40,6 +43,7 @@ export function createKernelStores(
     boards: asyncKeyedStore(kernel.boards),
     subscriptions: {
       ...asyncKeyedStore(kernel.subscriptions),
+      deliverWakesIfCurrent: async (batch) => kernel.subscriptions.deliverWakesIfCurrent(batch),
       advanceCursorIfCurrent: async (...args) =>
         kernel.subscriptions.advanceCursorIfCurrent(...args),
     },
