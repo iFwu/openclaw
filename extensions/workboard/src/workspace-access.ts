@@ -102,7 +102,7 @@ export async function resolveAgentWorkboardWorkspaceRuntime(params: {
   sessionKey: string;
   workspaceDir: string;
   modelProvider?: string;
-  modelId?: string;
+  modelId?: string | null;
   prepareSandboxWorkspaceAuthority: PrepareSandboxWorkspaceAuthority;
 }): Promise<WorkboardTargetWorkspaceRuntime> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);

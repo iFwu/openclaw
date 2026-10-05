@@ -189,6 +189,22 @@ describe("registerWorkboardCli", () => {
     expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
   });
 
+  it("forwards explicit dispatch model/provider without changing the required scopes", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
+    await program.parseAsync(
+      ["workboard", "dispatch", "--model", "KeepAlias", "--provider", "fixture"],
+      { from: "user" },
+    );
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+      "workboard.cards.dispatch",
+      expect.anything(),
+      expect.objectContaining({ model: "KeepAlias", provider: "fixture" }),
+      { mode: "cli", scopes: ["operator.write", "operator.read"] },
+    );
+  });
+
   it("forwards --max-starts to the dispatch gateway call", async () => {
     const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);

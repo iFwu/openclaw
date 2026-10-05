@@ -106,9 +106,13 @@ function resolveWorkspaceAuthorityModel(params: {
     "model" | "modelProvider" | "modelOverride" | "providerOverride"
   >;
   modelProvider?: string;
-  modelId?: string;
+  modelId?: string | null;
 }): { provider: string; model: string } {
-  const selected = resolveSessionModelRef(params.config, params.sessionEntry, params.agentId);
+  const selected = resolveSessionModelRef(
+    params.config,
+    params.modelId === null ? undefined : params.sessionEntry,
+    params.agentId,
+  );
   const explicitProvider = params.modelProvider?.trim();
   const explicitModel = params.modelId?.trim();
   if (!explicitModel) {
@@ -122,9 +126,14 @@ function resolveWorkspaceAuthorityModel(params: {
   return (
     resolveModelRefFromString({
       cfg: params.config,
+      agentId: params.agentId,
       raw,
       defaultProvider,
-      aliasIndex: buildModelAliasIndex({ cfg: params.config, defaultProvider }),
+      aliasIndex: buildModelAliasIndex({
+        cfg: params.config,
+        agentId: params.agentId,
+        defaultProvider,
+      }),
     })?.ref ?? { provider: defaultProvider, model: explicitModel }
   );
 }
@@ -146,7 +155,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   confinedToolNames?: readonly string[];
   requiredToolNames?: readonly string[];
   modelProvider?: string;
-  modelId?: string;
+  modelId?: string | null;
 }): SandboxWorkspaceAuthority {
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,

@@ -327,6 +327,9 @@ async function runWorkboardDispatch(
   const startFailures: WorkboardStartFailure[] = [];
   const cards = await params.store.list();
   const candidates = directCard ? [directCard] : await params.store.list({ boardId });
+  const boards = new Map(
+    (await params.store.listBoards()).boards.map((board) => [board.id, board]),
+  );
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
   const startedOwners = new Set<string>();
   // Allow one fallback per worker slot without draining the queue during an outage.
@@ -354,6 +357,19 @@ async function runWorkboardDispatch(
       continue;
     }
     const sessionKey = workboardSessionKeyForCard(card);
+    // The host owns alias parsing and model authorization. Keep authored syntax intact.
+    const cardModel = card.labels
+      ?.find(
+        (label) => label.trim().toLowerCase().startsWith("model:") && label.trim().slice(6).trim(),
+      )
+      ?.trim()
+      .slice(6)
+      .trim();
+    const explicitModel = params.options?.model?.trim();
+    const selectedModel =
+      explicitModel || cardModel || boards.get(cardBoardId(card))?.defaultModel || null;
+    const selectedProvider = explicitModel ? params.options?.provider : undefined;
+
     let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
@@ -369,8 +385,8 @@ async function runWorkboardDispatch(
         root,
         agentId: card.agentId,
         sessionKey,
-        modelProvider: params.options?.provider,
-        modelId: params.options?.model,
+        modelProvider: selectedProvider,
+        modelId: selectedModel,
         resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
         worktrees: params.worktrees,
       });
@@ -428,6 +444,7 @@ async function runWorkboardDispatch(
         { ownerId, ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds },
         {
           expectedAuthority: {
+            labels: card.labels,
             boardId: cardBoardId(card),
             status: card.status,
             agentId: card.agentId,
@@ -487,9 +504,9 @@ async function runWorkboardDispatch(
           token: claimValue,
         }),
         toolsAlsoAllow: [...WORKBOARD_REQUIRED_WORKER_TOOLS],
-        ...(params.options?.provider ? { provider: params.options.provider } : {}),
-        ...(params.options?.model ? { model: params.options.model } : {}),
-        ...(params.options?.model ? { persistModel: true } : {}),
+        ...(selectedProvider ? { provider: selectedProvider } : {}),
+        model: selectedModel,
+        persistModel: true,
         lane: `workboard:${cardBoardId(card)}:${card.id}`,
         idempotencyKey: runId,
         lightContext: true,

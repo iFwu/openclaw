@@ -283,6 +283,43 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     expect(result.confinementError).toBeUndefined();
   });
 
+  it("uses the target agent alias override for restricted model policy attestation", () => {
+    const config = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
+    config.agents!.defaults!.model = "provider-a/model-a";
+    config.agents!.defaults!.models = { "provider-a/model-a": { alias: "pick" } };
+    config.agents!.entries = { main: { models: { "provider-b/model-b": { alias: "pick" } } } };
+    config.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "workboard_complete"];
+    config.tools!.byProvider = { "provider-a": { deny: ["workboard_complete"] } };
+    const result = resolveSandboxWorkspaceAuthority({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:alias-worker",
+      modelId: "pick",
+      confinedToolNames: ["workboard_complete"],
+      requiredToolNames: ["workboard_complete"],
+    });
+    expect(result.confinementError).toBeUndefined();
+  });
+  it("uses the agent default instead of a prior worker pin for explicit inheritance", () => {
+    const config = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
+    config.agents!.defaults!.model = "provider-a/model-a";
+    config.tools!.byProvider = { "provider-b": { deny: ["workboard_complete"] } };
+    config.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "workboard_complete"];
+    const params = {
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:default-worker",
+      sessionEntry: { providerOverride: "provider-b", modelOverride: "model-b" },
+      confinedToolNames: ["workboard_complete"],
+      requiredToolNames: ["workboard_complete"],
+    };
+    expect(resolveSandboxWorkspaceAuthority(params).confinementError).toContain(
+      "required tool workboard_complete",
+    );
+    expect(
+      resolveSandboxWorkspaceAuthority({ ...params, modelId: null }).confinementError,
+    ).toBeUndefined();
+  });
   it("applies the configured target model's provider policy", () => {
     const config = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
     config.agents!.defaults!.model = "anthropic/claude-sonnet-4-6";

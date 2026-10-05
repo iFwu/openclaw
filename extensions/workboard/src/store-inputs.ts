@@ -97,6 +97,8 @@ export type WorkboardClaimOptions = {
   assertOwnerCurrent?: () => void;
   /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
   expectedAuthority?: {
+    /** Captured dispatcher model label must not change between containment preflight and claim. */
+    labels?: WorkboardCard["labels"];
     boardId: string;
     status: WorkboardCard["status"];
     agentId?: string;
@@ -170,6 +172,7 @@ export type WorkboardBoardInput = {
   color?: unknown;
   clearAppearance?: unknown;
   automationJobId?: unknown;
+  defaultModel?: unknown;
   defaultWorkspace?: unknown;
   orchestration?: unknown;
   archived?: unknown;

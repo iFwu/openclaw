@@ -1929,6 +1929,25 @@ describe("model-selection", () => {
       }
     });
 
+    it.each([
+      { primary: "model-a@work", model: "model-a" },
+      { primary: "model-a@20260920@work", model: "model-a@20260920" },
+      { primary: "model-a@q8_0@work", model: "model-a@q8_0" },
+      { primary: "model-a@20260920", model: "model-a@20260920" },
+      { primary: "model-a@q8_0", model: "model-a@q8_0" },
+    ])(
+      "infers a bare configured provider independently of the auth profile: $primary",
+      ({ primary, model }) => {
+        const cfg = {
+          agents: { defaults: { model: primary, models: { [`provider-a/${model}`]: {} } } },
+        } as OpenClawConfig;
+        expect(resolveDefaultModelForAgent({ cfg, allowPluginNormalization: false })).toEqual({
+          provider: "provider-a",
+          model,
+        });
+      },
+    );
+
     it("normalizes bare configured default model strings with manifest policies", () => {
       const cfg = {
         agents: {

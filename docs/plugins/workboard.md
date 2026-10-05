@@ -541,3 +541,11 @@ review or blocked; intermediate `agent_end` retry attempts do not complete the c
 A terminal failure releases the claim and writes one bounded failure notification
 in the same canonical status mutation. Stale run events and manual status holds
 remain fenced by the current lifecycle association and CAS owner.
+
+Worker model selection is per dispatch: an explicit dispatch model (including
+Control UI Run Codex/Claude) wins, followed by the card's first nonempty `model:`
+label, then the board's `defaultModel`, then the target agent default. Aliases
+are passed unchanged to the host for resolution and authorization. Selected models
+are pinned only on the worker session for interactive continuation.
+Board metadata accepts `defaultModel: null` to clear the default; omitted values
+preserve it. CLI dispatch supports `--model` and optional `--provider`.

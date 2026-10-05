@@ -184,3 +184,10 @@ to pin the selection for later interactive turns. The host applies the session-o
 model patch before starting the run and revalidates authority after it completes.
 Omitting this flag retains the ordinary single-run override; persistence never
 changes agent or global model defaults or bypasses plugin model allowlists.
+
+A newly dispatched worker can explicitly inherit its target agent's native default
+with `model: null, persistModel: true` (without `provider`). This clears a prior
+worker-session override, uses the native default model and auth profile, and still
+requires the existing override authority and model allowlist. The host binds the
+selection to the current Gateway configuration and revalidates it before admission.
+Ordinary runs that omit `model` do not clear a retained session selection.

@@ -741,14 +741,14 @@ export function resolveConfiguredModelRef(
       return aliasCandidate.ref;
     }
 
-    if (!trimmed.includes("/")) {
-      const normalizedTrimmed = normalizeLowercaseStringOrEmpty(trimmed);
+    if (!primaryWithoutProfile.includes("/")) {
+      const normalizedTrimmed = normalizeLowercaseStringOrEmpty(primaryWithoutProfile);
       const needsOpenRouterCompatManifestPlugins =
         normalizedTrimmed === "openrouter:auto" ||
         normalizedTrimmed === OPENROUTER_COMPAT_FREE_ALIAS;
       const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
         ...params,
-        raw: trimmed,
+        raw: primaryWithoutProfile,
         manifestPlugins: needsOpenRouterCompatManifestPlugins
           ? manifestPluginContext.get()
           : manifestPlugins,
@@ -759,7 +759,7 @@ export function resolveConfiguredModelRef(
 
       let inferredProvider = inferUniqueProviderFromConfiguredModels({
         cfg: params.cfg,
-        model: trimmed,
+        model: primaryWithoutProfile,
         agentId: params.agentId,
         allowManifestNormalization: false,
         manifestPlugins,
@@ -775,14 +775,14 @@ export function resolveConfiguredModelRef(
         inferredProvider =
           inferUniqueProviderFromConfiguredModels({
             cfg: params.cfg,
-            model: trimmed,
+            model: primaryWithoutProfile,
             agentId: params.agentId,
             allowManifestNormalization: params.allowManifestNormalization,
             manifestPlugins: inferredProviderManifestPlugins,
           }) ?? inferredProvider;
       }
       if (inferredProvider) {
-        return normalizeModelRef(inferredProvider, trimmed, {
+        return normalizeModelRef(inferredProvider, primaryWithoutProfile, {
           allowManifestNormalization: inferredProviderManifestPlugins
             ? params.allowManifestNormalization
             : false,

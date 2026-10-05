@@ -28,6 +28,8 @@ type GatewayOptions = JsonOptions & {
 
 type DispatchOptions = GatewayOptions & {
   maxStarts?: number;
+  model?: string;
+  provider?: string;
 };
 
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
@@ -251,6 +253,8 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       .command("dispatch")
       .description("Promote ready cards and start worker runs through the Gateway")
       .option("--board <id>", "Dispatch a single board")
+      .option("--model <model>", "Explicit worker model, ahead of card and board defaults")
+      .option("--provider <provider>", "Provider for the explicit worker model")
       .option(
         "--max-starts <count>",
         "Maximum new worker runs to start in this pass (default 3)",
@@ -266,6 +270,8 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           : "workboard.cards.dispatchWithOptions";
       const result = await callWorkboardGateway(method, options, {
         boardId: options.board,
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.provider ? { provider: options.provider } : {}),
         ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
       });
       if (options.json) {

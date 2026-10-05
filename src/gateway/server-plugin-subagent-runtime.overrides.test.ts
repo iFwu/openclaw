@@ -3,6 +3,7 @@ import {
   normalizeAgentCommandModelRef,
   parseAgentCommandModelRef,
 } from "../agents/command/model-ref.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -78,7 +79,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function run(override: { provider?: string; model?: string; persistModel?: boolean }) {
+function run(override: { provider?: string; model?: string | null; persistModel?: boolean }) {
   const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
   const runtime = createGatewaySubagentRuntime(
     () => context,
@@ -94,6 +95,105 @@ function run(override: { provider?: string; model?: string; persistModel?: boole
 }
 
 describe("plugin subagent initial override policy", () => {
+  it.each([
+    { primary: "fixture/fast", alias: "fast", target: "fast", profile: undefined },
+    { primary: "gpt@prod", alias: "gpt@prod", target: "real", profile: "prod" },
+  ])(
+    "inherits the canonical agent default rather than explicit parsing: $primary",
+    async ({ primary, alias, target, profile }) => {
+      config.agents = {
+        entries: { worker: { model: primary } },
+        defaults: {
+          models: { "fixture/fast": {}, "fixture/real": { alias } },
+        },
+      };
+      const provider = config.models!.providers!.fixture!;
+      const original = provider.models[0]!;
+      provider.models = [
+        { ...original, id: "fast", name: "Fast" },
+        { ...original, id: "real", name: "Real" },
+      ];
+      config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = [
+        `fixture/${target}${profile ? `@${profile}` : ""}`,
+      ];
+      expect(resolveDefaultModelForAgent({ cfg: config, agentId: "worker" })).toEqual({
+        provider: "fixture",
+        model: target,
+      });
+      await run({ model: null, persistModel: true });
+      expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["sessions.patch", "agent"]);
+      expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+        model: null,
+        modelSelectionScope: "session",
+      });
+      expect(dispatch.mock.calls[1]?.[1]).not.toHaveProperty("model");
+      expect(dispatch.mock.calls[1]?.[1]).not.toHaveProperty("provider");
+    },
+  );
+  it.each([
+    { model: "model-a", suffix: "@work" },
+    { model: "model-a@20260920", suffix: "@work" },
+    { model: "model-a@q8_0", suffix: "@work" },
+    { model: "model-a@20260920", suffix: "" },
+    { model: "model-a@q8_0", suffix: "" },
+  ])(
+    "authorizes the native default model/profile tuple: $model$suffix",
+    async ({ model, suffix }) => {
+      config.agents!.entries!.worker!.model = `fixture/${model}${suffix}`;
+      config.models!.providers!.fixture!.api = "openai-completions";
+      config.models!.providers!.fixture!.models[0]!.id = model;
+      config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = [
+        `fixture/${model}${suffix}`,
+      ];
+      await run({ model: null, persistModel: true });
+      expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["sessions.patch", "agent"]);
+      expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+        model: null,
+        modelSelectionScope: "session",
+      });
+      expect(dispatch.mock.calls[1]?.[1]).not.toHaveProperty("model");
+    },
+  );
+  it.each(["fixture/model-a", "fixture/model-a@personal"])(
+    "rejects a different default profile authorization: %s",
+    async (allowed) => {
+      config.agents!.entries!.worker!.model = "fixture/model-a@work";
+      config.models!.providers!.fixture!.api = "openai-completions";
+      config.models!.providers!.fixture!.models[0]!.id = "model-a";
+      config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = [allowed];
+      await expect(run({ model: null, persistModel: true })).rejects.toThrow(/not allowlisted/u);
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+  it("does not authorize default inheritance when model override policy is disabled", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowModelOverride = false;
+    await expect(run({ model: null, persistModel: true })).rejects.toThrow(/not trusted/u);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it("checks the inherited default against the plugin allowlist before clearing a pin", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/other"];
+    await expect(run({ model: null, persistModel: true })).rejects.toThrow(/not allowlisted/u);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it("rechecks the default configuration after clearing the prior pin", async () => {
+    config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/permitted"];
+    dispatch.mockImplementationOnce(async () => {
+      config = { ...config };
+      return { runId: "patch-result" };
+    });
+    await expect(run({ model: null, persistModel: true })).rejects.toThrow(
+      /configuration changed/u,
+    );
+    expect(dispatch.mock.calls.map(([method]) => method)).toEqual(["sessions.patch"]);
+  });
+  it("rejects ambiguous default inheritance and an unpersisted null request", async () => {
+    await expect(run({ model: null })).rejects.toThrow(/session-only/u);
+    await expect(run({ provider: "fixture", model: null, persistModel: true })).rejects.toThrow(
+      /without a provider/u,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("rechecks the exact configuration owner after persistence before starting", async () => {
     config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];
     dispatch.mockImplementationOnce(async () => {

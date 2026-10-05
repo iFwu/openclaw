@@ -299,6 +299,8 @@ export type WorkboardBoardMetadata = {
   icon?: string;
   color?: string;
   automationJobId?: string;
+  /** Explicit default worker model, resolved and authorized by the host at dispatch. */
+  defaultModel?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
@@ -313,6 +315,8 @@ export type WorkboardBoardSummary = {
   icon?: string;
   color?: string;
   automationJobId?: string;
+  /** Explicit default worker model, resolved and authorized by the host at dispatch. */
+  defaultModel?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   total: number;

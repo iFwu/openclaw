@@ -123,6 +123,16 @@ export function normalizeBoardMetadata(
       throw new Error("automation job id must be 128 characters or fewer.");
     }
   }
+  let defaultModel = fallback?.defaultModel;
+  if (Object.hasOwn(input, "defaultModel")) {
+    defaultModel =
+      input.defaultModel === null
+        ? undefined
+        : normalizeBoundedString(input.defaultModel, undefined, 256, "board default model");
+    if (input.defaultModel !== null && !defaultModel) {
+      throw new Error("board default model must be a non-empty string or null.");
+    }
+  }
   const defaultWorkspace = Object.hasOwn(input, "defaultWorkspace")
     ? normalizeWorkspace(input.defaultWorkspace, fallback?.defaultWorkspace)
     : fallback?.defaultWorkspace;
@@ -141,6 +151,7 @@ export function normalizeBoardMetadata(
     ...(icon ? { icon } : {}),
     ...(color ? { color } : {}),
     ...(automationJobId ? { automationJobId } : {}),
+    ...(defaultModel ? { defaultModel } : {}),
     ...(defaultWorkspace ? { defaultWorkspace } : {}),
     ...(orchestration ? { orchestration } : {}),
     createdAt: fallback?.createdAt ?? now,

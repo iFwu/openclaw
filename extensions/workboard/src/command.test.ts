@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardCommand } from "./command.js";
 import type { WorkboardStore } from "./store.js";
-import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
+import {
+  createWorkboardSqliteTestStore,
+  createWorkboardSqliteTestHarness,
+} from "./test/sqlite-store.js";
 import { resolveCommandWorkboardWorkspaceAccess } from "./workspace-access.js";
 
 function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): OpenClawPluginApi {
@@ -76,6 +79,66 @@ async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {
 }
 
 describe("handleWorkboardCommand", () => {
+  it("refuses a board model write when owner authority changes during board lookup", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const api = createApi();
+    await store.upsertBoard({ id: "default", defaultModel: "KeepAlias" });
+    let active = true;
+    const lookup = stores.boards.lookup.bind(stores.boards);
+    vi.spyOn(stores.boards, "lookup").mockImplementationOnce(async (key) => {
+      const result = await lookup(key);
+      active = false;
+      return result;
+    });
+    await expect(
+      runWorkboardCommand({
+        api,
+        store,
+        args: "model ChangedAlias",
+        context: {
+          senderIsOwner: true,
+          assertOwnerCurrent: () => {
+            if (!active) {
+              throw new Error("board owner revoked");
+            }
+          },
+        },
+      }),
+    ).rejects.toThrow("board owner revoked");
+    expect(
+      (await store.listBoards()).boards.find((board) => board.id === "default")?.defaultModel,
+    ).toBe("KeepAlias");
+  });
+  it("reads board models without write permission but only the owner can update them", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const api = createApi();
+    await store.upsertBoard({ id: "default", defaultModel: "KeepAlias" });
+    expect(await runWorkboardCommand({ api, store, args: "model" })).toMatchObject({
+      text: "Board default default model: KeepAlias",
+    });
+    expect(await runWorkboardCommand({ api, store, args: "model rejected" })).toMatchObject({
+      isError: true,
+    });
+    expect((await store.listBoards()).boards.find((b) => b.id === "default")?.defaultModel).toBe(
+      "KeepAlias",
+    );
+    expect(
+      await runWorkboardCommand({
+        api,
+        store,
+        args: "model ChangedAlias",
+        context: { senderIsOwner: true },
+      }),
+    ).toMatchObject({ text: "Board default default model: ChangedAlias" });
+    expect(
+      await runWorkboardCommand({
+        api,
+        store,
+        args: "model off",
+        context: { senderIsOwner: true },
+      }),
+    ).toMatchObject({ text: "Board default default model: agent default" });
+  });
   it("uses the configured default agent workspace for unscoped local commands", () => {
     expect(
       resolveCommandWorkboardWorkspaceAccess({
@@ -177,7 +240,12 @@ describe("handleWorkboardCommand", () => {
     );
     expect(prepareWorkspaceAuthority).toHaveBeenCalledWith(
       expect.objectContaining({
-        requiredToolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+        requiredToolNames: [
+          "workboard_heartbeat",
+          "workboard_proof",
+          "workboard_complete",
+          "workboard_block",
+        ],
       }),
     );
   });

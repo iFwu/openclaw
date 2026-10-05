@@ -58,6 +58,12 @@ export function createWorkboardOrchestrationTools(params: {
             maxLength: 128,
           }),
         ),
+        defaultModel: Type.Optional(
+          Type.Union([Type.String({ minLength: 1, maxLength: 256 }), Type.Null()], {
+            description:
+              "Default worker model; null clears it. Host model authorization still applies.",
+          }),
+        ),
         defaultWorkspace: workspaceField(),
         orchestration: Type.Optional(
           strictObject({

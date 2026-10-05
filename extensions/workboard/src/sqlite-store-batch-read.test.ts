@@ -447,6 +447,7 @@ describe("workboard sqlite batch card read", () => {
             ? {
                 name: `Board ${id}`,
                 automationJobId: `job-${id}`,
+                defaultModel: `KeepAlias-${id}`,
                 defaultWorkspace: { kind: "scratch" as const },
                 orchestration: { autoDecompose: false },
                 archivedAt: 0,

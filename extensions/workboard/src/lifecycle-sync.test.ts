@@ -12,7 +12,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
-import { createLinkedCard } from "./lifecycle-sync.test-support.js";
+import { createDeferred, createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
@@ -209,7 +209,7 @@ describe("Workboard gateway lifecycle sync", () => {
       await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
       const card = await createLinkedCard(store, { boardId: "planning" });
       const boards = await store.listBoards();
-      const lookup = Promise.withResolvers<typeof boards>();
+      const lookup = createDeferred<typeof boards>();
       vi.spyOn(store, "listBoards").mockReturnValueOnce(lookup.promise);
       const request = vi.fn().mockResolvedValue({ ok: true, queued: true, runId: "nudge" });
       const service = createWorkboardAutomationNudgeService({ store });
@@ -290,7 +290,7 @@ describe("Workboard gateway lifecycle sync", () => {
         resolveRun = resolve;
       },
     );
-    const entered = Promise.withResolvers<void>();
+    const entered = createDeferred<void>();
     const request = vi.fn(() => {
       entered.resolve();
       return run;

@@ -358,11 +358,63 @@ export function createGatewaySubagentRuntime(
         pluginId,
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
-      const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
-      if (params.persistModel === true && (!allowOverride || !params.model?.trim())) {
+      const inheritAgentDefault = params.model === null;
+      if (inheritAgentDefault && (params.persistModel !== true || params.provider)) {
+        throw new Error(
+          "Inheriting an agent default requires session-only model persistence without a provider.",
+        );
+      }
+      const defaultContext = inheritAgentDefault
+        ? getInProcessGatewayRequestContext(resolveGatewayContext)
+        : undefined;
+      if (inheritAgentDefault && !defaultContext) {
+        throw new Error("Agent default inheritance requires a live Gateway binding.");
+      }
+      const defaultConfig = defaultContext?.getRuntimeConfig();
+      const assertDefaultCurrent = () => {
+        assertCurrent?.();
+        runtimeLifetime?.throwIfAborted();
+        if (
+          defaultContext &&
+          (getInProcessGatewayRequestContext(resolveGatewayContext) !== defaultContext ||
+            defaultContext.getRuntimeConfig() !== defaultConfig)
+        ) {
+          throw new Error("Agent default configuration changed before admission. Retry the run.");
+        }
+      };
+      let inheritedSelection: ModelRef | undefined;
+      let inheritedAuthProfileId: string | undefined;
+      if (defaultConfig) {
+        const [
+          { resolveDefaultModelForAgent },
+          { resolveSessionAgentId, resolveNativeModelPrimary },
+        ] = await Promise.all([
+          import("../agents/model-selection-config.js"),
+          import("../agents/agent-scope.js"),
+        ]);
+        assertDefaultCurrent();
+        const agentId = resolveSessionAgentId({
+          config: defaultConfig,
+          sessionKey: params.sessionKey,
+        });
+        inheritedSelection = resolveDefaultModelForAgent({ cfg: defaultConfig, agentId });
+        // Match native command default credential selection without reparsing its model identity.
+        inheritedAuthProfileId = splitTrailingAuthProfile(
+          resolveNativeModelPrimary(defaultConfig, agentId) ?? "",
+        ).profile;
+      }
+      const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(
+        inheritedSelection
+          ? { provider: inheritedSelection.provider, model: inheritedSelection.model }
+          : { provider: params.provider, model: params.model ?? undefined },
+      );
+      if (
+        params.persistModel === true &&
+        (!allowOverride || (!inheritAgentDefault && !params.model?.trim()))
+      ) {
         throw new Error("Persisting a subagent model requires an authorized explicit model.");
       }
-      let sessionMutationCommitGuard = assertCurrent;
+      let sessionMutationCommitGuard = inheritAgentDefault ? assertDefaultCurrent : assertCurrent;
       if (policy) {
         const context = getInProcessGatewayRequestContext(resolveGatewayContext);
         if (!context) {
@@ -370,8 +422,7 @@ export function createGatewaySubagentRuntime(
         }
         const cfg = context.getRuntimeConfig();
         sessionMutationCommitGuard = () => {
-          assertCurrent?.();
-          runtimeLifetime?.throwIfAborted();
+          assertDefaultCurrent();
           if (
             getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||
             context.getRuntimeConfig() !== cfg
@@ -387,7 +438,8 @@ export function createGatewaySubagentRuntime(
           import("../plugins/plugin-metadata-snapshot.js"),
         ]);
         sessionMutationCommitGuard();
-        const model = expectDefined(params.model, "authorized model override");
+        const model =
+          inheritedSelection?.model ?? expectDefined(params.model, "authorized model override");
         const agentId = agentScope.resolveSessionAgentId({
           config: cfg,
           sessionKey: params.sessionKey,
@@ -400,15 +452,21 @@ export function createGatewaySubagentRuntime(
                 env: process.env,
                 workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
               });
-        const selection = params.provider
-          ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
-              manifestPlugins,
-            })
-          : modelRefs.parseAgentCommandModelRef(cfg, agentId, model, "", { manifestPlugins });
+        const selection =
+          inheritedSelection ??
+          (params.provider
+            ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
+                manifestPlugins,
+              })
+            : modelRefs.parseAgentCommandModelRef(cfg, agentId, model, "", { manifestPlugins }));
         if (!selection) {
           throw new Error("Invalid model override.");
         }
-        const authProfileId = params.provider ? undefined : splitTrailingAuthProfile(model).profile;
+        const authProfileId = inheritedSelection
+          ? inheritedAuthProfileId
+          : params.provider
+            ? undefined
+            : splitTrailingAuthProfile(model).profile;
         assertPluginSubagentModelAllowed(policy, selection, pluginId, authProfileId);
         // The command owns parsing. Replacing its input with this result would
         // apply non-idempotent provider aliases again; retain the authorized syntax.

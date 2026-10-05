@@ -296,6 +296,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         ...(board.icon ? { icon: board.icon } : {}),
         ...(board.color ? { color: board.color } : {}),
         ...(board.automationJobId ? { automationJobId: board.automationJobId } : {}),
+        ...(board.defaultModel ? { defaultModel: board.defaultModel } : {}),
         ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
         ...(board.orchestration ? { orchestration: board.orchestration } : {}),
         total: 0,
@@ -342,14 +343,17 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     };
   }
 
-  async upsertBoard(input: WorkboardBoardInput): Promise<WorkboardBoardMetadata> {
+  async upsertBoard(
+    input: WorkboardBoardInput,
+    assertOwnerCurrent?: () => void,
+  ): Promise<WorkboardBoardMetadata> {
     return await this.enqueueMutation(async () => {
       const id = normalizeBoardIdRequired(input.id);
       const existing = await this.boardStore.lookup(id);
       const board = normalizeBoardMetadata({ ...input, id }, existing?.board);
       await this.boardStore.register(id, { version: 1, board });
       return board;
-    });
+    }, assertOwnerCurrent);
   }
 
   async archiveBoard(id: unknown, archived: unknown = true): Promise<WorkboardBoardMetadata> {

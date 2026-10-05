@@ -101,7 +101,7 @@ async function handleWorkboardCommand(params: {
     sessionKey: string,
     workspaceDir: string,
     modelProvider?: string,
-    modelId?: string,
+    modelId?: string | null,
   ) => WorkboardTargetWorkspaceRuntime | Promise<WorkboardTargetWorkspaceRuntime>;
   workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
@@ -113,7 +113,8 @@ async function handleWorkboardCommand(params: {
         "/workboard show <card-id>",
         "/workboard create <title>",
         "/workboard move <card-id> --status <status>",
-        "/workboard dispatch",
+        "/workboard dispatch [--board <id>] [--model <alias>]",
+        "/workboard model [<alias>|off] [--board <id>]",
       ].join("\n"),
     };
   }
@@ -131,11 +132,37 @@ async function handleWorkboardCommand(params: {
     const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
     return card ? { text: formatCardDetails(card) } : { text: error, isError: true };
   }
-  if (action === "create" || action === "move" || action === "dispatch") {
+  if (
+    action === "create" ||
+    action === "move" ||
+    action === "dispatch" ||
+    (action === "model" && rest[0] && !rest[0].startsWith("--"))
+  ) {
     const accessError = requireWriteAccess(params);
     if (accessError) {
       return accessError;
     }
+  }
+  if (action === "model") {
+    const boardIndex = rest.indexOf("--board");
+    const boardId = boardIndex >= 0 ? rest[boardIndex + 1] : "default";
+    if (!boardId) {
+      return { text: "Usage: /workboard model [<alias>|off] [--board <id>]", isError: true };
+    }
+    const model = rest[0]?.startsWith("--") ? undefined : rest[0];
+    if (!model) {
+      const board = (await params.store.listBoards()).boards.find((entry) => entry.id === boardId);
+      return { text: `Board ${boardId} default model: ${board?.defaultModel ?? "agent default"}` };
+    }
+    params.assertOwnerCurrent?.();
+    const board = await params.store.upsertBoard(
+      {
+        id: boardId,
+        defaultModel: model === "off" ? null : model,
+      },
+      params.assertOwnerCurrent,
+    );
+    return { text: `Board ${boardId} default model: ${board.defaultModel ?? "agent default"}` };
   }
   if (action === "create") {
     const title = rest.join(" ").trim();
@@ -182,12 +209,19 @@ async function handleWorkboardCommand(params: {
     };
   }
   if (action === "dispatch") {
+    const modelIndex = rest.indexOf("--model");
+    const boardIndex = rest.indexOf("--board");
+    if ((modelIndex >= 0 && !rest[modelIndex + 1]) || (boardIndex >= 0 && !rest[boardIndex + 1])) {
+      return { text: "Usage: /workboard dispatch [--board <id>] [--model <alias>]", isError: true };
+    }
     const workspaceAccess = params.workspaceAccess ?? { unrestricted: true };
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,
       subagent: params.api.runtime.subagent,
       worktrees: params.api.runtime.worktrees,
       options: {
+        ...(modelIndex >= 0 ? { model: rest[modelIndex + 1] } : {}),
+        ...(boardIndex >= 0 ? { boardId: rest[boardIndex + 1] } : {}),
         materializeWorktree: true,
         resolveAgentWorkspace: params.resolveAgentWorkspace,
         resolveAgentWorkspaceRuntime: params.resolveAgentWorkspaceRuntime,

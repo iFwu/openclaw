@@ -19,7 +19,7 @@ export type ResolveAgentWorkspaceRuntime = (
   sessionKey: string,
   workspaceDir: string,
   modelProvider?: string,
-  modelId?: string,
+  modelId?: string | null,
 ) => WorkboardTargetWorkspaceRuntime | Promise<WorkboardTargetWorkspaceRuntime>;
 
 export function managedWorktreeName(cardId: string): string {
@@ -145,7 +145,7 @@ export async function assertRestrictedWorkboardTarget(params: {
   agentId?: string;
   sessionKey: string;
   modelProvider?: string;
-  modelId?: string;
+  modelId?: string | null;
   resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
   worktrees?: Pick<
     PluginRuntime["worktrees"],

@@ -226,6 +226,25 @@ async function withWorkboardSqliteDatabase(
 }
 
 describe("WorkboardStore", () => {
+  it("persists board default model across metadata updates and clears only explicit null", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await store.upsertBoard({
+      id: "model-default",
+      name: "Model board",
+      defaultModel: "KeepAlias",
+    });
+    expect(
+      (await store.listBoards()).boards.find((b) => b.id === "model-default")?.defaultModel,
+    ).toBe("KeepAlias");
+    await store.upsertBoard({ id: "model-default", description: "Updated description" });
+    expect(
+      (await store.listBoards()).boards.find((b) => b.id === "model-default")?.defaultModel,
+    ).toBe("KeepAlias");
+    await store.upsertBoard({ id: "model-default", defaultModel: null });
+    expect(
+      (await store.listBoards()).boards.find((b) => b.id === "model-default")?.defaultModel,
+    ).toBeUndefined();
+  });
   it("emits one monotonic change after each visible mutation", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const changes = vi.fn();

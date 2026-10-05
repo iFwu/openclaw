@@ -186,7 +186,8 @@ export function createWorkboardDispatchHandler(params: {
   ) => {
     try {
       const cardId = options.directCard ? readId(requestParams) : undefined;
-      const { boardId, maxStarts: rawMaxStarts } = asRecord(requestParams);
+      const request = asRecord(requestParams);
+      const { boardId, maxStarts: rawMaxStarts } = request;
       if (!options.supportsMaxStarts && rawMaxStarts !== undefined) {
         throw new Error("maxStarts requires workboard.cards.dispatchWithOptions.");
       }
@@ -194,14 +195,12 @@ export function createWorkboardDispatchHandler(params: {
         ? readOptionalPositiveInteger(rawMaxStarts, "maxStarts")
         : undefined;
       const provider =
-        options.directCard &&
-        typeof requestParams.provider === "string" &&
-        requestParams.provider.trim()
-          ? requestParams.provider.trim()
+        typeof request.provider === "string" && request.provider.trim()
+          ? request.provider.trim()
           : undefined;
       const model =
-        options.directCard && typeof requestParams.model === "string" && requestParams.model.trim()
-          ? requestParams.model.trim()
+        typeof request.model === "string" && request.model.trim()
+          ? request.model.trim()
           : undefined;
       const result = await dispatchAndStartWorkboardCards({
         store: params.store,

@@ -552,7 +552,9 @@ describe("workboard gateway methods", () => {
     registerWorkboardGatewayMethods({ api, store });
 
     const respond = vi.fn();
-    await methods.get("workboard.cards.dispatch")?.handler({ respond } as never);
+    await methods
+      .get("workboard.cards.dispatch")
+      ?.handler({ respond, context: { getRuntimeConfig: () => ({}) } } as never);
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
@@ -630,7 +632,11 @@ describe("workboard gateway methods", () => {
     const handler = methods.get("workboard.cards.dispatchWithOptions")?.handler;
 
     const respond = vi.fn();
-    await handler?.({ params: { boardId: "capped", maxStarts: 4 }, respond } as never);
+    await handler?.({
+      params: { boardId: "capped", maxStarts: 4 },
+      respond,
+      context: { getRuntimeConfig: () => ({}) },
+    } as never);
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]?.started).toHaveLength(4);
@@ -649,9 +655,11 @@ describe("workboard gateway methods", () => {
       ),
     );
     const defaultRespond = vi.fn();
-    await methods
-      .get("workboard.cards.dispatch")
-      ?.handler({ params: { boardId: "legacy" }, respond: defaultRespond } as never);
+    await methods.get("workboard.cards.dispatch")?.handler({
+      params: { boardId: "legacy" },
+      respond: defaultRespond,
+      context: { getRuntimeConfig: () => ({}) },
+    } as never);
     expect(defaultRespond.mock.calls[0]?.[1]?.started).toHaveLength(3);
     expect(run).toHaveBeenCalledTimes(7);
     const startedCards = (await store.list()).filter((card) => card.status === "running");

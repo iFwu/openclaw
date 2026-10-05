@@ -99,7 +99,9 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const expectedAuthority = options.expectedAuthority;
       if (
         expectedAuthority &&
-        (guarded.status !== expectedAuthority.status ||
+        ((expectedAuthority.labels !== undefined &&
+          !isDeepStrictEqual(guarded.labels, expectedAuthority.labels)) ||
+          guarded.status !== expectedAuthority.status ||
           cardBoardId(guarded) !== expectedAuthority.boardId ||
           guarded.agentId !== expectedAuthority.agentId ||
           !isDeepStrictEqual(

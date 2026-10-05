@@ -23,8 +23,9 @@ type SubagentRunParams = {
   /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
   toolsAlsoAllow?: string[];
   provider?: string;
-  model?: string;
-  /** Persist an authorized explicit model on this session for later interactive turns. */
+  /** With persistModel, null clears a prior override and inherits the target agent default. */
+  model?: string | null;
+  /** Persist an authorized selection on this session without changing agent defaults. */
   persistModel?: boolean;
   extraSystemPrompt?: string;
   /** Use the bounded subagent prompt instead of the full conversation prompt. */
@@ -174,7 +175,7 @@ export type PluginRuntime = PluginRuntimeCore & {
       confinedToolNames?: readonly string[];
       requiredToolNames?: readonly string[];
       modelProvider?: string;
-      modelId?: string;
+      modelId?: string | null;
       sessionKey: string;
     }) => {
       sandboxed: boolean;
@@ -187,7 +188,7 @@ export type PluginRuntime = PluginRuntimeCore & {
       confinedToolNames?: readonly string[];
       requiredToolNames?: readonly string[];
       modelProvider?: string;
-      modelId?: string;
+      modelId?: string | null;
       sessionKey: string;
       workspaceDir: string;
     }) => Promise<{

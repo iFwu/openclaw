@@ -271,6 +271,64 @@ registerSessionNativeRuntimeConsentTests({
 registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
+  it("clears a stale worker pin for default inheritance without changing global defaults", async () => {
+    cfg.agents!.defaults!.modelSelectionScope = "global";
+    const sessionKey = "agent:main:subagent:default-inheritance";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "default-inheritance", updatedAt: 1 },
+    );
+    expect(
+      (
+        await patchSession({
+          key: sessionKey,
+          model: "openai/gpt-5.6-sol",
+          modelSelectionScope: "session",
+        })
+      )[0],
+    ).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })?.modelOverride).toBe("gpt-5.6-sol");
+    expect(
+      (await patchSession({ key: sessionKey, model: null, modelSelectionScope: "session" }))[0],
+    ).toBe(true);
+    const inherited = loadSessionEntry({ agentId: "main", sessionKey });
+    expect(inherited?.modelOverride).toBeUndefined();
+    expect(inherited?.providerOverride).toBeUndefined();
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("replaces a prior worker session pin with the selected agent default without changing global defaults", async () => {
+    cfg.agents!.defaults!.modelSelectionScope = "global";
+    const sessionKey = "agent:main:subagent:redispatched-worker";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "redispatched-worker", updatedAt: 1 },
+    );
+    expect(
+      (
+        await patchSession({
+          key: sessionKey,
+          model: "openai/gpt-5.6-sol",
+          modelSelectionScope: "session",
+        })
+      )[0],
+    ).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })?.modelOverride).toBe("gpt-5.6-sol");
+    expect(
+      (
+        await patchSession({
+          key: sessionKey,
+          model: "anthropic/claude-opus-4-6",
+          modelSelectionScope: "session",
+        })
+      )[0],
+    ).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    });
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
   it("allows a session-only pin without changing a configured global default", async () => {
     cfg.agents!.defaults!.modelSelectionScope = "global";
     const sessionKey = "agent:main:subagent:workboard-continuation";

@@ -40,6 +40,7 @@ const WORKBOARD_SCHEMA_SQL = `
       icon TEXT,
       color TEXT,
       automation_job_id TEXT,
+      default_model TEXT,
       default_workspace_json TEXT,
       orchestration_json TEXT,
       created_at INTEGER NOT NULL,
@@ -262,6 +263,7 @@ const WORKBOARD_SCHEMA_SQL = `
 function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(WORKBOARD_SCHEMA_SQL);
   ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
+  ensureColumn(db, "workboard_boards", "default_model", "default_model TEXT");
   ensureColumn(
     db,
     "workboard_cards",
