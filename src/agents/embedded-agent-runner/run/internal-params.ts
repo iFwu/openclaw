@@ -78,6 +78,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
   Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+    /** Exact attempt resource closure installed by the native attempt owner. */
+    waitForOwnerCleanup?: () => Promise<void>;
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */
     completionCheck?: EmbeddedRunCompletionCheck;

@@ -1,5 +1,6 @@
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { captureEmbeddedVisibleTurnOwner } from "../../agents/embedded-agent-runner/runs.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
@@ -56,6 +57,9 @@ export function captureUninjectableOwnerGrace(params: {
   }
   return async () => {
     if (await owner.waitForEnd(UNINJECTABLE_OWNER_GRACE_MS)) {
+      if (owner.waitForCleanup) {
+        await racePromiseWithAbortSignal(owner.waitForCleanup(), signal);
+      }
       return;
     }
     if (!isCurrentInput()) {
@@ -64,8 +68,11 @@ export function captureUninjectableOwnerGrace(params: {
     if (!owner.preempt()) {
       return;
     }
-    // Observe the same handle, never wait on or abort a rediscovered successor.
-    // A timeout does not certify cleanup or release another owner's write fence.
-    await owner.waitForEnd(15_000);
+    if (owner.waitForCleanup) {
+      // The incoming source may cancel its wait, but cannot certify the old resources closed.
+      await racePromiseWithAbortSignal(owner.waitForCleanup(), signal);
+    } else {
+      await owner.waitForEnd(15_000);
+    }
   };
 }

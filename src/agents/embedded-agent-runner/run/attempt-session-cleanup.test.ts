@@ -1,17 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   cleanupEmbeddedAttemptResources: vi.fn(),
   clearToolSearchCatalog: vi.fn(),
   flushEmbeddedAttemptTrajectoryRecorder: vi.fn(),
   warn: vi.fn(),
+  error: vi.fn(),
 }));
 
 vi.mock("../../tool-search.js", () => ({
   clearToolSearchCatalog: hoisted.clearToolSearchCatalog,
 }));
 vi.mock("../logger.js", () => ({
-  log: { warn: hoisted.warn },
+  log: { warn: hoisted.warn, error: hoisted.error },
 }));
 vi.mock("./attempt-trajectory-flush.js", () => ({
   flushEmbeddedAttemptTrajectoryRecorder: hoisted.flushEmbeddedAttemptTrajectoryRecorder,
@@ -22,7 +23,12 @@ vi.mock("./attempt-subscription-cleanup.js", () => ({
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import {
+  cleanupEmbeddedAttemptSessionPhase,
+  createEmbeddedAttemptSessionSettleTracker,
+} from "./attempt-session-settle.js";
+import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
 const attempt = {
   runId: "run-1",
@@ -58,6 +64,69 @@ function createInput(overrides: Record<string, unknown> = {}) {
 }
 
 describe("cleanupEmbeddedAttemptSessionPhase", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("joins actual accepted writes, prompt settlement and retained runtime disposal", async () => {
+    vi.useFakeTimers();
+    const actual = await vi.importActual<typeof import("./attempt-subscription-cleanup.js")>(
+      "./attempt-subscription-cleanup.js",
+    );
+    hoisted.cleanupEmbeddedAttemptResources.mockImplementation(
+      actual.cleanupEmbeddedAttemptResources,
+    );
+    const transcriptLifecycle = createEmbeddedAttemptTranscriptLifecycle({});
+    const writeGate = createDeferred();
+    const writeEntered = createDeferred();
+    const promptGate = createDeferred();
+    const runtimeGate = createDeferred();
+    const runtimeEntered = createDeferred();
+    const dispose = vi.fn();
+    const tracker = createEmbeddedAttemptSessionSettleTracker({ abort: async () => {} });
+    const prompt = tracker.trackPromptSettlePromise(promptGate.promise);
+    const write = transcriptLifecycle.withTranscriptWrite(async () => {
+      writeEntered.resolve();
+      await writeGate.promise;
+    });
+    await writeEntered.promise;
+    const input = createInput({
+      transcriptLifecycle,
+      requirePhysicalDrain: true,
+      session: { dispose },
+      sessionManager: SessionManager.inMemory(),
+      buildAbortSettlePromise: tracker.buildAbortSettlePromise,
+      bundleMcpRuntime: {
+        dispose: async () => {
+          runtimeEntered.resolve();
+          await runtimeGate.promise;
+        },
+      },
+    });
+    const complete = vi.fn();
+    const cleanup = cleanupEmbeddedAttemptSessionPhase(input as never).then(complete);
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(dispose).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      writeGate.resolve();
+      await write;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispose).not.toHaveBeenCalled();
+      promptGate.resolve();
+      await prompt;
+      await runtimeEntered.promise;
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(complete).not.toHaveBeenCalled();
+      runtimeGate.resolve();
+      await cleanup;
+      expect(complete).toHaveBeenCalledOnce();
+    } finally {
+      writeGate.resolve();
+      promptGate.resolve();
+      runtimeGate.resolve();
+      await Promise.allSettled([write, prompt, cleanup]);
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.cleanupEmbeddedAttemptResources.mockResolvedValue(undefined);

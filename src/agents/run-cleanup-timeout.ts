@@ -16,21 +16,30 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // Cleanup failures follow the originating run across nested async cleanup.
 const oneShotCleanup = resolveGlobalSingleton(
   Symbol.for("openclaw.oneShotCleanupOutcome"),
-  () => new AsyncLocalStorage<{ uncertain: boolean }>(),
+  () => new AsyncLocalStorage<{ uncertain: boolean; resourceUncertain: boolean }>(),
 );
 
-export function recordAgentCleanupFailure(): void {
+type AgentCleanupFailureKind = "resource" | "reporting";
+
+export function recordAgentCleanupFailure(kind: AgentCleanupFailureKind = "resource"): void {
   const receipt = oneShotCleanup.getStore();
   if (receipt) {
     receipt.uncertain = true;
+    if (kind === "resource") {
+      receipt.resourceUncertain = true;
+    }
   }
 }
 
 export function createAgentCleanupScope() {
-  const receipt = { uncertain: false };
+  const receipt = { uncertain: false, resourceUncertain: false };
   return {
     get outcome(): "closed" | "uncertain" {
       return receipt.uncertain ? "uncertain" : "closed";
+    },
+    /** Failure classification; actual owned-work drain still precedes any release. */
+    get resourceOutcome(): "closed" | "uncertain" {
+      return receipt.resourceUncertain ? "uncertain" : "closed";
     },
     async run<T>(operation: () => Promise<T>): Promise<T> {
       const parent = oneShotCleanup.getStore();
@@ -40,6 +49,9 @@ export function createAgentCleanupScope() {
         // Nested executors cannot certify an outer owner after child cleanup failed.
         if (receipt.uncertain && parent) {
           parent.uncertain = true;
+        }
+        if (receipt.resourceUncertain && parent) {
+          parent.resourceUncertain = true;
         }
       }
     },
@@ -137,6 +149,7 @@ export async function runOwnedAgentCleanup(params: {
 }
 
 type AgentCleanupStepParams = {
+  failureKind?: AgentCleanupFailureKind;
   runId: string;
   sessionId: string;
   step: string;
@@ -168,7 +181,7 @@ async function settleAgentCleanupStep(
   const observedCleanupPromise = cleanupPromise
     .then(() => "done" as const)
     .catch((error: unknown) => {
-      recordAgentCleanupFailure();
+      recordAgentCleanupFailure(params.failureKind);
       const phase = timedOut ? "rejected after timeout" : "failed";
       params.log.warn(
         `agent cleanup ${phase}: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,
@@ -188,7 +201,7 @@ async function settleAgentCleanupStep(
     clearTimeout(timeoutHandle);
   }
   if (result === "timeout") {
-    recordAgentCleanupFailure();
+    recordAgentCleanupFailure(params.failureKind);
     const details = resolveCleanupTimeoutDetails(params.getTimeoutDetails);
     params.log.warn(
       `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${details}`,

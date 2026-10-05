@@ -5,6 +5,7 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   bindOperatorModelExecution,
   readRunOperatorAuthority,
@@ -19,7 +20,12 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
-import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import {
+  createAgentCleanupScope,
+  recordAgentCleanupFailure,
+  runOwnedAgentCleanup,
+} from "../../run-cleanup-timeout.js";
+import { isNativeCompletionOwnerForRun } from "../../subagents/announce/subagent-announce-handoff.js";
 import {
   clearToolSearchCatalog,
   type ToolSearchCatalogRef,
@@ -53,6 +59,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type {
@@ -64,6 +71,17 @@ import type {
 export async function runEmbeddedAttempt(
   input: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const nativeCompletion = isNativeCompletionOwnerForRun({
+    handoff: input.trustedInternalHandoff,
+    inputProvenance: input.inputProvenance,
+    internalEvents: input.internalEvents,
+    sessionKey: input.sessionKey,
+    sessionId: input.sessionId,
+    provider: input.provider,
+    model: input.modelId,
+  });
+  const closed = nativeCompletion ? createDeferredCore() : undefined;
+  const cleanupScope = nativeCompletion ? createAgentCleanupScope() : undefined;
   const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
     provider: input.provider,
     model: input.modelId,
@@ -83,22 +101,40 @@ export async function runEmbeddedAttempt(
         ? AbortSignal.any([attempt.abortSignal, parentSignal])
         : parentSignal
       : attempt.abortSignal;
-    const result = await runWithAsyncWorkResources((onAcquired) =>
-      runEmbeddedAttemptOwned(
-        attempt,
-        (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
-        resourceAbortSignal,
-      ),
-    );
+    const run = () =>
+      runWithAsyncWorkResources(
+        (onAcquired) =>
+          runEmbeddedAttemptOwned(
+            closed ? { ...attempt, waitForOwnerCleanup: () => closed.promise } : attempt,
+            (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
+            resourceAbortSignal,
+          ),
+        {
+          onClosed: closed
+            ? (error) => {
+                if (error === undefined && cleanupScope?.resourceOutcome === "closed") {
+                  closed.resolve();
+                } else {
+                  // Uncertain cleanup cannot certify a successor writer, even after a timer.
+                  log.warn(`native completion cleanup remains fenced: runId=${input.runId}`);
+                }
+              }
+            : undefined,
+        },
+      );
+    const result = await (cleanupScope ? cleanupScope.run(run) : run());
     modelExecution?.assertCurrent();
     return result;
   } finally {
+    if (closed) {
+      await closed.promise;
+    }
     modelExecution?.release();
   }
 }
 
 async function runEmbeddedAttemptOwned(
-  input: EmbeddedRunAttemptParams,
+  input: EmbeddedRunAttemptInternalParams,
   retainToolCleanup: (release: () => Promise<void>) => void,
   resourceAbortSignal: AbortSignal | undefined,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -507,6 +543,7 @@ async function runEmbeddedAttemptOwned(
           attempt: params,
           ...sessionResources,
           transcriptLifecycle: sessionLock.transcriptLifecycle,
+          requirePhysicalDrain: params.waitForOwnerCleanup !== undefined,
           bundleMcpRuntime: sessionMcpRuntime,
           bundleLspRuntime: sessionLspRuntime,
           toolSearchCatalogRef,

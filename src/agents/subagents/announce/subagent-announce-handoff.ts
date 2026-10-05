@@ -1,4 +1,5 @@
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 
@@ -25,6 +26,8 @@ export type SubagentCompletionToolHandoffRegistration = {
   targetSessionKey: string;
   targetSessionId: string;
   idempotencyKey: string;
+  /** Original native producer liveness; never transported as agent JSON. */
+  isCurrent?: () => boolean;
   settleBatch?: SubagentSettleToolPolicyBatch;
 };
 
@@ -103,4 +106,29 @@ export function isTrustedSubagentCompletionHandoffForRun(params: {
     handoff.provider === params.provider?.trim().toLowerCase() &&
     handoff.model === params.model?.trim()
   );
+}
+
+const nativeCompletionOwners = resolveGlobalSingleton<WeakMap<object, () => boolean>>(
+  Symbol.for("openclaw.nativeCompletionOwners"),
+  () => new WeakMap(),
+);
+
+/** Marks only the object redeemed by the host registry, without adding tool rights. */
+export function bindNativeCompletionOwner<T extends TrustedSubagentCompletionHandoff>(
+  handoff: T,
+  isCurrent: () => boolean,
+): T {
+  nativeCompletionOwners.set(handoff, isCurrent);
+  return handoff;
+}
+
+export function isNativeCompletionOwnerForRun(
+  params: Parameters<typeof isTrustedSubagentCompletionHandoffForRun>[0],
+): boolean {
+  const current = params.handoff && nativeCompletionOwners.get(params.handoff);
+  try {
+    return current !== undefined && current() && isTrustedSubagentCompletionHandoffForRun(params);
+  } catch {
+    return false;
+  }
 }

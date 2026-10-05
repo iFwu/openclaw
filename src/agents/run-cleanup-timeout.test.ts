@@ -211,6 +211,34 @@ describe("agent cleanup timeout", () => {
     },
   );
 
+  it.each(["resource", "reporting"] as const)(
+    "keeps overall uncertainty while classifying nested %s failure",
+    async (failureKind) => {
+      const outer = createAgentCleanupScope();
+      const inner = createAgentCleanupScope();
+      await outer.run(() =>
+        inner.run(() =>
+          runAgentCleanupStep({
+            runId: "nested-resource-classification",
+            sessionId: "isolated",
+            step: "captured-owner",
+            failureKind,
+            log,
+            cleanup: async () => {
+              throw new Error("settled cleanup failure");
+            },
+          }),
+        ),
+      );
+      expect(inner.outcome).toBe("uncertain");
+      expect(outer.outcome).toBe("uncertain");
+      const resources = failureKind === "resource" ? "uncertain" : "closed";
+      expect(inner.resourceOutcome).toBe(resources);
+      expect(outer.resourceOutcome).toBe(resources);
+      expect(log.warn).toHaveBeenCalled();
+    },
+  );
+
   it("logs cleanup rejection without throwing", async () => {
     await expect(
       runAgentCleanupStep({

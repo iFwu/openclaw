@@ -468,6 +468,7 @@ export async function sendSubagentAnnounceDirectly(
                         targetSessionKey: canonicalRequesterSessionKey,
                         targetSessionId: requesterActivity.sessionId,
                         idempotencyKey: params.directIdempotencyKey,
+                        isCurrent: isCompletionDeliveryAllowed,
                         ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
                           ? {
                               settleBatch: {

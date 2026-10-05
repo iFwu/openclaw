@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isNativeCompletionOwnerForRun } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import {
   cancelSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
@@ -25,6 +26,48 @@ function consume(handoffId: string | undefined, overrides: Record<string, unknow
 }
 
 describe("subagent completion tool handoff", () => {
+  it("keeps native source liveness private and rejects a cloned or mismatched handoff", () => {
+    let current = true;
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      isCurrent: () => current,
+    });
+    const handoff = consume(handoffId);
+    const params = {
+      handoff,
+      inputProvenance: {
+        kind: "inter_session" as const,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: registration.sourceSessionKey,
+      },
+      sessionKey: registration.targetSessionKey,
+      sessionId: registration.targetSessionId,
+      provider: "openai",
+      model: "glm-4.5",
+    };
+    expect(isNativeCompletionOwnerForRun(params)).toBe(true);
+    expect(
+      isNativeCompletionOwnerForRun({ ...params, handoff: handoff ? { ...handoff } : undefined }),
+    ).toBe(false);
+    expect(isNativeCompletionOwnerForRun({ ...params, sessionId: "successor-instance" })).toBe(
+      false,
+    );
+    expect(isNativeCompletionOwnerForRun({ ...params, model: "other-model" })).toBe(false);
+    current = false;
+    expect(isNativeCompletionOwnerForRun(params)).toBe(false);
+  });
+
+  it("cannot redeem a revoked original native producer", () => {
+    let current = true;
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      isCurrent: () => current,
+    });
+    current = false;
+    expect(consume(handoffId)).toBeUndefined();
+    cancelSubagentCompletionToolHandoff(handoffId);
+  });
+
   it("consumes the exact capability once and binds it to the admitted route", () => {
     const handoffId = registerSubagentCompletionToolHandoff(registration);
     expect(consume(handoffId)).toEqual({

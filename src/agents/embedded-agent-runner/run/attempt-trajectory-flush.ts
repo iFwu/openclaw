@@ -17,6 +17,7 @@ export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
     runId: params.runId,
     sessionId: params.sessionId,
     step: "openclaw-trajectory-flush",
+    failureKind: "reporting",
     log: params.log,
     env: params.env,
     timeoutMs: params.timeoutMs,

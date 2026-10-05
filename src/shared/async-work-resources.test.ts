@@ -5,6 +5,54 @@ import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "./async-work
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work resources", () => {
+  it("reports physical closure only after the captured resources actually release", async () => {
+    const owner = new AsyncWorkScope();
+    const cleanupStarted = createDeferredCore();
+    const release = createDeferredCore();
+    const onClosed = vi.fn();
+    const options = { cancelOnError: false, onClosed };
+    const result = owner.run(() =>
+      runWithAsyncWorkResources(async (onAcquired) => {
+        onAcquired({
+          release: async () => {
+            cleanupStarted.resolve();
+            await release.promise;
+          },
+        });
+        return "logical-result";
+      }, options),
+    );
+    try {
+      expect(await result).toBe("logical-result");
+      await cleanupStarted.promise;
+      expect(onClosed).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await owner.drain();
+    }
+    expect(onClosed).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("reports owned cleanup failure without certifying physical closure", async () => {
+    const owner = new AsyncWorkScope();
+    const failure = new Error("captured resource failed to close");
+    const onClosed = vi.fn();
+    const options = { cancelOnError: false, onClosed };
+    const result = owner.run(() =>
+      runWithAsyncWorkResources(async (onAcquired) => {
+        onAcquired({
+          release: () => {
+            throw failure;
+          },
+        });
+        return "logical-result";
+      }, options),
+    );
+    expect(await result).toBe("logical-result");
+    await owner.drain();
+    expect(onClosed).toHaveBeenCalledExactlyOnceWith(failure);
+  });
+
   it("returns the default logical result while its owner still joins cleanup", async () => {
     const owner = new AsyncWorkScope();
     const cleanupStarted = createDeferredCore();

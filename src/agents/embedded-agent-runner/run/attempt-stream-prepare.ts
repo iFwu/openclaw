@@ -27,6 +27,7 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
+import { isNativeCompletionOwnerForRun } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
@@ -533,6 +534,17 @@ function prepareStream(
   };
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
+  const isNativeCompletion = () =>
+    attempt.waitForOwnerCleanup !== undefined &&
+    isNativeCompletionOwnerForRun({
+      handoff: attempt.trustedInternalHandoff,
+      inputProvenance: attempt.inputProvenance,
+      internalEvents: attempt.internalEvents,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
+      provider: attempt.provider,
+      model: attempt.modelId,
+    });
   const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
@@ -570,7 +582,21 @@ function prepareStream(
     cancelPendingUserInput,
     preemptByVisibleTurn: heartbeatReplyOperation
       ? () => heartbeatReplyOperation.supersede()
-      : undefined,
+      : isNativeCompletion()
+        ? () => {
+            if (
+              !isNativeCompletion() ||
+              externalAbortAccepted ||
+              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) !== queueHandle ||
+              input.runAbortController.signal.aborted
+            ) {
+              return false;
+            }
+            abortActiveRunExternally("superseded");
+            return true;
+          }
+        : undefined,
+    waitForVisibleTurnCleanup: isNativeCompletion() ? attempt.waitForOwnerCleanup : undefined,
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,

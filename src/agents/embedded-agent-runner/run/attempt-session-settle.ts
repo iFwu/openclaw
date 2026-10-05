@@ -71,6 +71,7 @@ export type EmbeddedAttemptSessionResources = {
 type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   attempt: EmbeddedRunAttemptParams;
   transcriptLifecycle: AttemptTranscriptLifecycle;
+  requirePhysicalDrain?: boolean;
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
@@ -131,6 +132,10 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       catalogRef: input.toolSearchCatalogRef,
     });
     await input.transcriptLifecycle.beginCleanup();
+    if (input.requirePhysicalDrain) {
+      await input.transcriptLifecycle.waitForDrain();
+      await input.buildAbortSettlePromise();
+    }
     // Cancellation can arrive during trajectory flushing or the transcript drain.
     // Read it only after both waits before deciding whether to wait for idle.
     const cleanupState = projectAgentRunAttemptTerminal(input.state.terminal);

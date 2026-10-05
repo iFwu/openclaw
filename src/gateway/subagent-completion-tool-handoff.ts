@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { bindNativeCompletionOwner } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
@@ -47,6 +48,7 @@ function normalizeRegistration(
     targetSessionKey,
     targetSessionId,
     idempotencyKey,
+    ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
     ...(settleBatch
       ? { settleBatch: { ...settleBatch, sourceSessionKeys: [...settleBatch.sourceSessionKeys] } }
       : {}),
@@ -128,6 +130,7 @@ export function consumeSubagentCompletionToolHandoff(params: {
   const entry = handoffs.get(handoffId);
   if (
     !entry ||
+    entry.isCurrent?.() === false ||
     params.sourceTool !== (entry.settleBatch ? "subagent_settle" : "subagent_announce") ||
     entry.settleBatch?.isCurrent() === false ||
     (entry.settleBatch
@@ -141,14 +144,17 @@ export function consumeSubagentCompletionToolHandoff(params: {
     return undefined;
   }
   handoffs.delete(handoffId);
-  return {
-    kind: "subagent-completion",
-    sourceSessionKey,
-    ...(sourceSessionId ? { sourceSessionId } : {}),
-    targetSessionKey,
-    targetSessionId,
-    provider,
-    model,
-    ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
-  };
+  return bindNativeCompletionOwner(
+    {
+      kind: "subagent-completion",
+      sourceSessionKey,
+      ...(sourceSessionId ? { sourceSessionId } : {}),
+      targetSessionKey,
+      targetSessionId,
+      provider,
+      model,
+      ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
+    },
+    () => entry.isCurrent?.() !== false && entry.settleBatch?.isCurrent() !== false,
+  );
 }

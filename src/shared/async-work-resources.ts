@@ -14,7 +14,7 @@ export async function runWithAsyncWorkResources<T>(
     onAcquired: (resources: AsyncWorkResources) => void,
     captureWorkContext: () => void,
   ) => Promise<T>,
-  options?: { cancelOnError: boolean },
+  options?: { cancelOnError?: boolean; onClosed?: (error?: unknown) => void },
 ): Promise<T> {
   const result = createDeferredCore<T>();
   const trackOwner = captureAsyncWorkTracker();
@@ -64,6 +64,12 @@ export async function runWithAsyncWorkResources<T>(
         await resources?.release();
       }
     }
-  }).catch(result.reject);
+  }).then(
+    () => options?.onClosed?.(),
+    (error: unknown) => {
+      options?.onClosed?.(error);
+      result.reject(error);
+    },
+  );
   return await result.promise;
 }

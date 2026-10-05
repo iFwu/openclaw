@@ -16,6 +16,8 @@ export type LifecycleOwner = {
 export type EmbeddedAttemptTranscriptLifecycle = {
   withTranscriptWrite<T>(run: () => Promise<T> | T): Promise<T>;
   beginCleanup(): Promise<void>;
+  /** Exact accepted-write closure, independent of the teardown reporting budget. */
+  waitForDrain(): Promise<void>;
   dispose(): Promise<void>;
 };
 
@@ -33,6 +35,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   let disposed = false;
   let lifecycle = Promise.resolve();
   let cleanupDrain: Promise<void> | undefined;
+  let actualDrain: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
   let pendingWrites = 0;
   let teardownBudgetLogged = false;
@@ -181,11 +184,10 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     // the queued drain would re-run() the instance with no later disable to release
     // it. Attaching the release to the drain itself keeps bounded teardown and only
     // frees context that no admitted callback can still observe. See #141122.
-    cleanupDrain = settleWithinTeardownBudget(
-      serializeLifecycle(() => {
-        lifecycleOwner.disable();
-      }),
-    );
+    actualDrain = serializeLifecycle(() => {
+      lifecycleOwner.disable();
+    });
+    cleanupDrain = settleWithinTeardownBudget(actualDrain);
     await cleanupDrain;
   };
 
@@ -213,6 +215,10 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       return operation;
     },
     beginCleanup,
+    waitForDrain: async () => {
+      await beginCleanup();
+      await actualDrain;
+    },
     dispose: async () => {
       const currentOwner = lifecycleOwner.getStore();
       if (currentOwner?.active) {

@@ -9,6 +9,7 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { captureUninjectableOwnerGrace } from "./agent-runner-uninjectable-owner.js";
@@ -32,7 +33,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function incoming(owner = true) {
+function incoming(owner = true, signal?: AbortSignal) {
   const run = createQueueTestRun({
     prompt: "Please report progress.",
     messageId: `current-user-${++nextInputId}`,
@@ -47,6 +48,7 @@ function incoming(owner = true) {
       profileId: "owner",
       scopes: ["operator.write"],
       source: {},
+      signal,
       assertCurrent: () => {},
     });
     run.operatorAuthority = authority;
@@ -79,17 +81,103 @@ function steer(
   });
 }
 
-function rawOwner(preemptable = true) {
+function rawOwner(preemptable = true, waitForVisibleTurnCleanup?: () => Promise<void>) {
   const supersede = vi.fn(() => true);
   const handle = {
     ...createEmbeddedRunHandle({ runId: "captured-internal-run" }),
     ...(preemptable ? { preemptByVisibleTurn: supersede } : {}),
+    waitForVisibleTurnCleanup,
   };
   setActiveEmbeddedRun(sessionId, handle, key);
   return { handle, supersede };
 }
 
 describe("trusted user input while an exact raw owner has no injection target", () => {
+  it("keeps both user inputs ordered until the captured resources actually close", async () => {
+    vi.useFakeTimers();
+    const cleanup = createDeferredCore();
+    const { handle, supersede } = rawOwner(true, () => cleanup.promise);
+    supersede.mockImplementation(() => {
+      clearActiveEmbeddedRun(sessionId, handle);
+      return true;
+    });
+    const followup = vi.fn(async (_run: FollowupRun) => {});
+    const first = incoming();
+    const second = incoming();
+    const work = [steer(first, followup), steer(second, followup)];
+    try {
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(supersede).toHaveBeenCalledOnce();
+      expect(followup).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await Promise.all(work);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(followup.mock.calls.map(([run]) => run.messageId)).toEqual([
+        first.run.messageId,
+        second.run.messageId,
+      ]);
+    } finally {
+      cleanup.resolve();
+      await Promise.allSettled(work);
+    }
+  });
+
+  it("never mistakes early unregister for physical writer closure", async () => {
+    vi.useFakeTimers();
+    const cleanup = createDeferredCore();
+    const { handle, supersede } = rawOwner(true, () => cleanup.promise);
+    const done = vi.fn();
+    const input = incoming();
+    const grace = captureUninjectableOwnerGrace({
+      sessionId,
+      sessionKey: key,
+      followupRun: input.run,
+      sessionCtx: input.sessionCtx,
+    });
+    const work = grace?.().then(done);
+    clearActiveEmbeddedRun(sessionId, handle);
+    try {
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(supersede).not.toHaveBeenCalled();
+      expect(done).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await work;
+      expect(done).toHaveBeenCalledOnce();
+    } finally {
+      cleanup.resolve();
+      await work;
+    }
+  });
+
+  it("lets the original user cancel its wait without claiming resources closed", async () => {
+    vi.useFakeTimers();
+    const cleanup = createDeferredCore();
+    const controller = new AbortController();
+    const { handle, supersede } = rawOwner(true, () => cleanup.promise);
+    supersede.mockImplementation(() => {
+      clearActiveEmbeddedRun(sessionId, handle);
+      return true;
+    });
+    const input = incoming(true, controller.signal);
+    const grace = captureUninjectableOwnerGrace({
+      sessionId,
+      sessionKey: key,
+      followupRun: input.run,
+      sessionCtx: input.sessionCtx,
+    });
+    const work = grace?.();
+    void work?.catch(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(supersede).toHaveBeenCalledOnce();
+      controller.abort();
+      await expect(work).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      cleanup.resolve();
+      await Promise.allSettled([work]);
+    }
+  });
+
   it("observes native handle grace on the same mocked clock", async () => {
     vi.useFakeTimers();
     const { handle, supersede } = rawOwner();

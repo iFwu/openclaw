@@ -1158,12 +1158,14 @@ export function captureEmbeddedVisibleTurnOwner(sessionId: string):
       sessionId: string;
       sessionKey?: string;
       waitForEnd: (ms: number) => Promise<boolean>;
+      waitForCleanup?: () => Promise<void>;
       preempt: () => boolean;
     }
   | undefined {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const preempt = handle?.preemptByVisibleTurn;
+  const waitForCleanup = handle?.waitForVisibleTurnCleanup;
   if (!handle || !registration || !preempt || !isEmbeddedRunHandleInProgress(handle)) {
     return undefined;
   }
@@ -1171,6 +1173,7 @@ export function captureEmbeddedVisibleTurnOwner(sessionId: string):
     sessionId: registration.sessionId,
     sessionKey: registration.sessionKey,
     waitForEnd: (ms) => waitForCurrentEmbeddedAgentRunEnd(registration.sessionId, ms, handle),
+    waitForCleanup: waitForCleanup ? () => waitForCleanup.call(handle) : undefined,
     preempt: () => {
       if (
         ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) !== handle ||

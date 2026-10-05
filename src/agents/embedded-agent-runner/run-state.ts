@@ -51,8 +51,10 @@ export type EmbeddedAgentQueueHandle = {
   ) => Promise<boolean>;
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
-  /** Exact heartbeat owner retained after its reply-operation registration clears. */
+  /** Native producer capability retained after its reply-operation registration clears. */
   readonly preemptByVisibleTurn?: () => boolean;
+  /** Exact captured attempt resources, not registry disappearance or a reporting budget. */
+  readonly waitForVisibleTurnCleanup?: () => Promise<void>;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
