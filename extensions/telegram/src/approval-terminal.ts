@@ -74,6 +74,35 @@ function appendCanonicalSubject(
   }
 }
 
+/** Guard previews are bounded after host sanitization, which can expand control escapes. */
+export function compactGuardPreview(value: string | undefined): string {
+  const chars = Array.from((value ?? "").replace(/\s+/gu, " ").trim());
+  return chars.length <= 100 ? chars.join("") : `${chars.slice(0, 99).join("")}…`;
+}
+
+export function formatGuardApprovalId(id: string): string {
+  return id.replace(/^plugin:/, "").slice(0, 8);
+}
+
+function guardTerminalText(
+  headline: string,
+  approvalId: string,
+  description: string | undefined,
+): string {
+  const lines = description?.split("\n") ?? [];
+  const risk = lines.find((line) => line.startsWith("风险："));
+  const preview = compactGuardPreview(
+    lines.filter((line) => !line.startsWith("风险：") && !line.startsWith("限时放行：")).join(" "),
+  );
+  return finalizeTerminalText(
+    [
+      [headline, `ID：${formatGuardApprovalId(approvalId)}`, risk].filter(Boolean).join(" · "),
+      preview,
+      "/guard show 查看详情",
+    ].filter(Boolean),
+  );
+}
+
 /** Render the canonical first-answer result returned to a Telegram callback surface. */
 export function buildTelegramCanonicalApprovalTerminalText(params: {
   result: ApprovalResolveResult;
@@ -95,6 +124,18 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
     }
   }
   const approvalId = approval.id || params.fallbackApprovalId;
+  if (
+    approval.status === "expired" &&
+    approval.presentation?.kind === "plugin" &&
+    approval.presentation.pluginId === "approval-guard"
+  ) {
+    return guardTerminalText(
+      `⏱️ 已过期（未执行） · ${approval.presentation.title}`,
+      approvalId,
+      approval.presentation.description,
+    );
+  }
+
   const lines = [
     params.result.applied ? "✅ Approval resolved here" : "ℹ️ Approval already resolved",
     `Canonical result: ${formatCanonicalResult(approval)}`,
@@ -173,6 +214,15 @@ export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalVi
 export function buildTelegramNativeExpiredApprovalText(view: ExpiredApprovalView): string {
   if (view.approvalKind === "system-agent") {
     return "⏱️ OpenClaw change expired. No change was made.";
+  }
+
+  if (view.approvalKind === "plugin" && view.pluginId === "approval-guard") {
+    // Local timers do not establish the authoritative execution outcome.
+    return guardTerminalText(
+      `⏱️ 此卡已到期 · ${view.title}`,
+      view.approvalId,
+      view.description ?? undefined,
+    );
   }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [

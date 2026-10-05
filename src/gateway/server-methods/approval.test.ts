@@ -32,6 +32,7 @@ import {
 } from "../exec-approval-manager.test-support.js";
 import { insertOperatorApproval } from "../operator-approval-store.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
+import { publishAppliedApprovalResolution } from "./approval-publication.js";
 import {
   cancelAgentRuntimeBoundApprovals,
   cancelUnboundRunApprovals,
@@ -128,6 +129,28 @@ function approvalFromResult(result: unknown) {
 }
 
 describe("unified approval handlers", () => {
+  it("preserves plugin expiry for the native subscriber instead of rendering denial", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = await registerPlugin(managers.plugin, { id: "plugin:expired-card" });
+    await managers.plugin.expire(pending.record.id);
+    const record = await getOperatorApproval({ id: pending.record.id, databaseOptions });
+    expect(record?.status).toBe("expired");
+    if (!record) {
+      throw new Error("expected durable expired record");
+    }
+    const context = createContext();
+    await publishAppliedApprovalResolution({ record, liveRecord: pending.record, context });
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "plugin",
+      expect.objectContaining({ id: pending.record.id, terminalStatus: "expired" }),
+    );
+    const wireCall = vi.mocked(context.broadcastToConnIds).mock.calls[0];
+    expect(wireCall?.[0]).toBe("plugin.approval.resolved");
+    expect(wireCall?.[1]).not.toHaveProperty("terminalStatus");
+    await expect(pending.decision).resolves.toBeNull();
+  });
+
   afterEach(async () => {
     vi.restoreAllMocks();
     await cleanupApprovalHandlerFixtures();

@@ -299,6 +299,45 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
+  it("waits for in-flight plugin card delivery before finalizing expiry", async () => {
+    const delivery = createDeferred<Array<{ id: string }>>();
+    const finalizeExpired = vi.fn(async () => undefined);
+    const finalizeResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved & { terminalStatus?: "expired" }
+    >({
+      label: "test/plugin-expiry",
+      clientDisplayName: "Test Plugin Expiry",
+      cfg: {},
+      nowMs: () => 1000,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => delivery.promise,
+      finalizeExpired,
+      finalizeResolved,
+    });
+    const request = createPluginReplayRequest("plugin:in-flight-expiry");
+    const sending = runtime.handleRequested(request);
+    await runtime.handleResolved({
+      id: request.id,
+      decision: "deny",
+      ts: 2000,
+      terminalStatus: "expired",
+    });
+    expect(finalizeExpired).not.toHaveBeenCalled();
+    delivery.resolve([{ id: "original-card" }]);
+    await sending;
+    expect(finalizeExpired).toHaveBeenCalledWith({
+      request: expect.objectContaining({ id: request.id }),
+      entries: [{ id: "original-card" }],
+    });
+    expect(finalizeResolved).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
   it("routes a system-agent expiry event through expiry finalization", async () => {
     const finalizedExpired = vi.fn(async () => undefined);
     const finalizedResolved = vi.fn(async () => undefined);

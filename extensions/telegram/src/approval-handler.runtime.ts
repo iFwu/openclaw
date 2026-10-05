@@ -22,8 +22,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatUtcTimestamp, formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import {
+  compactGuardPreview,
+  formatGuardApprovalId,
   buildTelegramNativeExpiredApprovalText,
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
@@ -132,6 +135,56 @@ function buildPendingPayload(params: {
           ]
         : decisionButtons.length > 0
           ? [decisionButtons]
+          : [],
+    };
+  }
+  if (params.view.approvalKind === "plugin" && params.view.pluginId === "approval-guard") {
+    const view = params.view;
+    const seconds = Math.max(0, Math.ceil((params.request.expiresAtMs - params.nowMs) / 1000));
+    const expiresIn = seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟` : `${seconds} 秒`;
+    const expiresAt = new Date(params.request.expiresAtMs);
+    const deadline =
+      formatZonedTimestamp(expiresAt, {
+        timeZone: params.cfg.agents?.defaults?.userTimezone,
+        displaySeconds: true,
+      }) ?? formatUtcTimestamp(expiresAt, { displaySeconds: true });
+    const labels = {
+      "allow-once": "仅本次允许",
+      "allow-always": "限时放行",
+      deny: "拒绝",
+    };
+    return {
+      text: [
+        [
+          view.title,
+          `ID：${formatGuardApprovalId(params.request.id)}`,
+          view.description?.split("\n").find((line) => line.startsWith("风险：")),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        compactGuardPreview(
+          view.description
+            ?.split("\n")
+            .filter((line) => !line.startsWith("风险：") && !line.startsWith("限时放行："))
+            .join(" "),
+        ),
+        seconds > 0
+          ? `⏳ 截止：${deadline}（${expiresIn}内有效） · ${view.actions.some((action) => action.decision === "allow-always") ? (view.description?.split("\n").find((line) => line.startsWith("限时放行：")) ?? "可限时放行") : "仅本次"} · /guard show`
+          : `⏱️ 此卡已到期 · 截止：${deadline} · /guard show`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      buttons:
+        seconds > 0
+          ? resolveTelegramInlineButtons({
+              presentation: buildApprovalPresentationFromActionDescriptors(
+                view.actions.map((action) =>
+                  Object.assign({}, action, {
+                    label: action.decision ? labels[action.decision] : action.label,
+                  }),
+                ),
+              ),
+            })
           : [],
     };
   }

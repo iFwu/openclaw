@@ -101,7 +101,11 @@ export async function publishAppliedApprovalResolution(params: {
     runSynchronousSideEffect({
       context: params.context,
       approvalKind: nativeApprovalKind,
-      run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
+      run: () =>
+        params.context.approvalEvents?.publishResolved(
+          nativeApprovalKind,
+          params.record.status === "expired" ? { ...event, terminalStatus: "expired" } : event,
+        ),
     });
   }
   const webPushDelivery = params.context.approvalWebPushDelivery;
