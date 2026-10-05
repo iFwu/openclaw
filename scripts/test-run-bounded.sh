@@ -107,4 +107,26 @@ grep -qx 'Result=oom-kill' <<< "$oom_state"
 grep -qx 'ActiveState=failed' <<< "$oom_state"
 grep -qx 'ControlGroup=' <<< "$oom_state"
 bash "$runner" --profile dedicated-test true > "$tmp/recovery.log" 2>&1
+if [[ "${OPENCLAW_TEST_LARGE_PROFILE:-}" == 1 ]]; then
+  expect_exit 2 bash "$runner" --profile dedicated-large --memory-gib 24 true
+  start_hold dedicated-large large
+  [[ "$(<"$tmp/large.workers")" == '4 1' ]]
+  expect_exit 75 bash "$runner" --profile dedicated-heavy true
+  expect_exit 75 bash "$runner" --profile dedicated-test true
+  expect_exit 75 bash "$runner" --profile dedicated-large true
+  release_holds
+  bash "$runner" --profile dedicated-large --receipt "$tmp/large.json" bash -euo pipefail -c '
+    group=$(awk -F: '\''$1 == "0" {print $3}'\'' /proc/self/cgroup)
+    [[ "$(<"/sys/fs/cgroup${group}/memory.max")" == 25769803776 ]]
+    [[ "$(<"/sys/fs/cgroup${group}/memory.swap.max")" == 0 ]]
+    [[ "$GOMAXPROCS" == 4 && "$GOMEMLIMIT" == 12288MiB ]]
+    [[ "$NODE_OPTIONS" == *--max-old-space-size=12288* ]]
+    [[ "$OPENCLAW_LOCAL_CHECK_MODE" == full ]]
+  ' > "$tmp/large-proof.log" 2>&1
+  node -e 'const r=require(process.argv[1]);if(r.status!=="completed"||!r.commandStarted||!r.cleanupConfirmed||r.exitCode!==0)process.exit(1)' "$tmp/large.json"
+  OPENCLAW_LOCAL_CHECK_MODE=throttled bash "$runner" --profile dedicated-large bash -euo pipefail -c '
+    [[ "$OPENCLAW_LOCAL_CHECK_MODE" == throttled ]]
+  ' > "$tmp/large-explicit-policy.log" 2>&1
+  echo 'PASS: dedicated-large 24 GiB boundary, zero swap, soft budgets, worker policy, explicit mode preservation, cross-profile exclusion'
+fi
 echo 'PASS: two task slots, heavy/shared exclusion, unique cache cleanup, admission receipts, payload exit 75, exit propagation, descendant cleanup, OOM failure receipt, lock recovery'

@@ -70,15 +70,17 @@ memory_gib=auto
 profile=shared-host
 if [[ "${1:-}" == --help || $# == 0 ]]; then
   printf '%s\n' \
-    'Usage: bash scripts/run-bounded.sh [--profile shared-host|dedicated-test|dedicated-heavy] [--memory-gib 1..10] [--receipt path] [--] command [args...]' \
+    'Usage: bash scripts/run-bounded.sh [--profile shared-host|dedicated-test|dedicated-heavy|dedicated-large] [--memory-gib 1..10] [--receipt path] [--] command [args...]' \
     'Linux + systemd user manager + cgroup v2 required; never runs uncapped.' \
     'Default shared-host: min(10 GiB, available memory minus 4 GiB), rounded down; no swap.' \
     'Shared-host: one test worker/project and an exclusive host-user lock.' \
     'Dedicated profiles require active openclaw-tests.slice: 16 GiB, no swap, CPUQuota=1200%.' \
     'Dedicated-test: two concurrent 6 GiB tasks, two workers/one project, unique Vitest caches.' \
     'Dedicated-heavy: one exclusive 14 GiB task in the same slice; one worker/project.' \
+    'Dedicated-large: one exclusive 24 GiB task, four workers/project, Go parallelism 4.' \
+    'Dedicated-large requires openclaw-large-tests.slice: 26 GiB, no swap, CPUQuota=800%.' \
     'All profiles require 4 GiB available headroom; --memory-gib applies only to shared-host.' \
-    'Node/Go soft limits: half the budget; Go parallelism at most 2, GOGC 100.' \
+    'Node/Go soft limits: half the budget; Go parallelism at most 2 (4 for dedicated-large), GOGC 100.' \
     'tsdown owns its child heap budget and can override the inherited Node heap; the cgroup hard cap remains.' \
     'Examples: pnpm test:bounded src/agents/model-fallback.test.ts' \
     '          pnpm bounded --profile dedicated-test node scripts/run-vitest.mjs src/utils.test.ts' \
@@ -89,8 +91,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile)
       profile=${2:-}
-      [[ "$profile" == shared-host || "$profile" == dedicated-test || "$profile" == dedicated-heavy ]] || {
-        echo '[bounded] --profile must be shared-host, dedicated-test, or dedicated-heavy' >&2; exit 2;
+      [[ "$profile" == shared-host || "$profile" == dedicated-test || "$profile" == dedicated-heavy || "$profile" == dedicated-large ]] || {
+        echo '[bounded] --profile must be shared-host, dedicated-test, dedicated-heavy, or dedicated-large' >&2; exit 2;
       }
       shift 2 ;;
     --receipt)
@@ -125,24 +127,33 @@ done
 
 slice_group=""
 slice_args=()
+slice_name=openclaw-tests.slice
+slice_memory=17179869184
+slice_cpus=12
+if [[ "$profile" == dedicated-large ]]; then
+  slice_name=openclaw-large-tests.slice
+  slice_memory=27917287424
+  slice_cpus=8
+fi
 if [[ "$profile" != shared-host ]]; then
-  slice_group=$(systemctl --user show openclaw-tests.slice -p ControlGroup --value)
-  if [[ "$slice_group" != /*/openclaw-tests.slice ||
+  slice_group=$(systemctl --user show "$slice_name" -p ControlGroup --value)
+  if [[ "$slice_group" != /*/"$slice_name" ||
     ! -r "/sys/fs/cgroup${slice_group}/memory.max" ]]; then
-    echo '[bounded] dedicated profile requires an active, configured openclaw-tests.slice on this host' >&2
+    echo "[bounded] dedicated profile requires an active, configured $slice_name on this host" >&2
     exit 2
   fi
   read -r quota period < "/sys/fs/cgroup${slice_group}/cpu.max"
-  if [[ "$(<"/sys/fs/cgroup${slice_group}/memory.max")" != 17179869184 ||
+  if [[ "$(<"/sys/fs/cgroup${slice_group}/memory.max")" != "$slice_memory" ||
     "$(<"/sys/fs/cgroup${slice_group}/memory.swap.max")" != 0 ||
     ! "$quota" =~ ^[1-9][0-9]*$ || ! "$period" =~ ^[1-9][0-9]*$ ]] ||
-    (( quota != 12 * period )); then
-    echo '[bounded] openclaw-tests.slice must enforce memory.max=16 GiB, memory.swap.max=0, CPUQuota=1200%; refusing command' >&2
+    (( quota != slice_cpus * period )); then
+    echo "[bounded] $slice_name must enforce memory.max=$slice_memory, memory.swap.max=0, CPUQuota=$((slice_cpus * 100))%; refusing command" >&2
     exit 2
   fi
-  slice_args=(--slice=openclaw-tests.slice)
+  slice_args=(--slice="$slice_name")
   memory_gib=14
   [[ "$profile" != dedicated-test ]] || memory_gib=6
+  [[ "$profile" != dedicated-large ]] || memory_gib=24
 fi
 
 # One lock across worktrees; retain it and any slot through scope cleanup.
@@ -188,9 +199,14 @@ fi
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$heap_mib"
 export GOMEMLIMIT="${go_mib}MiB" GOGC="${GOGC:-100}"
 # Oxlint's --threads flag does not constrain its Go type-aware helper.
+if [[ "$profile" == dedicated-large ]]; then
+  go_procs=4
+  export OPENCLAW_LOCAL_CHECK_MODE="${OPENCLAW_LOCAL_CHECK_MODE:-full}"
+fi
 export GOMAXPROCS=$go_procs
 workers=1
 [[ "$profile" != dedicated-test ]] || workers=2
+[[ "$profile" != dedicated-large ]] || workers=4
 export OPENCLAW_TEST_PROJECTS_PARALLEL=1 OPENCLAW_VITEST_MAX_WORKERS=$workers
 if [[ "$profile" != shared-host ]]; then
   cache_dir=$(mktemp -d "$XDG_RUNTIME_DIR/openclaw-vitest.XXXXXXXX")
@@ -206,20 +222,22 @@ systemd-run --user --scope --quiet --expand-environment=no --unit="$unit" "${sli
     unit=$2
     slice=$3
     receipt=$4
-    shift 4
+    slice_memory=$5
+    slice_cpus=$6
+    shift 6
     group=$(awk -F: '\''$1 == "0" {print $3}'\'' /proc/self/cgroup)
     [[ -n "$group" && "$group" == */"$unit" ]] || exit 1
     if [[ -n "$slice" ]]; then
       [[ "$group" == "$slice/$unit" ]] || exit 1
       read -r quota period < "/sys/fs/cgroup${slice}/cpu.max"
-      if [[ "$(<"/sys/fs/cgroup${slice}/memory.max")" != 17179869184 ||
+      if [[ "$(<"/sys/fs/cgroup${slice}/memory.max")" != "$slice_memory" ||
         "$(<"/sys/fs/cgroup${slice}/memory.swap.max")" != 0 ||
         ! "$quota" =~ ^[1-9][0-9]*$ || ! "$period" =~ ^[1-9][0-9]*$ ]] ||
-        (( quota != 12 * period )); then
+        (( quota != slice_cpus * period )); then
         echo "[bounded] dedicated slice boundaries changed; refusing command" >&2
         exit 1
       fi
-      echo "[bounded] verified slice memory.max=17179869184 memory.swap.max=0 cpu.max=$quota $period" >&2
+      echo "[bounded] verified slice memory.max=$slice_memory memory.swap.max=0 cpu.max=$quota $period" >&2
     fi
     actual=$(<"/sys/fs/cgroup${group}/memory.max")
     swap=$(<"/sys/fs/cgroup${group}/memory.swap.max")
@@ -231,4 +249,4 @@ systemd-run --user --scope --quiet --expand-environment=no --unit="$unit" "${sli
     echo "[bounded] verified memory.max=$actual memory.swap.max=$swap" >&2
     [[ -z "$receipt" ]] || touch "$receipt.started"
     exec "$@"
-  ' bounded "$((memory_gib * 1073741824))" "$unit" "$slice_group" "$receipt" "$@"
+  ' bounded "$((memory_gib * 1073741824))" "$unit" "$slice_group" "$receipt" "$slice_memory" "$slice_cpus" "$@"

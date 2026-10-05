@@ -95,6 +95,21 @@ exit "$code"
 REMOTE
 ```
 
+On a dedicated host with at least 28 GiB currently available, `dedicated-large`
+uses an exclusive 24 GiB scope, four test workers per project, and Go parallelism
+four. It requires an active `openclaw-large-tests.slice` with 26 GiB memory,
+zero swap, and CPUQuota=800%; the wrapper verifies both parent and child limits.
+The same host-user lock excludes every other bounded profile. Node and Go soft
+budgets are each 12 GiB. This explicitly provisioned profile defaults the existing
+local-check mode to `full` so the conservative auto policy does not add single-threaded
+compiler flags; an operator-authored mode still takes precedence. Start the configured
+slice in the same SSH session as the check, and retain receipts and exact source
+identity as above. On a host with both slices configured, run
+`OPENCLAW_TEST_LARGE_PROFILE=1 bash scripts/test-run-bounded.sh` for the resource
+contract suite, including existing profiles, exclusion, failure receipts and cleanup. This profile does
+not change the existing shared-host or WSL/dedicated budgets, and does not promise
+that a workload will fit or be CPU-parallel.
+
 Use `dedicated-test` for a focused workload known to fit 6 GiB. Two such commands
 can overlap only in separate owned checkouts. A shared checkout stays exclusive,
 including installation and artifact preparation. Never switch source, reconcile
