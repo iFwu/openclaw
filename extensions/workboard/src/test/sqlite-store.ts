@@ -53,9 +53,16 @@ function withCardHooks(
       await options.beforeCardWrite?.(key, value);
       return cards.registerIfUpdatedAt(key, value, expectedUpdatedAt);
     },
-    async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
+    async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now, maxRunningPerOwner) {
       await options.beforeCardWrite?.(key, value);
-      return cards.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now);
+      return cards.claimIfOwnerAvailable(
+        key,
+        value,
+        expectedUpdatedAt,
+        ownerId,
+        now,
+        maxRunningPerOwner,
+      );
     },
     async lookup(key) {
       await options.beforeCardLookup?.(key);

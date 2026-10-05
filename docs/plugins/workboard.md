@@ -549,3 +549,12 @@ are passed unchanged to the host for resolution and authorization. Selected mode
 are pinned only on the worker session for interactive continuation.
 Board metadata accepts `defaultModel: null` to clear the default; omitted values
 preserve it. CLI dispatch supports `--model` and optional `--provider`.
+
+The plugin setting `dispatch.maxRunningPerOwner` sets the number of active
+Workboard cards a single owner may occupy across all boards (default `1`). Both
+worker dispatch and direct claims use the same configured capacity, with the
+final admission counted inside the canonical SQLite transaction. Each dispatch
+pass gives distinct owners their first turn before filling remaining slots.
+Per-dispatch inputs do not override this setting. Invalid nonpositive, fractional,
+or unsafe-integer capacities are rejected; reducing capacity blocks new work
+without stopping existing workers or replacing their claims.

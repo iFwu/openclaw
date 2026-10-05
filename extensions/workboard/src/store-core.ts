@@ -37,7 +37,12 @@ import {
   invertWorkboardWorkspaceMutation,
   sameWorkboardCardState,
 } from "./store-compensation.js";
-import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
+import {
+  MAX_CARD_COMMENTS,
+  MAX_CARD_WORKER_LOGS,
+  POSITION_STEP,
+  resolveWorkboardOwnerCapacity,
+} from "./store-constants.js";
 import type {
   WorkboardBoardInput,
   WorkboardBoardSummary,
@@ -83,6 +88,7 @@ type WorkboardMutationJournalEntry = {
 const WORKBOARD_CAS_ATTEMPTS = 3;
 
 export class WorkboardCoreStore extends WorkboardStoreRuntime {
+  readonly maxRunningPerOwner: number;
   private lastNotificationSequence = 0;
   private compensationJournal?: WorkboardMutationJournalEntry[];
   protected readonly store: WorkboardCardStore;
@@ -100,9 +106,12 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       dataVersion?: () => number | Promise<number>;
       close?: () => void | Promise<void>;
       runWithWriteAuthority?: WorkboardWriteAuthority;
+      maxRunningPerOwner?: number;
     },
   ) {
+    const maxRunningPerOwner = resolveWorkboardOwnerCapacity(stores.maxRunningPerOwner);
     super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
+    this.maxRunningPerOwner = maxRunningPerOwner;
     this.store = this.trackCardStore(store);
     this.boardStore = this.track(stores.boards);
     this.subscriptionStore = {
@@ -843,6 +852,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         expectedUpdatedAt,
         options.ownerSlot.ownerId,
         options.ownerSlot.now,
+        this.maxRunningPerOwner,
       );
       if (result === "owner_busy") {
         throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);

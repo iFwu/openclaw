@@ -817,7 +817,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       lane: `workboard:default:${first.id}`,
       deliver: false,
     });
-    expect(run.mock.calls[0]?.[0]).not.toHaveProperty("persistModel");
+    expect(run.mock.calls[0]?.[0]).toMatchObject({ model: null, persistModel: true });
     expect(run.mock.calls[0]?.[0]?.message).toContain("Claim token:");
     expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_complete with the card id");
     expect(run.mock.calls[0]?.[0]?.message).toContain("returned proofId");

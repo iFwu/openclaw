@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
@@ -10,6 +11,7 @@ import {
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
+import { resolveWorkboardOwnerCapacity } from "./src/store-constants.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
@@ -23,8 +25,14 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
+    const dispatchConfig = api.pluginConfig?.dispatch;
     const store = WorkboardStore.openSqlite(
       resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+      {
+        maxRunningPerOwner: resolveWorkboardOwnerCapacity(
+          isRecord(dispatchConfig) ? dispatchConfig.maxRunningPerOwner : undefined,
+        ),
+      },
     );
     const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
     registerWorkboardStoreLifecycle(api, store, async () => {

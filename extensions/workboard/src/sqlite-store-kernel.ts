@@ -49,6 +49,7 @@ import {
   MAX_WORKER_CONTEXT_RECENT_CARDS,
   workboardCardConsumesOwnerSlot,
   workboardCardSlotOwner,
+  resolveWorkboardOwnerCapacity,
 } from "./store-constants.js";
 
 type SyncStore<T> = {
@@ -124,7 +125,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     expectedUpdatedAt: number,
     ownerId: string,
     now: number,
+    maxRunningPerOwner?: number,
   ): WorkboardOwnerClaimResult {
+    const capacity = resolveWorkboardOwnerCapacity(maxRunningPerOwner);
     this.validatePayload(key, value);
     return runSqliteImmediateTransactionSync(this.db, () => {
       const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
@@ -153,6 +156,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
             eb.and([eb("claim_json", "is not", null), eb("status", "!=", "done")]),
           ]),
         );
+      let occupied = 0;
       for (const row of iterateSqliteQuerySync(this.db, candidates)) {
         const card = {
           // SAFETY: insertCard persists WorkboardCard.status; this keeps readCard's required-string boundary.
@@ -168,7 +172,10 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
             : undefined,
         };
         if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
-          return "owner_busy";
+          occupied += 1;
+          if (occupied >= capacity) {
+            return "owner_busy";
+          }
         }
       }
       // Validate the target's stored tree before replacing it, without decoding

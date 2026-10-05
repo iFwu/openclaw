@@ -231,9 +231,15 @@ function selectStartableCards(
   ownerOverride: string | undefined,
   now: number,
   mode: "scheduled" | "exact",
-): { cards: WorkboardCard[]; rejection?: WorkboardStartFailure } {
+  capacity: number,
+): {
+  cards: WorkboardCard[];
+  rejection?: WorkboardStartFailure;
+  availableByOwner: Map<string, number>;
+} {
+  const availableByOwner = new Map<string, number>();
   if (limit <= 0) {
-    return { cards: [] };
+    return { cards: [], availableByOwner };
   }
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
@@ -249,6 +255,8 @@ function selectStartableCards(
   const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
   for (const card of ordered) {
     const owner = ownerOverride || workboardCardSlotOwner(card, now);
+    const available = Math.max(0, capacity - (runningByOwner.get(owner) ?? 0));
+    availableByOwner.set(owner, available);
     const rejection = card.metadata?.archivedAt
       ? "Card is archived; restore it before starting."
       : cardHasActiveClaim(card, now)
@@ -260,13 +268,14 @@ function selectStartableCards(
               card.status !== "todo" &&
               card.status !== "ready"
             ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-            : (runningByOwner.get(owner) ?? 0) > 0
+            : available === 0
               ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
               : undefined;
     if (rejection !== undefined) {
       if (mode === "exact") {
         return {
           cards: [],
+          availableByOwner,
           rejection: { cardId: card.id, title: card.title, error: rejection },
         };
       }
@@ -280,7 +289,7 @@ function selectStartableCards(
     selected.push(card);
   }
   // Try each owner before a failed owner's extra cards consume the outage budget.
-  return { cards: [...selected, ...fallback] };
+  return { cards: [...selected, ...fallback], availableByOwner };
 }
 
 export async function dispatchAndStartWorkboardCards(
@@ -331,7 +340,7 @@ async function runWorkboardDispatch(
     (await params.store.listBoards()).boards.map((board) => [board.id, board]),
   );
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
-  const startedOwners = new Set<string>();
+  const startedByOwner = new Map<string, number>();
   // Allow one fallback per worker slot without draining the queue during an outage.
   const maxAttempts = maxStarts * 2;
   let acceptedStarts = 0;
@@ -344,6 +353,7 @@ async function runWorkboardDispatch(
     ownerOverride,
     now,
     directCardId ? "exact" : "scheduled",
+    params.store.maxRunningPerOwner,
   );
   if (selection.rejection) {
     startFailures.push(selection.rejection);
@@ -353,7 +363,7 @@ async function runWorkboardDispatch(
     if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
-    if (startedOwners.has(ownerId)) {
+    if ((startedByOwner.get(ownerId) ?? 0) >= (selection.availableByOwner.get(ownerId) ?? 0)) {
       continue;
     }
     const sessionKey = workboardSessionKeyForCard(card);
@@ -541,7 +551,7 @@ async function runWorkboardDispatch(
           })
           .catch(() => undefined)) ?? acceptedCard;
       acceptedStarts += 1;
-      startedOwners.add(ownerId);
+      startedByOwner.set(ownerId, (startedByOwner.get(ownerId) ?? 0) + 1);
       started.push({
         cardId: updated.id,
         title: updated.title,

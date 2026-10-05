@@ -33,6 +33,16 @@ export const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 export const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
+export function resolveWorkboardOwnerCapacity(value: unknown): number {
+  if (value === undefined) {
+    return 1;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("dispatch.maxRunningPerOwner must be a positive integer.");
+  }
+  return value;
+}
+
 export function isWorkboardClaimReclaimable(
   claim: WorkboardClaim | undefined,
   now: number,

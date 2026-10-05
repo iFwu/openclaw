@@ -29,6 +29,7 @@ import {
   shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
 import {
+  resolveWorkboardOwnerCapacity,
   isWorkboardClaimReclaimable,
   MAX_CARD_NOTIFICATIONS,
   secondsToDurationMs,
@@ -693,8 +694,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
     );
   }
 
-  static openSqlite(workerModuleUrl: URL) {
+  static openSqlite(workerModuleUrl: URL, options: { maxRunningPerOwner?: number } = {}) {
+    const maxRunningPerOwner = resolveWorkboardOwnerCapacity(options.maxRunningPerOwner);
     const stores = createWorkboardSqliteStores({ workerModuleUrl });
-    return new WorkboardStore(stores.cards, stores);
+    return new WorkboardStore(stores.cards, { ...stores, maxRunningPerOwner });
   }
 }

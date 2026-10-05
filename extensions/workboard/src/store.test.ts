@@ -87,7 +87,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
         }
         return updated;
       },
-      async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
+      async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now, maxRunningPerOwner) {
         await beforeWrite();
         const result = await delegate.claimIfOwnerAvailable(
           key,
@@ -95,6 +95,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
           expectedUpdatedAt,
           ownerId,
           now,
+          maxRunningPerOwner,
         );
         if (result === "updated") {
           await afterWrite(key, value);
