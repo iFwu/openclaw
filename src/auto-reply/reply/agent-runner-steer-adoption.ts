@@ -11,6 +11,7 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
+import { captureUninjectableOwnerGrace } from "./agent-runner-uninjectable-owner.js";
 import {
   admitFollowupRunLifecycle,
   parkSteerCandidate,
@@ -101,6 +102,14 @@ export async function runActiveReplySteer(
     activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
       ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
       : undefined;
+  const ownerGrace = injectionTarget
+    ? undefined
+    : captureUninjectableOwnerGrace({
+        sessionId: steerSessionId,
+        sessionKey: queueKey,
+        followupRun,
+        sessionCtx: params.sessionCtx,
+      });
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     releaseAdmissionTicket();
@@ -150,6 +159,12 @@ export async function runActiveReplySteer(
       return await fallback();
     }
     if (!injectionTarget) {
+      await ownerGrace?.();
+      if (resolveFollowupAbortSignal(followupRun)?.aborted) {
+        parked.consume();
+        typing.cleanup();
+        return "handled";
+      }
       return await fallback("no injectable reply operation");
     }
     // A predecessor's admission may wait past this run's terminal delivery.

@@ -1150,6 +1150,45 @@ function isEmbeddedRunHandleInProgress(
   return true;
 }
 
+/** Capture the native preemption capability, not a rediscovered same-key run.
+ * End waiting is only a registry/grace observation; it is not a resource receipt.
+ */
+export function captureEmbeddedVisibleTurnOwner(sessionId: string):
+  | {
+      sessionId: string;
+      sessionKey?: string;
+      waitForEnd: (ms: number) => Promise<boolean>;
+      preempt: () => boolean;
+    }
+  | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const preempt = handle?.preemptByVisibleTurn;
+  if (!handle || !registration || !preempt || !isEmbeddedRunHandleInProgress(handle)) {
+    return undefined;
+  }
+  return {
+    sessionId: registration.sessionId,
+    sessionKey: registration.sessionKey,
+    waitForEnd: (ms) => waitForCurrentEmbeddedAgentRunEnd(registration.sessionId, ms, handle),
+    preempt: () => {
+      if (
+        ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) !== handle ||
+        (handle.runId && ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(handle.runId) !== handle) ||
+        !isEmbeddedRunHandleInProgress(handle)
+      ) {
+        return false;
+      }
+      try {
+        return preempt.call(handle);
+      } catch (error) {
+        diag.warn(`visible-turn preemption failed: ${formatErrorMessage(error)}`);
+        return false;
+      }
+    },
+  };
+}
+
 export type ActiveEmbeddedRunOwner = {
   runId: string;
   sessionId: string;
