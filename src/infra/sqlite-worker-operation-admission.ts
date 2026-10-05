@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { isPromise } from "node:util/types";
 import { serialize } from "node:v8";
 import {
   MessageChannel,
   receiveMessageOnPort,
-  type MessagePort,
+  MessagePort,
   type Transferable,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -12,7 +13,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
-import { SQLITE_WORKER_MAX_MESSAGE_BYTES, SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+  hasSqliteWorkerOutcomeUnknown,
+} from "./sqlite-worker-contract.js";
 import type {
   RetainedWorkerTransactionAdmission,
   SqliteWorkerNativeSettlement,
@@ -22,6 +27,7 @@ import type {
 const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
+const EFFECT_UNKNOWN = 3;
 
 /** Only the factory's admission before agent open may certify this refusal. */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
@@ -36,9 +42,16 @@ export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
 );
 
 export type SqliteWorkerAdmissionRequest = {
-  stage: "open" | "prepare" | "transaction" | "commit";
+  stage: "open" | "prepare" | "transaction" | "commit" | "effect";
   facts: unknown;
 };
+
+export type SqliteWorkerEffectAttempt = {
+  status: "started" | "completed" | "unknown";
+  outcome?: unknown;
+  error?: unknown;
+};
+export type SqliteWorkerEffectGrant = (assertCurrent: () => void, effect: () => unknown) => boolean;
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
 
@@ -47,6 +60,7 @@ export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner &
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
+  readonly effects: readonly SqliteWorkerEffectAttempt[];
   service(): void;
   finish(): void;
   bindDatabaseAuthority(authority: {
@@ -64,7 +78,11 @@ export type SqliteWorkerAdmissionFactory = (operation: RetainedWorkerTransaction
 
 /** The caller retains real source custody before invoking the synchronous grant. */
 export function createSqliteWorkerOperationAdmission(
-  admit: (request: SqliteWorkerAdmissionRequest, grant: () => boolean) => void,
+  admit: (
+    request: SqliteWorkerAdmissionRequest,
+    grant: () => boolean,
+    grantEffect?: SqliteWorkerEffectGrant,
+  ) => void,
   attachment?: unknown,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
@@ -81,6 +99,7 @@ export function createSqliteWorkerOperationAdmission(
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
   const cleanupFailures: unknown[] = [];
+  const effects: SqliteWorkerEffectAttempt[] = [];
   let closed = false;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let committed: SqliteWorkerNativeSettlementOwner["committed"];
@@ -96,13 +115,38 @@ export function createSqliteWorkerOperationAdmission(
     | undefined;
   const waiting = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const recordFailure = (error: unknown, source: AdmissionFailureSource) => {
-    // A handled domain refusal cannot hide a later loss of physical custody or protocol failure.
-    if (!failure || (failure.source === "domain" && source !== "domain")) {
+    // Retain physical/request provenance, but never classify entered host work
+    // as a safe refusal merely because its native transaction rolled back.
+    if (effects.length > 0) {
+      const retained =
+        failure && !(failure.source === "domain" && source !== "domain")
+          ? failure
+          : { error, source };
+      const retainedSource = retained.source;
+      const cause = retained.error;
+      const unknown = hasSqliteWorkerOutcomeUnknown(cause)
+        ? cause
+        : new SqliteWorkerError(
+            "SQLite operation outcome is unknown after host effect entry",
+            "outcome-unknown",
+          );
+      if (unknown !== cause) {
+        Object.defineProperty(unknown, "cause", { value: cause, configurable: true });
+      }
+      failure = { error: unknown, source: retainedSource };
+    } else if (!failure || (failure.source === "domain" && source !== "domain")) {
       failure = { error, source };
     }
   };
   const refuse = (decision: Int32Array, error: unknown, source: AdmissionFailureSource) => {
-    if (Atomics.compareExchange(decision, 0, REQUESTED, REFUSED) === REQUESTED) {
+    if (
+      Atomics.compareExchange(
+        decision,
+        0,
+        REQUESTED,
+        effects.length > 0 ? EFFECT_UNKNOWN : REFUSED,
+      ) === REQUESTED
+    ) {
       recordFailure(error, source);
       Atomics.notify(decision, 0);
     } else if (Atomics.load(decision, 0) === GRANTED) {
@@ -144,6 +188,10 @@ export function createSqliteWorkerOperationAdmission(
       };
       return;
     }
+    const effectPort =
+      isRecord(message) && message.effectPort instanceof MessagePort
+        ? message.effectPort
+        : undefined;
     if (
       !isRecord(message) ||
       !(message.decision instanceof SharedArrayBuffer) ||
@@ -151,12 +199,14 @@ export function createSqliteWorkerOperationAdmission(
       (message.stage !== "open" &&
         message.stage !== "prepare" &&
         message.stage !== "transaction" &&
-        message.stage !== "commit")
+        message.stage !== "commit" &&
+        message.stage !== "effect")
     ) {
       recordFailure(
         new SqliteWorkerError("SQLite worker admission request is invalid", "unavailable"),
         "protocol",
       );
+      effectPort?.close();
       return;
     }
     const decision = new Int32Array(message.decision);
@@ -167,10 +217,29 @@ export function createSqliteWorkerOperationAdmission(
         new SqliteWorkerError("SQLite worker admission is closed", "closed"),
         "authority",
       );
+      effectPort?.close();
+      decisions.delete(decision);
       return;
     }
     const request: SqliteWorkerAdmissionRequest = { stage: message.stage, facts: message.facts };
+    if (message.stage === "effect" && !effectPort) {
+      refuse(
+        decision,
+        new SqliteWorkerError("SQLite effect reply port is missing", "unavailable"),
+        "protocol",
+      );
+      decisions.delete(decision);
+      return;
+    }
     const grant = () => {
+      if (request.stage === "effect") {
+        refuse(
+          decision,
+          new SqliteWorkerError("SQLite effect requires a guarded effect grant", "closed"),
+          "domain",
+        );
+        return false;
+      }
       if (closed || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
@@ -186,6 +255,95 @@ export function createSqliteWorkerOperationAdmission(
         Atomics.notify(decision, 0);
       }
       return granted;
+    };
+    const grantEffect: SqliteWorkerEffectGrant = (assertCurrent, effect) => {
+      if (
+        !effectPort ||
+        request.stage !== "effect" ||
+        closed ||
+        Atomics.load(decision, 0) !== REQUESTED
+      ) {
+        refuse(
+          decision,
+          new SqliteWorkerError("SQLite effect grant is unavailable", "closed"),
+          "domain",
+        );
+        return false;
+      }
+      // No user effect precedes final physical and domain authority. This check
+      // is pure; effect entry linearizes before its possible lifecycle reentry.
+      try {
+        inOwnerContext(() => {
+          databaseAuthority?.assertRequest?.();
+          databaseAuthority?.assertAccess();
+        });
+      } catch (error) {
+        refuse(decision, error, "authority");
+        return false;
+      }
+      try {
+        inOwnerContext(assertCurrent);
+      } catch (error) {
+        refuse(decision, error, "domain");
+        return false;
+      }
+      // A domain checker can retire its surrounding owner while inspecting it.
+      // Recheck custody after that callback, still before accepting any effect.
+      if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+        return false;
+      }
+      try {
+        inOwnerContext(() => {
+          databaseAuthority?.assertRequest?.();
+          databaseAuthority?.assertAccess();
+        });
+      } catch (error) {
+        refuse(decision, error, "authority");
+        return false;
+      }
+      const attempt: SqliteWorkerEffectAttempt = { status: "started" };
+      effects.push(attempt);
+      try {
+        const value: unknown = inOwnerContext(effect);
+        if (isPromise(value)) {
+          // Refusal does not cancel async work. Observe its rejection without
+          // awaiting it or admitting an asynchronous effect into the writer.
+          void value.catch(() => {});
+          throw new Error("SQLite host effects must finish synchronously");
+        }
+        if (isRecord(value) && typeof value.then === "function") {
+          throw new Error("SQLite host effects must finish synchronously");
+        }
+        if (serialize(value).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+          throw new Error("SQLite host effect outcome exceeds the transport limit");
+        }
+        const outcome: unknown = structuredClone(value);
+        if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+          throw new Error("SQLite host effect lost its reply custody after entry");
+        }
+        effectPort.postMessage({ kind: "sqlite-effect-outcome", outcome }, []);
+        attempt.outcome = outcome;
+        attempt.status = "completed";
+        const granted = Atomics.compareExchange(decision, 0, REQUESTED, GRANTED) === REQUESTED;
+        if (granted) {
+          Atomics.notify(decision, 0);
+        } else {
+          throw new Error("SQLite host effect outcome was not accepted");
+        }
+        return true;
+      } catch (error) {
+        attempt.status = "unknown";
+        attempt.error = error;
+        const unknown = new SqliteWorkerError(
+          "SQLite host effect outcome is unknown after entry",
+          "outcome-unknown",
+        );
+        refuse(decision, unknown, "domain");
+        recordFailure(unknown, "domain");
+        return false;
+      } finally {
+        effectPort.close();
+      }
     };
     let source: AdmissionFailureSource = "authority";
     try {
@@ -217,7 +375,11 @@ export function createSqliteWorkerOperationAdmission(
         });
       } else {
         source = "domain";
-        inOwnerContext(admit, request, grant);
+        if (request.stage === "effect") {
+          inOwnerContext(admit, request, grant, grantEffect);
+        } else {
+          inOwnerContext(admit, request, grant);
+        }
       }
     } catch (error) {
       refuse(decision, error, source);
@@ -225,6 +387,7 @@ export function createSqliteWorkerOperationAdmission(
     } finally {
       // Repeated preparation requests must not retain every settled decision.
       decisions.delete(decision);
+      effectPort?.close();
     }
     if (Atomics.load(decision, 0) === REQUESTED) {
       refuse(
@@ -243,6 +406,9 @@ export function createSqliteWorkerOperationAdmission(
   };
   return {
     port: port2,
+    get effects() {
+      return effects;
+    },
     bindDatabaseAuthority(authority) {
       if (closed || databaseAuthority) {
         throw new SqliteWorkerError(
@@ -411,7 +577,13 @@ export function requestSqliteWorkerOperationAdmission(
     Atomics.wait(decision, 0, REQUESTED);
   }
   if (Atomics.load(decision, 0) !== GRANTED) {
-    const refusal = new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+    const refusal =
+      Atomics.load(decision, 0) === EFFECT_UNKNOWN
+        ? new SqliteWorkerError(
+            "SQLite operation outcome is unknown after host effect entry",
+            "outcome-unknown",
+          )
+        : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;
     throw refusal;
   }
@@ -440,4 +612,46 @@ export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
     throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
   }
   return message.value;
+}
+
+/** Worker-side result handoff; the native writer remains blocked until the
+ * retained host has synchronously finished and published a cloneable outcome. */
+export function requestSqliteWorkerOperationEffect(facts: unknown): unknown {
+  const scope = currentAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite effect requires its retained admission", "unavailable");
+  }
+  const { port1, port2 } = new MessageChannel();
+  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  try {
+    scope.port.postMessage(
+      { stage: "effect", facts, effectPort: port2, decision: decision.buffer },
+      [port2],
+    );
+    while (Atomics.load(decision, 0) === REQUESTED) {
+      Atomics.wait(decision, 0, REQUESTED);
+    }
+    if (Atomics.load(decision, 0) !== GRANTED) {
+      const refusal =
+        Atomics.load(decision, 0) === EFFECT_UNKNOWN
+          ? new SqliteWorkerError(
+              "SQLite host effect outcome is unknown after entry",
+              "outcome-unknown",
+            )
+          : new SqliteWorkerError("SQLite effect admission was refused", "closed");
+      scope.owner.refusal = refusal;
+      throw refusal;
+    }
+    const value: unknown = receiveMessageOnPort(port1)?.message;
+    if (!isRecord(value) || value.kind !== "sqlite-effect-outcome") {
+      throw new SqliteWorkerError(
+        "SQLite effect reply is missing after its accepted attempt",
+        "outcome-unknown",
+      );
+    }
+    return value.outcome;
+  } finally {
+    port1.close();
+    port2.close();
+  }
 }

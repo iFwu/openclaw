@@ -12,7 +12,12 @@ export {
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
-export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+export {
+  requestSqliteWorkerOperationAdmission,
+  createSqliteWorkerOperationAdmission,
+  deferSqliteWorkerCommitReceipt,
+  type SqliteWorkerAdmissionFactory,
+} from "../infra/sqlite-worker-operation-admission.js";
 export {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,

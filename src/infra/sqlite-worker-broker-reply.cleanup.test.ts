@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { serialize } from "node:v8";
 import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   settleFailedSqliteWorkerJobs,
+  receiveSqliteWorkerReply,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 
@@ -58,6 +60,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
     effects.events.push("settle-native");
   });
   const admission: SqliteWorkerOperationAdmission = {
+    effects: [],
     get port(): MessagePort {
       return effects.forbidden();
     },
@@ -356,5 +359,72 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
       "detach",
       "resolve",
     ]);
+  });
+});
+
+describe("host-effect unknown reply classification", () => {
+  it.each(["domain", "authority"] as const)(
+    "preserves entered unknown on %s replies and owner cleanup",
+    (source) => {
+      for (const successfulReply of [false, true]) {
+        for (const cleanup of [false, true]) {
+          const closed = new SqliteWorkerError("owner closed after effect", "closed");
+          const unknown = new SqliteWorkerError("host effect outcome unknown", "outcome-unknown");
+          Object.defineProperty(unknown, "cause", { value: closed });
+          const { job, resolve, reject } = jobWithCleanup(
+            cleanup ? [new Error("cleanup failed")] : [],
+          );
+          const admission = job.operationAdmission?.admission;
+          assert(admission);
+          Object.defineProperties(admission, {
+            effects: { value: [{ status: "unknown", error: closed }] },
+            failure: { value: unknown },
+            failureSource: { value: source },
+          });
+          const dispatch = vi.fn();
+          receiveSqliteWorkerReply(
+            { current: job, failed: undefined, worker: { postMessage: effects.forbidden } },
+            successfulReply
+              ? { id: 1, ok: true, value: serialize(false) }
+              : {
+                  id: 1,
+                  ok: false,
+                  error: { name: "SqliteWorkerError", message: "ordinary refusal", code: "closed" },
+                },
+            {
+              fail: effects.forbidden,
+              dispatch,
+              finish: (receivedJob, error, value) =>
+                settleSqliteWorkerJob(receivedJob, error, value),
+            },
+          );
+          expect(resolve).not.toHaveBeenCalled();
+          expect(reject).toHaveBeenCalledOnce();
+          expect(hasSqliteWorkerOutcomeUnknown(reject.mock.calls[0]?.[0])).toBe(true);
+          expect(dispatch).toHaveBeenCalledOnce();
+        }
+      }
+    },
+  );
+
+  it("still accepts an ordinary handled domain refusal before any host effect", () => {
+    const { job, resolve, reject } = jobWithCleanup();
+    const admission = job.operationAdmission?.admission;
+    assert(admission);
+    Object.defineProperties(admission, {
+      failure: { value: new SqliteWorkerError("ordinary refusal", "closed") },
+      failureSource: { value: "domain" },
+    });
+    receiveSqliteWorkerReply(
+      { current: job, failed: undefined, worker: { postMessage: effects.forbidden } },
+      { id: 1, ok: true, value: serialize(false) },
+      {
+        fail: effects.forbidden,
+        dispatch: vi.fn(),
+        finish: (receivedJob, error, value) => settleSqliteWorkerJob(receivedJob, error, value),
+      },
+    );
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(false);
+    expect(reject).not.toHaveBeenCalled();
   });
 });

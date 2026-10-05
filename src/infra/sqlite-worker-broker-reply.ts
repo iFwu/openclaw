@@ -17,12 +17,16 @@ import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   retainSqliteWorkerErrorCode,
+  hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
   type SqliteWorkerReply,
   type SqliteWorkerCloseReceipt,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  type SqliteWorkerOperationAdmission,
+  createSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import {
   createSqliteWorkerTransferOwner,
@@ -291,6 +295,10 @@ export type SqliteWorkerReplyOwner = {
   dispatch(): void;
 };
 
+function hasEnteredUnknownEffect(admission: SqliteWorkerOperationAdmission | undefined): boolean {
+  return Boolean(admission?.effects?.length && hasSqliteWorkerOutcomeUnknown(admission.failure));
+}
+
 export function receiveSqliteWorkerReply(
   slot: Pick<Slot, "current" | "failed"> & { worker: Pick<Slot["worker"], "postMessage"> },
   reply: SqliteWorkerReply,
@@ -305,7 +313,9 @@ export function receiveSqliteWorkerReply(
     if (reply.cleanupFailure && job.nativeDispatched && !reply.retire) {
       const admission = job.operationAdmission?.admission;
       const failure =
-        admission?.failureSource === "domain" && !reply.admissionRefused
+        admission?.failureSource === "domain" &&
+        !reply.admissionRefused &&
+        !hasEnteredUnknownEffect(admission)
           ? undefined
           : admission?.failure;
       const original = failure ?? decodeSqliteWorkerReplyError(job, reply.error);
@@ -359,7 +369,10 @@ export function receiveSqliteWorkerReply(
   }
   if (reply.cleanupFailure) {
     const admission = job.operationAdmission?.admission;
-    const failure = admission?.failureSource === "domain" ? undefined : admission?.failure;
+    const failure =
+      admission?.failureSource === "domain" && !hasEnteredUnknownEffect(admission)
+        ? undefined
+        : admission?.failure;
     owner.fail(
       decodeSqliteWorkerCleanupError(reply.cleanupFailure),
       undefined,
@@ -376,7 +389,9 @@ export function receiveSqliteWorkerReply(
     const admission = job.operationAdmission?.admission;
     owner.finish(
       job,
-      admission?.failureSource === "domain" ? undefined : admission?.failure,
+      admission?.failureSource === "domain" && !hasEnteredUnknownEffect(admission)
+        ? undefined
+        : admission?.failure,
       value,
     );
   }
