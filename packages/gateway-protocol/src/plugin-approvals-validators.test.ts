@@ -31,6 +31,12 @@ describe("plugin approval protocol validators", () => {
     );
     expect(validatePluginApprovalRequestParams({ ...request, detail: "" })).toBe(false);
     expect(validatePluginApprovalRequestParams({ ...request, detail: "x".repeat(16_385) })).toBe(
+      true,
+    );
+    expect(validatePluginApprovalRequestParams({ ...request, detail: "x".repeat(262_144) })).toBe(
+      true,
+    );
+    expect(validatePluginApprovalRequestParams({ ...request, detail: "x".repeat(262_145) })).toBe(
       false,
     );
     expect(validatePluginApprovalRequestParams({ ...request, description: "d".repeat(513) })).toBe(

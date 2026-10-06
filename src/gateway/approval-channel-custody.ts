@@ -8,9 +8,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { canChannelEnforcePluginReviewerPolicy } from "../infra/approval-channel-policy-support.js";
 import {
   doesApprovalRequestSelectChannelAccount,
+  resolveApprovalRequestChannelAccountId,
   type ApprovalRequestLike,
 } from "../infra/approval-request-account-binding.js";
+import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import { isPluginApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
+import { normalizeAccountId } from "../routing/account-id.js";
 
 type PreparedApprovalChannelCustody = {
   resolverId: string;
@@ -80,16 +83,54 @@ export function prepareApprovalChannelCustody(params: {
       const eligibleAccountIds = accountIds.filter((candidateAccountId) =>
         isActorAuthorized(candidateAccountId, request),
       );
-      return (
-        eligibleAccountIds.includes(accountId) &&
+      // Request-aware reviewer authority remains mandatory on every account.
+      if (!eligibleAccountIds.includes(accountId)) {
+        return false;
+      }
+      const defaultAccountId = plugin.config.defaultAccountId?.(params.cfg) ?? "";
+      if (
         doesApprovalRequestSelectChannelAccount({
           cfg: params.cfg,
           request,
           channel,
           accountId,
-          defaultAccountId: plugin.config.defaultAccountId?.(params.cfg) ?? "",
+          defaultAccountId,
           eligibleAccountIds,
         })
+      ) {
+        return true;
+      }
+      if (params.approvalKind === "system-agent") {
+        return false;
+      }
+      const forwarding =
+        params.approvalKind === "exec" ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+      if (
+        !forwarding?.enabled ||
+        !matchesApprovalRequestFilters({
+          request: request.request,
+          agentFilter: forwarding.agentFilter,
+          sessionFilter: forwarding.sessionFilter,
+          fallbackAgentIdFromSessionKey: true,
+        })
+      ) {
+        return false;
+      }
+      const sourceAccountId = resolveApprovalRequestChannelAccountId({
+        cfg: params.cfg,
+        request,
+        channel,
+      });
+      if (sourceAccountId && !isActorAuthorized(sourceAccountId, request)) {
+        return false;
+      }
+      return (
+        forwarding.fallbackTargets?.some(
+          (target) =>
+            target.channel.trim().toLowerCase() === channel &&
+            normalizeAccountId(target.accountId ?? defaultAccountId) ===
+              normalizeAccountId(accountId),
+        ) ?? false
       );
     },
   };

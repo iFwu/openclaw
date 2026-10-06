@@ -18,7 +18,7 @@ import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
-  truncatePluginApprovalDetail,
+  sanitizePluginApprovalDetail,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
@@ -124,9 +124,7 @@ function buildPluginApprovalPresentation(params: {
       ? request.severity
       : "warning";
   const rawDetail = normalizeOptionalString(request.detail);
-  const detail = rawDetail
-    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
-    : null;
+  const detail = rawDetail ? sanitizePluginApprovalDetail(rawDetail) : null;
   const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
   try {

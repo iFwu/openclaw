@@ -310,6 +310,31 @@ describe("createPluginApprovalHandlers", () => {
       expect(finalResult.decision).toBe("allow-once");
     });
 
+    it.each([
+      { label: "ASCII beyond 16K", detail: "plain ".repeat(8_000) },
+      { label: "astral at the accepted code-point limit", detail: "🚀".repeat(262_144) },
+    ])("retains accepted 256K detail at creation: $label", async ({ detail }) => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const { respond, accepted } = createApprovalRequestResponder();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Review detailed input",
+          description: "Bounded summary",
+          detail,
+          twoPhase: true,
+        },
+        { respond },
+      );
+      const handlerPromise = invokeHandler(handlers, opts);
+      const approvalId = await accepted;
+      const stored = (await manager.getSnapshot(approvalId))?.request;
+      await manager.resolve(approvalId, "deny");
+      await handlerPromise;
+      expect(stored?.detail === detail.trim()).toBe(true);
+      expect(broadcastCall(opts).payload.request.detail === detail.trim()).toBe(true);
+    });
+
     it("sanitizes title/description/detail at creation so every surface gets safe text", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const { respond, accepted } = createApprovalRequestResponder();
@@ -319,9 +344,9 @@ describe("createPluginApprovalHandlers", () => {
           // Bidi override + zero-width space: the classic reviewer-spoof pair.
           title: "Deploy‮yolped",
           description: "safe​text",
-          // Passes the protocol's 16,384 raw cap but expands past it once
+          // Passes the protocol's 262,144 raw cap but expands past it once
           // invisibles become \u{...} escapes — the storage cap must re-apply.
-          detail: `line‪one${"‮".repeat(2_100)}`,
+          detail: `line‪one${"‮".repeat(35_000)}`,
           severity: "warning",
           // Metadata is interpolated into channel approval text lines.
           pluginId: "plug‮in",
@@ -334,11 +359,13 @@ describe("createPluginApprovalHandlers", () => {
       const handlerPromise = invokeHandler(handlers, opts);
       const approvalId = await accepted;
       const stored = (await manager.getSnapshot(approvalId))?.request;
+      await manager.resolve(approvalId, "allow-once");
+      await handlerPromise;
       expect(stored?.title).toBe("Deploy\\u{202E}yolped");
       expect(stored?.description).toBe("safe\\u{200B}text");
       expect(stored?.detail?.startsWith("line\\u{202A}one")).toBe(true);
       // Stored detail is capped like the durable presentation's copy.
-      expect(Array.from(stored?.detail ?? "").length).toBeLessThanOrEqual(16_384);
+      expect(Array.from(stored?.detail ?? "")).toHaveLength(262_144);
       expect(stored?.detail?.endsWith("…[truncated]")).toBe(true);
       expect(stored?.pluginId).toBe("plug\\u{202E}in");
       expect(stored?.toolName).toBe("tool\\u{200B}run");
@@ -350,8 +377,6 @@ describe("createPluginApprovalHandlers", () => {
         title: "Deploy\\u{202E}yolped",
         description: "safe\\u{200B}text",
       });
-      await manager.resolve(approvalId, "deny");
-      await handlerPromise;
     });
 
     it("rejects a title whose sanitized form exceeds the display limit", async () => {

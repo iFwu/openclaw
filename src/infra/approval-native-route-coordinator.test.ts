@@ -60,6 +60,56 @@ function approverDm(to: string) {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it("cancels an outstanding native delivery wait when its owning coordinator closes", async () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const reporter = coordinator.createReporter(reporterOptions());
+    reporter.start();
+    const request = createRequest("wait:close");
+    const waiting = coordinator.waitForDelivery({ request, approvalKind: "exec" });
+    coordinator.close();
+    expect(await waiting).toEqual({ kind: "cancelled", attemptedTargets: [] });
+    expect(reporter.isActive()).toBe(false);
+    expect(
+      reporter.reportAttempt({ request, approvalKind: "exec", plannedTarget: approverDm("owner") }),
+    ).toBe(false);
+  });
+
+  it("retains attempts across a bounded wait and fences late native fallback attempts", async () => {
+    vi.useFakeTimers();
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const reporter = coordinator.createReporter(reporterOptions());
+    reporter.start();
+    const request = createRequest("wait:bounded");
+    const waiting = coordinator.waitForDelivery({ request, approvalKind: "exec", timeoutMs: 100 });
+    expect(
+      reporter.reportAttempt({
+        request,
+        approvalKind: "exec",
+        plannedTarget: { surface: "origin", reason: "preferred", target: { to: "origin" } },
+      }),
+    ).toBe(true);
+    expect(
+      reporter.reportAttempt({
+        request,
+        approvalKind: "exec",
+        plannedTarget: { surface: "origin", reason: "preferred", target: { to: "origin" } },
+      }),
+    ).toBe(true);
+    await vi.advanceTimersByTimeAsync(101);
+    expect(await waiting).toEqual({
+      kind: "unconfirmed",
+      attemptedTargets: [{ channel: "telegram", accountId: "default", to: "origin" }],
+    });
+    expect(
+      reporter.reportAttempt({
+        request,
+        approvalKind: "exec",
+        plannedTarget: { ...approverDm("owner"), reason: "fallback" },
+      }),
+    ).toBe(false);
+    coordinator.close();
+  });
+
   it("keeps the local approval route visible when an unbound request has multiple runtimes", () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const first = coordinator.createReporter(reporterOptions());

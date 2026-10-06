@@ -77,6 +77,7 @@ type TelegramStatusReactionController = {
   cancelPending: () => void;
   setError: () => void | Promise<void>;
   setDone: () => void | Promise<void>;
+  clear: () => Promise<void>;
   restoreInitial: () => void | Promise<void>;
 };
 
@@ -554,6 +555,9 @@ export const buildTelegramMessageContext = async ({
       ? createStatusReactionController({
           enabled: true,
           adapter: {
+            clearReaction: async () => {
+              await reactionApi?.(chatId, msg.message_id, []);
+            },
             setReaction: async (emoji: string) => {
               if (reactionApi) {
                 if (!allowedStatusReactionEmojisPromise) {

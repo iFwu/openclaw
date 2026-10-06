@@ -79,7 +79,6 @@ describe("dead config keys", () => {
     "audit",
     "attachments.preserveFilenames",
     "diagnostics.cacheTrace.filePath",
-    "messages.removeAckAfterReply",
     "messages.statusReactions.emojis",
     "commands.ownerDisplay",
     "commands.ownerDisplaySecret",
@@ -353,5 +352,15 @@ describe("dead config keys", () => {
       path: segments.join("."),
       key,
     });
+  });
+});
+
+describe("fork ACK config contract", () => {
+  it.each([true, false])("accepts removeAckAfterReply=%s", (removeAckAfterReply) => {
+    const result = validateConfigObjectRaw({ messages: { removeAckAfterReply } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.messages?.removeAckAfterReply).toBe(removeAckAfterReply);
+    }
   });
 });

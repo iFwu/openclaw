@@ -50,8 +50,6 @@ export type BroadcastConfig = {
 type MessagesSchemaInput = DefinedSchemaInput<typeof MessagesSchema>;
 
 export type MessagesConfig = Omit<MessagesSchemaInput, "groupChat" | "visibleReplies"> & {
-  /** @deprecated Doctor-only legacy input. */
-  removeAckAfterReply?: boolean;
   visibleReplies?: "automatic" | "message_tool";
   groupChat?: GroupChatConfig;
 };

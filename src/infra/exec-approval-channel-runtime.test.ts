@@ -679,10 +679,10 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
     await vi.waitFor(() => {
-      expect(deliverRequested).toHaveBeenCalledWith({
-        ...oldShapeRequest,
-        approvalKind: "plugin",
-      });
+      expect(deliverRequested).toHaveBeenCalledWith(
+        { ...oldShapeRequest, approvalKind: "plugin" },
+        { shouldSend: expect.any(Function) },
+      );
     });
 
     await runtime.handleResolved({

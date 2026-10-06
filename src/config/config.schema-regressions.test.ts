@@ -23,6 +23,30 @@ function validateBinding(agentId: string, entries: Record<string, unknown>) {
 }
 
 describe("config schema regressions", () => {
+  it.each(["exec", "plugin"] as const)(
+    "retains conditional %s fallback targets without changing session mode",
+    (kind) => {
+      const forwarding = {
+        enabled: true,
+        mode: "session",
+        fallbackTargets: [{ channel: "telegram", to: "123", accountId: "ops", threadId: 7 }],
+      };
+      const result = validateConfigObject({ approvals: { [kind]: forwarding } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("Expected conditional approval config to validate");
+      }
+      expect(result.config.approvals?.[kind]).toEqual(forwarding);
+      expect(
+        validateConfigObject({
+          approvals: {
+            [kind]: { ...forwarding, fallbackTargets: [{ channel: "telegram", to: "" }] },
+          },
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
   it("rejects a string gateway.uploads.enabled value", () => {
     expect(validateConfigObject({ gateway: { uploads: { enabled: "false" } } }).ok).toBe(false);
   });

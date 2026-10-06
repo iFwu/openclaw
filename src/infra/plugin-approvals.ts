@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
+import { sanitizeApprovalDetailText } from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalDecision } from "./exec-approvals-core.js";
 
 export type PluginApprovalActionView = {
@@ -81,7 +82,7 @@ export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
-export const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
+export const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 262_144;
 const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
@@ -108,6 +109,13 @@ export function truncatePluginApprovalDetail(value: string): string {
     }
   }
   return value;
+}
+
+/** Sanitizes reviewer-only detail before the shared code-point output cap. */
+export function sanitizePluginApprovalDetail(value: string): string {
+  return truncatePluginApprovalDetail(
+    sanitizeApprovalDetailText(value, PLUGIN_APPROVAL_DETAIL_MAX_LENGTH),
+  );
 }
 
 export function resolvePluginApprovalTimeoutMs(value: unknown): number {

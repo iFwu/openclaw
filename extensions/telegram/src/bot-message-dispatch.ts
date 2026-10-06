@@ -294,7 +294,7 @@ export const dispatchTelegramMessage = async (
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
-  const status = createTelegramDispatchStatus({ context: dispatchContext });
+  const status = createTelegramDispatchStatus({ cfg, context: dispatchContext });
   const richMessagesParams = {
     cfg,
     accountId: dispatchContext.route.accountId,
@@ -419,9 +419,7 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
-    if (status.controller) {
-      status.finalizeInBackground({ outcome: "done" }, "finalize");
-    }
+    status.finalizeInBackground({ outcome: "done" }, "finalize");
     return { kind: "completed" };
   }
 
@@ -501,7 +499,7 @@ export const dispatchTelegramMessage = async (
         )
       : null);
 
-  if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
+  if (!hasVisibleResponse && !intentionalNoResponse) {
     status.finalizeInBackground({ outcome: "error" }, "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
@@ -523,20 +521,18 @@ export const dispatchTelegramMessage = async (
     isFirstTurnInSession,
     telegramCfg,
   });
-  if (status.controller) {
-    status.finalizeInBackground(
-      {
-        outcome:
-          turn.agentRunFailed ||
-          turn.dispatchError != null ||
-          turn.previewLifecycle.finalFailed ||
-          (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
-          sentFallback
-            ? "error"
-            : "done",
-      },
-      "finalize",
-    );
-  }
+  status.finalizeInBackground(
+    {
+      outcome:
+        turn.agentRunFailed ||
+        turn.dispatchError != null ||
+        turn.previewLifecycle.finalFailed ||
+        (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+        sentFallback
+          ? "error"
+          : "done",
+    },
+    "finalize",
+  );
   return { kind: "completed" };
 };

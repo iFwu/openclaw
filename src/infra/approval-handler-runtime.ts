@@ -574,14 +574,19 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       deliverTarget: async ({
         plannedTarget,
         preparedTarget,
+        shouldSend,
         request,
         approvalKind,
         pendingContent,
       }) => {
+        if (shouldSend && !shouldSend()) {
+          return null;
+        }
         const entry = await nativeRuntime.transport.deliverPending({
           ...baseContext,
           plannedTarget,
           preparedTarget,
+          shouldSend,
           request,
           approvalKind,
           view: pendingContent.view,

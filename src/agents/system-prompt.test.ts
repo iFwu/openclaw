@@ -413,14 +413,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Reasoning Format");
   });
 
-  it("includes an OpenClaw control section", () => {
-    const prompt = renderPrompt({
-      toolNames: ["gateway"],
-    });
-
-    expect(prompt).toContain("## OpenClaw Control");
-    expect(prompt).not.toContain("openclaw gateway status|restart|start|stop");
-  });
+  it.each([{ toolNames: ["gateway"] }, { toolNames: ["openclaw"] }, { toolNames: ["exec"] }])(
+    "preserves the fork deletion of OpenClaw Control with $toolNames",
+    ({ toolNames }) => {
+      const prompt = renderPrompt({ toolNames });
+      expect(prompt).not.toContain("## OpenClaw Control");
+      expect(prompt).not.toContain("Never run openclaw update, npm install -g openclaw");
+      expect(prompt).not.toContain("openclaw gateway status|restart|start|stop");
+    },
+  );
 
   it("keeps runtime-context instructions once in the stable prefix", () => {
     const model = "openai/gpt-5.6-luna";
@@ -650,7 +651,7 @@ describe("buildAgentSystemPrompt", () => {
           "exec approval-pending",
           "exec yieldMs",
           "process(poll",
-          "Config read: `gateway`",
+          "- gateway:",
           "`gateway(config.schema.lookup)`",
           "message(action=send)",
         ],
@@ -671,24 +672,24 @@ describe("buildAgentSystemPrompt", () => {
         name: "exec-only tool surface",
         toolNames: ["exec"],
         includes: ["exec approval-pending", "Use exec yieldMs."],
-        excludes: ["process(poll", "Config read: `gateway`", "`gateway("],
+        excludes: ["process(poll", "- gateway:", "`gateway("],
       },
       {
         name: "process-only tool surface",
         toolNames: ["process"],
         includes: ["Use process(poll, timeout=<ms>)."],
-        excludes: ["exec approval-pending", "exec yieldMs", "Config read: `gateway`"],
+        excludes: ["exec approval-pending", "exec yieldMs", "- gateway:"],
       },
       {
         name: "gateway-only tool surface",
         toolNames: ["gateway"],
-        includes: ["Config read: `gateway`", "`gateway(config.schema.lookup)`"],
+        includes: ["- gateway:", "`gateway(config.schema.lookup)`"],
         excludes: ["exec approval-pending", "exec yieldMs", "process(poll"],
       },
       {
         name: "openclaw-only tool surface",
         toolNames: ["openclaw"],
-        includes: ["ask `openclaw`"],
+        includes: ["- openclaw: Gateway restart/system setup/config"],
         excludes: ["exec approval-pending", "exec yieldMs", "process(poll", "`gateway("],
       },
     ]);
@@ -716,7 +717,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("exec approval-pending");
     expect(prompt).toContain("process(poll");
-    expect(prompt).toContain("Config read: `gateway`");
+    expect(prompt).toContain("`gateway(config.schema.lookup)`");
     expect(prompt).not.toContain("docs first via `read`");
   });
 
@@ -1006,62 +1007,58 @@ describe("buildAgentSystemPrompt", () => {
     { gateway: true, promptMode: "minimal" },
     { gateway: false, promptMode: "minimal" },
   ] as const)(
-    "permits remote updates without detached host repair bypasses ($gateway, $promptMode)",
+    "retains the fork Control deletion across tool and prompt modes ($gateway, $promptMode)",
     ({ gateway, promptMode }) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
         promptMode,
         toolNames: gateway ? ["gateway", "exec"] : ["exec"],
       });
-      expect(prompt).toContain("Never run openclaw update");
+      expect(prompt).not.toContain("## OpenClaw Control");
+      expect(prompt).not.toContain("Never run openclaw update, npm install -g openclaw");
+      if (gateway) {
+        expect(prompt).toContain("- gateway:");
+      } else {
+        expect(prompt).not.toContain("- gateway:");
+      }
     },
   );
 
-  it("routes explicit updates through gateway without exposing config writes", () => {
-    const prompt = renderPrompt({
-      toolNames: ["gateway", "exec"],
-    });
-
-    expect(prompt).toContain("Config read: `gateway`");
+  it("keeps Gateway capability discovery without the retired Control section", () => {
+    const prompt = renderPrompt({ toolNames: ["gateway", "exec"] });
+    expect(prompt).toContain("- gateway: Read this Gateway's config/schema");
+    expect(prompt).not.toContain("## OpenClaw Control");
     expect(prompt).not.toContain("config.patch");
     expect(prompt).not.toContain("config.apply");
-    expect(prompt).toContain("Update OpenClaw: `gateway` action update.run");
   });
 
   it.each(["full", "minimal"] as const)(
-    "delegates system changes without overriding tool-owned approval policy in %s prompts",
+    "lists control and delegation capabilities in %s prompts",
     (promptMode) => {
-      const prompt = renderPrompt({
-        promptMode,
-        toolNames: ["openclaw", "sessions_spawn"],
-      });
-
+      const prompt = renderPrompt({ promptMode, toolNames: ["openclaw", "sessions_spawn"] });
       expect(prompt).not.toContain("changes need human approval");
-      expect(prompt).toContain(
-        "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
-      );
+      expect(prompt).toContain("- openclaw: Gateway restart/system setup/config");
+      expect(prompt).toContain("- sessions_spawn:");
+      expect(prompt).not.toContain("## OpenClaw Control");
       expect(prompt).not.toContain("System controls unavailable");
     },
   );
 
   it.each([{ toolNames: ["exec"] }, { toolNames: ["message"] }, { toolNames: [] }])(
-    "keeps chat updates discoverable without gateway ($toolNames)",
+    "keeps the retired Control section absent without gateway ($toolNames)",
     ({ toolNames }) => {
       const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames });
-      expect(prompt).toContain("the owner can send `/update`");
+      expect(prompt).not.toContain("## OpenClaw Control");
+      expect(prompt).not.toContain("the owner can send `/update`");
       expect(prompt).not.toContain("update.run");
     },
   );
 
-  it("keeps update and delegated controls distinct when both tools are present", () => {
-    const prompt = renderPrompt({
-      toolNames: ["openclaw", "gateway"],
-    });
-    expect(prompt).toContain(
-      "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
-    );
-    expect(prompt).toContain("Update OpenClaw: `gateway` action update.run");
-    expect(prompt).not.toContain("models/providers, updates: ask `openclaw`");
+  it("keeps available control tools discoverable without a separate Control section", () => {
+    const prompt = renderPrompt({ toolNames: ["openclaw", "gateway"] });
+    expect(prompt).toContain("- openclaw: Gateway restart/system setup/config");
+    expect(prompt).toContain("- gateway: Read this Gateway's config/schema");
+    expect(prompt).not.toContain("## OpenClaw Control");
   });
 
   it("omits openclaw delegation guidance without the tool", () => {

@@ -193,6 +193,108 @@ describe("prepareApprovalChannelCustody", () => {
     ).toBe(true);
   });
 
+  it.each(["exec", "plugin"] as const)(
+    "authorizes explicit fallback accounts using request-aware %s authority",
+    (approvalKind) => {
+      const cfg: OpenClawConfig = {
+        approvals: {
+          [approvalKind]: {
+            enabled: true,
+            mode: "session",
+            fallbackTargets: [{ channel: "telegram", accountId: "default", to: "owner" }],
+          },
+        },
+      };
+      const approval = {
+        id: "fallback:1",
+        request: {
+          ...(approvalKind === "plugin"
+            ? { title: "Review", description: "Bounded", policySubject: { pluginKey: "calendar" } }
+            : { command: "echo safe" }),
+          turnSourceChannel: "telegram",
+          turnSourceAccountId: "ops",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      };
+      mocks.authorize.mockImplementation(({ accountId, request: pending }) => ({
+        authorized:
+          approvalKind !== "plugin" ||
+          (pending?.request.policySubject?.pluginKey === "calendar" &&
+            ["default", "ops"].includes(accountId)),
+      }));
+      const custody = prepareApprovalChannelCustody({
+        cfg,
+        approvalKind,
+        reviewer: reviewer("default"),
+      });
+      expect(custody?.authorizes(approval)).toBe(true);
+      mocks.authorize.mockImplementation(({ accountId }) => ({
+        authorized: accountId === "default",
+      }));
+      expect(custody?.authorizes(approval)).toBe(false);
+      mocks.authorize.mockReturnValue({ authorized: false });
+      expect(custody?.authorizes(approval)).toBe(false);
+    },
+  );
+
+  it("does not let fallback configuration bypass a request-specific plugin reviewer policy", () => {
+    const cfg: OpenClawConfig = {
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "session",
+          fallbackTargets: [{ channel: "telegram", to: "owner", accountId: "default" }],
+        },
+      },
+    };
+    mocks.authorize.mockImplementation(({ request: pending }) => ({
+      authorized: pending?.request.policySubject?.pluginKey === "calendar",
+    }));
+    const custody = prepareApprovalChannelCustody({
+      cfg,
+      approvalKind: "plugin",
+      reviewer: reviewer("default"),
+    });
+    const pending = (pluginKey: string) => ({
+      id: "plugin:policy",
+      request: {
+        title: "Review",
+        description: "Bounded",
+        policySubject: { pluginKey },
+        turnSourceChannel: "webchat",
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+    expect(custody?.authorizes(pending("calendar"))).toBe(true);
+    expect(custody?.authorizes(pending("other"))).toBe(false);
+  });
+
+  it("does not extend fallback account custody to system-agent approvals", () => {
+    const cfg: OpenClawConfig = {
+      approvals: {
+        exec: {
+          enabled: true,
+          fallbackTargets: [{ channel: "telegram", to: "owner", accountId: "default" }],
+        },
+      },
+    };
+    expect(
+      prepareApprovalChannelCustody({
+        cfg,
+        approvalKind: "system-agent",
+        reviewer: reviewer("default"),
+      })?.authorizes(
+        request({
+          command: "set config",
+          turnSourceChannel: "telegram",
+          turnSourceAccountId: "ops",
+        }),
+      ),
+    ).toBe(false);
+  });
+
   describe("channels without approver settings", () => {
     const ircSender = { channel: "irc", accountId: "default", senderId: "alice" };
     const ownerCfg = { commands: { ownerAllowFrom: ["irc:alice"] } } as OpenClawConfig;

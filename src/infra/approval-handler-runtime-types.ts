@@ -110,6 +110,7 @@ type ChannelApprovalNativeTransportAdapterForView<
     params: ChannelApprovalCapabilityHandlerContext & {
       plannedTarget: ChannelApprovalNativePlannedTarget;
       preparedTarget: TPreparedTarget;
+      shouldSend?: () => boolean;
       request: ApprovalRequest;
       approvalKind: ChannelApprovalKind;
       view: TPendingView;

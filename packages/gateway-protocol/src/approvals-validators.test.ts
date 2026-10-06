@@ -79,6 +79,12 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalPresentation({ ...pluginPresentation, detail: "" })).toBe(false);
     expect(
       validateApprovalPresentation({ ...pluginPresentation, detail: "x".repeat(16_385) }),
+    ).toBe(true);
+    expect(
+      validateApprovalPresentation({ ...pluginPresentation, detail: "x".repeat(262_144) }),
+    ).toBe(true);
+    expect(
+      validateApprovalPresentation({ ...pluginPresentation, detail: "x".repeat(262_145) }),
     ).toBe(false);
     expect(
       validateApprovalPresentation({

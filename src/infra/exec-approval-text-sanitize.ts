@@ -88,9 +88,18 @@ function buildStrippedView(original: string): { stripped: string; strippedToOrig
 
 function sanitizeExecApprovalDisplayTextInternal(
   commandText: string,
-  options?: { preserveLineBreaks?: boolean; oversizedMarker?: string },
+  options?: {
+    preserveLineBreaks?: boolean;
+    oversizedMarker?: string;
+    maxInputCodePoints?: number;
+    retainSanitizedOutput?: boolean;
+  },
 ): SanitizedExecApprovalDisplayText {
-  if (commandText.length > EXEC_APPROVAL_MAX_INPUT) {
+  const oversized =
+    options?.maxInputCodePoints === undefined
+      ? commandText.length > EXEC_APPROVAL_MAX_INPUT
+      : exceedsApprovalTextLimit(commandText, options.maxInputCodePoints);
+  if (oversized) {
     // Refuse to display inputs above the hard cap; anything larger must be approved through
     // another channel. Running redaction on a multi-megabyte payload would be a DoS vector.
     return {
@@ -99,10 +108,14 @@ function sanitizeExecApprovalDisplayTextInternal(
       oversized: true,
     };
   }
+  const finish = (text: string): SanitizedExecApprovalDisplayText =>
+    options?.retainSanitizedOutput
+      ? { text, truncated: false, oversized: false }
+      : truncateForDisplay(text);
   const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
   // With no invisibles the two views have identical redaction coverage.
   if (commandText.search(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX) === -1) {
-    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
+    return finish(escapeInvisibles(rawRedacted, options));
   }
   const { stripped, strippedToOrig } = buildStrippedView(commandText);
   const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
@@ -110,7 +123,7 @@ function sanitizeExecApprovalDisplayTextInternal(
   // raw-view redaction is sufficient. Preserve structure and show invisible-character spoof
   // attempts as `\u{...}` escapes.
   if (strippedRedacted === stripped) {
-    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
+    return finish(escapeInvisibles(rawRedacted, options));
   }
   // Detect bypass by position-bitmap coverage. Run the redaction matchers on both views and
   // map stripped-view match positions back to original coordinates. If every position the
@@ -133,7 +146,7 @@ function sanitizeExecApprovalDisplayTextInternal(
     }
   }
   if (!bypassDetected) {
-    return truncateForDisplay(escapeInvisibles(rawRedacted, options));
+    return finish(escapeInvisibles(rawRedacted, options));
   }
   // Bypass path. Project the stripped-view mask back onto original positions, union with the
   // raw-view mask, and emit a rendering where each contiguous masked run becomes a single
@@ -170,7 +183,7 @@ function sanitizeExecApprovalDisplayTextInternal(
           : cp;
     i += cp.length;
   }
-  return truncateForDisplay(out);
+  return finish(out);
 }
 
 /** Sanitizes exec command text for approval UI without exposing status metadata. */
@@ -202,6 +215,17 @@ export function sanitizeExecApprovalWarningTextWithStatus(
     preserveLineBreaks: true,
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
   });
+}
+
+/** Uses the same redaction and escaping with a caller-owned detail output cap. */
+export function sanitizeApprovalDetailText(detail: string, maxLength: number): string {
+  return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(detail), {
+    preserveLineBreaks: true,
+    oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
+    // Legacy presentations may exceed their output cap; bound their input before redaction.
+    maxInputCodePoints: maxLength * 2,
+    retainSanitizedOutput: true,
+  }).text;
 }
 
 /** Checks the existing approval code-point cap without materializing every character. */

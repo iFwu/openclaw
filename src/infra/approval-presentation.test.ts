@@ -154,6 +154,18 @@ describe("buildApprovalPresentation", () => {
     ).toBeNull();
   });
 
+  it.each([
+    { label: "ASCII beyond 16K", detail: "plain ".repeat(8_000) },
+    { label: "astral at the code-point limit", detail: "🚀".repeat(262_144) },
+  ])("preserves accepted 256K reviewer detail: $label", ({ detail }) => {
+    const presentation = buildPluginPresentation({
+      title: "Review input",
+      description: "Bounded summary",
+      detail,
+    });
+    expect(presentation?.kind === "plugin" && presentation.detail === detail.trim()).toBe(true);
+  });
+
   it("truncates oversized plugin detail without invalidating the presentation", () => {
     const presentation = buildPluginPresentation({
       title: "Review tool input",

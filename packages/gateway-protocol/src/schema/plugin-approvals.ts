@@ -37,7 +37,7 @@ export const PluginApprovalRequestParamsSchema = closedObject({
     nullableMetadata(
       Type.String({
         minLength: 1,
-        maxLength: 16_384,
+        maxLength: 262_144,
         description:
           "Reviewer-surface-only detail; not delivered to channels or push notifications.",
       }),

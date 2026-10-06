@@ -24,7 +24,7 @@ import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   resolvePluginApprovalTimeoutMs,
-  truncatePluginApprovalDetail,
+  sanitizePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -180,10 +180,7 @@ export function createPluginApprovalHandlers(
         title: sanitizedTitle,
         description: sanitizedDescription,
         scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
-        detail:
-          rawDetail === null
-            ? null
-            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
+        detail: rawDetail === null ? null : sanitizePluginApprovalDetail(rawDetail),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,

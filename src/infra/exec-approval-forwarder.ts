@@ -12,7 +12,6 @@ import type {
 } from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -22,6 +21,7 @@ import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy
 import {
   hasActiveNativeApprovalRoute,
   type ApprovalNativeRouteCoordinator,
+  type ApprovalNativeDeliveryOutcome,
 } from "./approval-native-route-coordinator.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import {
@@ -29,6 +29,12 @@ import {
   type ApprovalRequestInput,
   type ChannelApprovalKind,
 } from "./approval-types.js";
+import {
+  buildTargetKey,
+  deliverToTargets,
+  type DeliverApprovalPayloads,
+  type ForwardTarget,
+} from "./exec-approval-forwarder.delivery.js";
 import {
   buildForwardedExecApprovalExpired,
   buildForwardedExecPendingPayload,
@@ -52,15 +58,11 @@ import type {
 // Approval forwarding mirrors foreground approvals into chat targets, then sends
 // resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
-type DeliverApprovalPayloads =
-  typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
 type MaybePromise<T> = T | Promise<T>;
 type ResolveSessionTargetFn = (params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }) => MaybePromise<ExecApprovalForwardTarget | null>;
-
-type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
 type ApprovalRouteRequest = {
   agentId?: string | null;
@@ -114,6 +116,10 @@ type ExecApprovalForwarderDeps = {
   resolveSessionTarget?: ResolveSessionTargetFn;
   /** The owning Gateway's coordinator, where its channel accounts register native handlers. */
   getNativeApprovalRouteCoordinator?: () => ApprovalNativeRouteCoordinator | undefined;
+  waitForNativeDelivery?: (
+    request: ApprovalRequestInput,
+    approvalKind: ChannelApprovalKind,
+  ) => Promise<ApprovalNativeDeliveryOutcome>;
 };
 
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
@@ -139,16 +145,6 @@ function shouldForwardRoute(params: {
     agentFilter: config.agentFilter,
     sessionFilter: config.sessionFilter,
     fallbackAgentIdFromSessionKey: true,
-  });
-}
-
-function buildTargetKey(target: ExecApprovalForwardTarget): string {
-  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  return channelRouteDedupeKey({
-    channel,
-    to: target.to,
-    accountId: target.accountId,
-    threadId: target.threadId,
   });
 }
 
@@ -310,43 +306,6 @@ function defaultResolveSessionTarget(params: {
   });
 }
 
-async function deliverToTargets(params: {
-  cfg: OpenClawConfig;
-  targets: ForwardTarget[];
-  buildPayload: (target: ForwardTarget) => ReplyPayload;
-  deliver: DeliverApprovalPayloads;
-  beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
-  shouldSend?: () => boolean;
-}) {
-  const deliveries = params.targets.map(async (target) => {
-    if (params.shouldSend && !params.shouldSend()) {
-      return;
-    }
-    const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-    if (!isDeliverableMessageChannel(channel)) {
-      return;
-    }
-    try {
-      const payload = params.buildPayload(target);
-      await params.beforeDeliver?.(target, payload);
-      const send = await params.deliver({
-        cfg: params.cfg,
-        channel,
-        to: target.to,
-        accountId: target.accountId,
-        threadId: target.threadId,
-        payloads: [payload],
-      });
-      if (send.status === "failed" || send.status === "partial_failed") {
-        throw send.error;
-      }
-    } catch (err) {
-      log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
-    }
-  });
-  await Promise.allSettled(deliveries);
-}
-
 async function resolveForwardTargets(params: {
   cfg: OpenClawConfig;
   config?: ExecApprovalForwardingConfig;
@@ -371,7 +330,7 @@ async function resolveForwardTargets(params: {
       request: buildSyntheticApprovalRequest(sessionRouteRequest),
     });
     if (sessionTarget) {
-      const key = buildTargetKey(sessionTarget);
+      const key = buildTargetKey(params.cfg, sessionTarget);
       if (!seen.has(key)) {
         seen.add(key);
         targets.push({ ...sessionTarget, source: "session" });
@@ -382,7 +341,7 @@ async function resolveForwardTargets(params: {
   if (mode === "targets" || mode === "both") {
     const explicitTargets = params.config?.targets ?? [];
     for (const target of explicitTargets) {
-      const key = buildTargetKey(target);
+      const key = buildTargetKey(params.cfg, target);
       if (seen.has(key)) {
         continue;
       }
@@ -404,6 +363,7 @@ function createApprovalHandlers<
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;
   getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
+  waitForNativeDelivery?: ExecApprovalForwarderDeps["waitForNativeDelivery"];
 }) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
@@ -502,7 +462,35 @@ function createApprovalHandlers<
       pending.remove(requestId, pendingEntry);
       throw error;
     }
-    if (filteredTargets.length === 0) {
+    const fallbackTargets: ForwardTarget[] =
+      !params.strategy.liveOriginOnly && shouldForwardRoute({ config, routeRequest })
+        ? (config?.fallbackTargets ?? [])
+            .filter((target) => {
+              const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+              const plugin = getLoadedChannelPlugin(channel);
+              if (
+                params.strategy.kind === "plugin" &&
+                !canChannelEnforcePluginReviewerPolicy(cfg, channel, plugin?.approvalCapability)
+              ) {
+                return false;
+              }
+              return !resolveChannelApprovalAdapter(
+                plugin,
+              )?.delivery?.shouldBlockForwardingFallback?.({
+                cfg,
+                approvalKind: params.strategy.kind,
+                target,
+                request,
+              });
+            })
+            .map((target) =>
+              Object.assign({}, target, {
+                source: "fallback" as const,
+                fallback: true,
+              }),
+            )
+        : [];
+    if (filteredTargets.length === 0 && fallbackTargets.length === 0) {
       pending.remove(requestId, pendingEntry);
       return false;
     }
@@ -519,44 +507,108 @@ function createApprovalHandlers<
             buildPayload: () => ({ text: buildExpiredText(request) }),
             deliver: params.deliver,
           }),
-        ).catch((err: unknown) => {
-          log.error(
-            `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
-          );
-        }),
+        )
+          .then(() => undefined)
+          .catch((err: unknown) => {
+            log.error(
+              `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+            );
+          }),
       );
     }
 
-    void trackDelivery(() =>
-      deliverToTargets({
+    void trackDelivery(async () => {
+      const buildPayload = (target: ForwardTarget) => {
+        const payload = params.strategy.buildPendingPayload({
+          cfg,
+          request,
+          target,
+          nowMs: params.nowMs(),
+        });
+        if (!target.fallback) {
+          return payload;
+        }
+        const warning =
+          target.source === "fallback"
+            ? "⚠️ 审批兜底：原审批卡投递未确认，已转到备用会话。"
+            : "⚠️ Fallback approval: no trusted deliverable origin was resolved. Original delivery is not confirmed.";
+        return {
+          ...payload,
+          text: [
+            warning,
+            `Original session: ${routeRequest.sessionKey?.trim() || "unknown"}`,
+            `Source: ${routeRequest.turnSourceChannel?.trim() || "unknown"} / ${routeRequest.turnSourceTo?.trim() || "unknown"}`,
+            payload.text,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        };
+      };
+      const beforeDeliver = async (target: ForwardTarget, payload: ReplyPayload) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        if (!channel) {
+          return;
+        }
+        await getLoadedChannelPlugin(channel)?.outbound?.beforeDeliverPayload?.({
+          cfg,
+          target,
+          payload,
+          hint: { kind: "approval-pending", approvalKind: params.strategy.kind },
+        });
+      };
+      const owningCoordinator = params.getNativeApprovalRouteCoordinator();
+      const canSendPending = () =>
+        (!owningCoordinator || owningCoordinator.isActive()) &&
+        !stopped &&
+        pending.isCurrent(pendingEntry) &&
+        !pendingEntry.queued &&
+        request.expiresAtMs > params.nowMs();
+      const primary = await deliverToTargets({
         cfg,
         targets: filteredTargets,
-        buildPayload: (target) =>
-          params.strategy.buildPendingPayload({
-            cfg,
-            request,
-            target,
-            nowMs: params.nowMs(),
-          }),
-        beforeDeliver: async (target, payload) => {
-          const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-          if (!channel) {
-            return;
-          }
-          await getLoadedChannelPlugin(channel)?.outbound?.beforeDeliverPayload?.({
-            cfg,
-            target,
-            payload,
-            hint: {
-              kind: "approval-pending",
-              approvalKind: params.strategy.kind,
-            },
-          });
-        },
+        buildPayload,
+        beforeDeliver,
         deliver: params.deliver,
-        shouldSend: () => pending.isCurrent(pendingEntry),
-      }).then(() => pending.completeDelivery(pendingEntry, pendingEntry.value)),
-    ).catch((err: unknown) => {
+        shouldSend: canSendPending,
+      });
+      if (fallbackTargets.length > 0) {
+        pendingEntry.value.targets = primary.confirmed;
+        const outcome =
+          primary.confirmed.length > 0
+            ? undefined
+            : await params.waitForNativeDelivery?.(request, params.strategy.kind);
+        if (
+          primary.confirmed.length === 0 &&
+          outcome?.kind !== "confirmed" &&
+          outcome?.kind !== "cancelled" &&
+          canSendPending()
+        ) {
+          const attempted = new Set(
+            [...primary.attempted, ...(outcome?.attemptedTargets ?? [])].map((target) =>
+              buildTargetKey(cfg, target),
+            ),
+          );
+          const backups = fallbackTargets.filter((target) => {
+            const key = buildTargetKey(cfg, target);
+            if (attempted.has(key)) {
+              return false;
+            }
+            attempted.add(key);
+            return true;
+          });
+          const delivered = await deliverToTargets({
+            cfg,
+            targets: backups,
+            buildPayload,
+            beforeDeliver,
+            deliver: params.deliver,
+            shouldSend: canSendPending,
+          });
+          pendingEntry.value.targets.push(...delivered.confirmed);
+        }
+      }
+      await pending.completeDelivery(pendingEntry, pendingEntry.value);
+    }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
       );
@@ -649,6 +701,13 @@ export function createExecApprovalForwarder(
     nowMs,
     resolveSessionTarget,
     getNativeApprovalRouteCoordinator,
+    waitForNativeDelivery:
+      deps.waitForNativeDelivery ??
+      (async (request: ApprovalRequestInput, approvalKind: ChannelApprovalKind) =>
+        (await getNativeApprovalRouteCoordinator()?.waitForDelivery({ request, approvalKind })) ?? {
+          kind: "unconfirmed" as const,
+          attemptedTargets: [],
+        }),
   };
   const execHandlers = createApprovalHandlers({
     ...handlerDeps,

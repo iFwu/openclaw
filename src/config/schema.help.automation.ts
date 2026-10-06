@@ -355,6 +355,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "channels.modelByChannel":
     "Map provider -> channel id / DM peer id -> model override (values are provider/model or aliases).",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.removeAckAfterReply":
+    "Clear Telegram acknowledgement and lifecycle reactions after dispatch settles, including error and cancellation. When false or unset, retain the acknowledgement. Doctor preserves this fork-supported setting.",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "group-mentions" acks group messages that mention the agent, whether or not the group requires mentions; "group-all" acks every group message. "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":

@@ -170,7 +170,7 @@ export const PluginApprovalPresentationSchema = closedObject({
   kind: Type.Literal("plugin"),
   title: Type.String({ minLength: 1, maxLength: 80 }),
   description: Type.String({ minLength: 1, maxLength: 512 }),
-  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16_384 })),
+  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 262_144 })),
   severity: PluginApprovalSeveritySchema,
   pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

@@ -52,6 +52,12 @@ type ChannelApprovalNativeContext = {
  * Adapter implemented by channel plugins that support native approval delivery.
  */
 export type ChannelApprovalNativeAdapter = {
+  /** Canonicalizes channel-specific target grammar before approval-route deduplication. */
+  normalizeTarget?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    target: ChannelApprovalNativeTarget;
+  }) => ChannelApprovalNativeTarget | null;
   describeDeliveryCapabilities: (
     params: ChannelApprovalNativeContext,
   ) => ChannelApprovalNativeDeliveryCapabilities;

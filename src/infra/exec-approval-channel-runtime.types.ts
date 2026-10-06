@@ -24,7 +24,10 @@ export type ExecApprovalChannelRuntimeAdapter<
   eventKinds?: readonly ChannelApprovalKind[];
   isConfigured: () => boolean;
   shouldHandle: (request: NormalizedApprovalRequest<TRequest>) => boolean;
-  deliverRequested: (request: NormalizedApprovalRequest<TRequest>) => Promise<TPending[]>;
+  deliverRequested: (
+    request: NormalizedApprovalRequest<TRequest>,
+    context?: { shouldSend: () => boolean },
+  ) => Promise<TPending[]>;
   beforeGatewayClientStart?: () => Promise<void> | void;
   finalizeResolved: (params: {
     request: NormalizedApprovalRequest<TRequest>;

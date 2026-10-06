@@ -56,9 +56,17 @@ function resolveSessionTelegramOriginTarget(sessionTarget: {
   to: string;
   threadId?: string | number | null;
 }): TelegramOriginTarget {
+  const parsed = parseTelegramTarget(sessionTarget.to);
+  const to = normalizeTelegramChatId(parsed.chatId) ?? parsed.chatId;
   return {
-    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: parseTelegramThreadId(sessionTarget.threadId),
+    to:
+      parsed.directMessagesTopicId == null
+        ? to
+        : `${to}:direct-topic:${parsed.directMessagesTopicId}`,
+    threadId:
+      parsed.directMessagesTopicId == null
+        ? parseTelegramThreadId(sessionTarget.threadId ?? parsed.messageThreadId)
+        : undefined,
   };
 }
 
@@ -142,5 +150,11 @@ const resolveTelegramApproveCommandBehavior: NonNullable<
 
 export const telegramApprovalCapability: ChannelApprovalCapability = {
   ...telegramNativeApprovalCapability,
+  native: telegramNativeApprovalCapability.native
+    ? {
+        ...telegramNativeApprovalCapability.native,
+        normalizeTarget: ({ target }) => resolveSessionTelegramOriginTarget(target),
+      }
+    : undefined,
   resolveApproveCommandBehavior: resolveTelegramApproveCommandBehavior,
 };

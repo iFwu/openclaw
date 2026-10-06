@@ -423,6 +423,36 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     });
   });
 
+  it("rechecks send validity after loading a lazy delivery hook", async () => {
+    const gate = createDeferred<ChannelApprovalNativeRuntimeAdapter>();
+    const entered = createDeferred();
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+    let active = true;
+    const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      load: async () => {
+        entered.resolve();
+        return await gate.promise;
+      },
+    });
+    const delivery = adapter.transport.deliverPending({
+      cfg: {},
+      request: makeExecApprovalRequest("exec:lazy-validity"),
+      approvalKind: "exec",
+      plannedTarget: { surface: "origin", reason: "preferred", target: { to: "origin" } },
+      preparedTarget: { to: "origin" },
+      pendingPayload: { text: "pending" },
+      view: {} as never,
+      shouldSend: () => active,
+    });
+    await entered.promise;
+    active = false;
+    gate.resolve(createApprovalNativeRuntimeAdapterStubs({ deliverPending }));
+    await expect(delivery).resolves.toBeNull();
+    expect(deliverPending).not.toHaveBeenCalled();
+  });
+
   it("keeps observe hooks synchronous and only uses the already-loaded runtime", async () => {
     const onDelivered = vi.fn();
     const load = vi.fn().mockResolvedValue({

@@ -229,7 +229,7 @@ describe("exec approval forwarder", () => {
     }
   });
 
-  it("keeps pending delivery ahead of a resolution received during route lookup", async () => {
+  it("does not send a stale pending card after resolution overtakes route lookup", async () => {
     const target = createDeferred<{ channel: "slack"; to: string }>();
     const pendingDelivery = createDeferred();
     const deliveryOrder: string[] = [];
@@ -262,11 +262,10 @@ describe("exec approval forwarder", () => {
       target.resolve({ channel: "slack", to: "U1" });
       await expect(requested).resolves.toBe(true);
       await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-      expect(deliveryOrder).toEqual(["pending"]);
-
+      expect(deliveryOrder).toEqual(["resolved"]);
       pendingDelivery.resolve();
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
-      expect(deliveryOrder).toEqual(["pending", "resolved"]);
+      await forwarder.stop();
+      expect(deliver).toHaveBeenCalledTimes(1);
       expect(resolveSessionTarget).toHaveBeenCalledOnce();
     } finally {
       target.resolve({ channel: "slack", to: "U1" });
@@ -276,7 +275,7 @@ describe("exec approval forwarder", () => {
     }
   });
 
-  it("does not arm new expiry while an admitted route lookup finishes during stop", async () => {
+  it("does not send or arm expiry after stop overtakes admitted route lookup", async () => {
     vi.useFakeTimers();
     const lookupEntered = createDeferred();
     const target = createDeferred<{ channel: "slack"; to: string }>();
@@ -304,8 +303,7 @@ describe("exec approval forwarder", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       delivery.resolve();
       await stopping;
-      expect(sent).toHaveLength(1);
-      expect(sent[0]).toContain("required");
+      expect(sent).toEqual([]);
     } finally {
       target.resolve({ channel: "slack", to: "U1" });
       delivery.resolve();

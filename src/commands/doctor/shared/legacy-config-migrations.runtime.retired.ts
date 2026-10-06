@@ -365,10 +365,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     delete statusReactions.emojis;
     changes.push("Removed messages.statusReactions.emojis; curated defaults now apply.");
   }
-  if (messages && Object.hasOwn(messages, "removeAckAfterReply")) {
-    delete messages.removeAckAfterReply;
-    changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
-  }
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
     moveKey(entry, "messagePrefix", "responsePrefix", path, changes);

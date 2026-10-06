@@ -259,3 +259,26 @@ Likewise, prefer `openclaw/plugin-sdk/reply-runtime`,
 `openclaw/plugin-sdk/reply-reference`, and
 `openclaw/plugin-sdk/reply-chunking` over broader umbrella surfaces when you
 do not need them all.
+
+## Conditional approval fallback
+
+This fork retains `approvals.exec.fallbackTargets` and
+`approvals.plugin.fallbackTargets` as conditional backup destinations. Each uses
+`channel`, `to`, optional `accountId`, and optional `threadId`, without changing
+`mode: session|targets|both`.
+
+Primary delivery runs first. When it has no confirmed delivery, the forwarding
+owner waits for the selected native handler's bounded delivery outcome. Only a
+still-pending, unexpired request may then use a configured backup. Confirmed
+native delivery suppresses backup forwarding; destinations already attempted by
+the native handler are not sent again. Retirement or resolution cancels pending
+backup work. An unconfirmed primary may arrive late; this is not a promise of
+physical exactly-once delivery.
+
+A backup is an additional reviewer surface, not additional approval authority.
+It requires existing account-specific reviewer permissions, including the
+request-specific plugin reviewer policy. A known source account must also
+authorize the reviewer. System-agent approvals do not inherit these backups.
+Reviewer-only plugin `detail` is capped at 262144 Unicode code points after
+redaction and invisible-character escaping; it is not included in channel or
+push summaries.

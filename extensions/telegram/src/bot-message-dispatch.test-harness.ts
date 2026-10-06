@@ -555,6 +555,7 @@ export function createStatusReactionController() {
     cancelPending: vi.fn(),
     setError: vi.fn(async () => {}),
     setDone: vi.fn(async () => {}),
+    clear: vi.fn(async () => {}),
     restoreInitial: vi.fn(async () => {}),
   } satisfies NonNullable<TelegramMessageContext["statusReactionController"]>;
 }

@@ -36,6 +36,7 @@ import {
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { escapeTelegramHtml } from "./format.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
 import {
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
@@ -265,20 +266,41 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     prepareTarget: ({ plannedTarget }) => {
       const parsedTarget = parseTelegramTarget(plannedTarget.target.to);
       return {
-        dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
+        dedupeKey: buildChannelApprovalNativeTargetKey({
+          to:
+            parsedTarget.directMessagesTopicId == null
+              ? parsedTarget.chatId
+              : `${parsedTarget.chatId}:direct-topic:${parsedTarget.directMessagesTopicId}`,
+          threadId:
+            parsedTarget.directMessagesTopicId == null
+              ? parseTelegramThreadId(plannedTarget.target.threadId ?? parsedTarget.messageThreadId)
+              : undefined,
+        }),
         target: {
           chatId: parsedTarget.chatId,
           messageThreadId:
-            typeof plannedTarget.target.threadId === "number"
-              ? plannedTarget.target.threadId
-              : parsedTarget.messageThreadId,
+            parsedTarget.directMessagesTopicId == null
+              ? parseTelegramThreadId(plannedTarget.target.threadId ?? parsedTarget.messageThreadId)
+              : undefined,
           directMessagesTopicId: parsedTarget.directMessagesTopicId,
         },
       };
     },
-    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
+    deliverPending: async ({
+      cfg,
+      accountId,
+      context,
+      preparedTarget,
+      plannedTarget,
+      pendingPayload,
+      request,
+      shouldSend,
+    }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
+        return null;
+      }
+      if (shouldSend && !shouldSend()) {
         return null;
       }
       const sendTyping = resolved.context.deps?.sendTyping ?? sendTypingTelegram;
@@ -291,7 +313,19 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           ? { messageThreadId: preparedTarget.messageThreadId }
           : {}),
       }).catch(() => {});
-      const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
+      if (shouldSend && !shouldSend()) {
+        return null;
+      }
+      const text =
+        plannedTarget.reason === "fallback"
+          ? [
+              "⚠️ 审批兜底到私聊：原审批卡投递未确认。",
+              `原会话：${request.request.sessionKey?.trim() || "未知"}`,
+              `原来源：${request.request.turnSourceChannel?.trim() || "未知"} / ${request.request.turnSourceTo?.trim() || "未知"}`,
+              pendingPayload.text,
+            ].join("\n")
+          : pendingPayload.text;
+      const result = await sendMessage(preparedTarget.chatId, text, {
         cfg,
         token: resolved.context.token,
         accountId: resolved.accountId,

@@ -540,6 +540,16 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Optional allowlist of agent IDs eligible for forwarded approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius and avoid notifying channels for unrelated agents.',
   "approvals.exec.sessionFilter":
     'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded to shared destinations.',
+  "approvals.exec.fallbackTargets":
+    "Conditional backup destinations used only after primary approval delivery is unconfirmed. Does not change the session, targets, or both mode, and does not grant approval authority.",
+  "approvals.exec.fallbackTargets[].channel":
+    "Channel/provider ID for a conditional approval backup destination, such as telegram or slack. Use an enabled channel whose existing approvers can review the request.",
+  "approvals.exec.fallbackTargets[].to":
+    "Destination identifier for a conditional approval backup, using the provider's user or chat grammar. Use a trusted operator destination and verify its approval buttons before relying on this backup.",
+  "approvals.exec.fallbackTargets[].accountId":
+    "Optional account selector for the configured approval backup destination; defaults to the channel's effective default account. Use an existing approval-enabled identity; this does not replace the primary request account.",
+  "approvals.exec.fallbackTargets[].threadId":
+    "Optional thread/topic within the conditional approval backup destination. Use the provider's thread identifier and keep it aligned with any topic encoded in the destination.",
   "approvals.exec.targets":
     "Explicit delivery targets used when forwarding mode includes targets, each with channel and destination details. Keep target lists least-privilege and validate each destination before enabling broad forwarding.",
   "approvals.exec.targets[].channel":
@@ -560,6 +570,16 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
   "approvals.plugin.sessionFilter":
     'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
+  "approvals.plugin.fallbackTargets":
+    "Conditional backup destinations used only after primary approval delivery is unconfirmed. Does not change the session, targets, or both mode, and does not grant approval authority.",
+  "approvals.plugin.fallbackTargets[].channel":
+    "Channel/provider ID for a conditional approval backup destination, such as telegram or slack. Use an enabled channel whose existing approvers can review the request.",
+  "approvals.plugin.fallbackTargets[].to":
+    "Destination identifier for a conditional approval backup, using the provider's user or chat grammar. Use a trusted operator destination and verify its approval buttons before relying on this backup.",
+  "approvals.plugin.fallbackTargets[].accountId":
+    "Optional account selector for the configured approval backup destination; defaults to the channel's effective default account. Use an existing approval-enabled identity; this does not replace the primary request account.",
+  "approvals.plugin.fallbackTargets[].threadId":
+    "Optional thread/topic within the conditional approval backup destination. Use the provider's thread identifier and keep it aligned with any topic encoded in the destination.",
   "approvals.plugin.targets":
     "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
   "approvals.plugin.targets[].channel":

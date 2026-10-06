@@ -2,6 +2,9 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
 import {
   createChannelNativeApprovalRuntime as createChannelNativeApprovalRuntimeRaw,
   deliverApprovalRequestViaChannelNativePlan,
@@ -71,6 +74,243 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, 
 }
 
 describe("deliverApprovalRequestViaChannelNativePlan", () => {
+  it.each(["throw", "null", "prepare-null"] as const)(
+    "does not add an implicit system-agent DM backup after origin failure (%s)",
+    async (outcome) => {
+      const resolveApproverDmTargets = vi.fn(() => [{ to: "owner" }]);
+      const physical = vi.fn(({ plannedTarget }: { plannedTarget: { surface: string } }) => {
+        if (plannedTarget.surface === "origin") {
+          if (outcome === "null") {
+            return null;
+          }
+          throw new Error("Origin failed");
+        }
+        return { to: "owner" };
+      });
+      const result = await deliverApprovalRequestViaChannelNativePlan({
+        cfg: {},
+        accountId: "ops",
+        approvalKind: "system-agent",
+        request: {
+          id: "system-agent:origin-only",
+          request: { title: "Change", description: "Bounded", proposalHash: "a".repeat(64) },
+          createdAtMs: 0,
+          expiresAtMs: 120000,
+        },
+        adapter: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "origin",
+            supportsOriginSurface: true,
+            supportsApproverDmSurface: true,
+          }),
+          resolveOriginTarget: () => ({ to: "origin" }),
+          resolveApproverDmTargets,
+        },
+        prepareTarget: ({ plannedTarget }) =>
+          plannedTarget.surface === "origin" && outcome === "prepare-null"
+            ? null
+            : { dedupeKey: plannedTarget.target.to, target: plannedTarget.target },
+        deliverTarget: physical,
+      });
+      expect(result.entries).toEqual([]);
+      expect(
+        physical.mock.calls.some(([args]) => args.plannedTarget.surface === "approver-dm"),
+      ).toBe(false);
+      expect(result.deliveryPlan.targets.some((target) => target.reason === "fallback")).toBe(
+        false,
+      );
+      expect(resolveApproverDmTargets).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["throw", "null", "prepare-null", "success", "dm-failure"])(
+    "uses same-account fallback DMs only after unconfirmed origin delivery (%s)",
+    async (outcome) => {
+      const resolveApproverDmTargets = vi.fn(({ accountId }: { accountId?: string | null }) => [
+        { to: `${accountId}:owner` },
+      ]);
+      const onDeliveryError = vi.fn();
+      const delivered: Array<{ to: string; reason: string }> = [];
+      const result = await deliverApprovalRequestViaChannelNativePlan({
+        cfg: {},
+        accountId: "secondary",
+        approvalKind: "exec",
+        request: execRequest,
+        adapter: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "origin",
+            supportsOriginSurface: true,
+            supportsApproverDmSurface: true,
+          }),
+          resolveOriginTarget: () => ({ to: "origin-room", threadId: 17 }),
+          resolveApproverDmTargets,
+        },
+        prepareTarget: ({ plannedTarget }) =>
+          plannedTarget.surface === "origin" && outcome === "prepare-null"
+            ? null
+            : { dedupeKey: plannedTarget.target.to, target: plannedTarget.target.to },
+        deliverTarget: ({ plannedTarget, preparedTarget }) => {
+          delivered.push({ to: preparedTarget, reason: plannedTarget.reason });
+          if (plannedTarget.surface === "origin" && outcome !== "success") {
+            if (outcome === "null") {
+              return null;
+            }
+            throw new Error("origin send unconfirmed");
+          }
+          if (outcome === "dm-failure") {
+            throw new Error("DM send unconfirmed");
+          }
+          return { to: preparedTarget };
+        },
+        onDeliveryError,
+      });
+      expect(result.entries).toEqual(
+        outcome === "dm-failure"
+          ? []
+          : [{ to: outcome === "success" ? "origin-room" : "secondary:owner" }],
+      );
+      expect(delivered.filter((entry) => entry.to === "secondary:owner")).toEqual(
+        outcome === "success" ? [] : [{ to: "secondary:owner", reason: "fallback" }],
+      );
+      expect(
+        resolveApproverDmTargets.mock.calls.every(([params]) => params.accountId === "secondary"),
+      ).toBe(true);
+      if (outcome === "dm-failure") {
+        expect(onDeliveryError).toHaveBeenCalledTimes(2);
+      }
+      expect(result.deliveredTargets.map((target) => target.target.to)).toEqual(
+        result.entries.map((entry) => entry.to),
+      );
+    },
+  );
+
+  it("does not retry an unconfirmed origin as a fallback DM, including prepared convergence", async () => {
+    const deliverTarget = vi.fn().mockRejectedValue(new Error("unconfirmed"));
+    const result = await deliverApprovalRequestViaChannelNativePlan({
+      cfg: {},
+      approvalKind: "exec",
+      request: execRequest,
+      adapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "origin",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+        }),
+        resolveOriginTarget: () => ({ to: "origin" }),
+        resolveApproverDmTargets: () => [
+          { to: "origin" },
+          { to: "alias" },
+          { to: "backup" },
+          { to: "backup" },
+        ],
+      },
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to === "alias" ? "origin" : plannedTarget.target.to,
+        target: plannedTarget.target.to,
+      }),
+      deliverTarget,
+    });
+    expect(deliverTarget.mock.calls.map(([params]) => params.preparedTarget)).toEqual([
+      "origin",
+      "backup",
+    ]);
+    expect(result.deliveredTargets).toEqual([]);
+    expect(result.entries).toEqual([]);
+  });
+
+  it("does not retry already-attempted converged DMs after an unconfirmed send", async () => {
+    const deliverTarget = vi.fn().mockRejectedValue(new Error("unconfirmed"));
+    const result = await deliverApprovalRequestViaChannelNativePlan({
+      cfg: {},
+      approvalKind: "exec",
+      request: execRequest,
+      adapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: () => [{ to: "owner" }, { to: "owner-alias" }],
+      },
+      prepareTarget: () => ({ dedupeKey: "same-dm", target: "owner" }),
+      deliverTarget,
+    });
+    expect(deliverTarget).toHaveBeenCalledTimes(1);
+    expect(result.attemptedTargets.map((target) => target.target.to)).toEqual(["owner"]);
+    expect(result.deliveredTargets).toEqual([]);
+  });
+
+  it("does not send fallback DMs when the coordinator declines their custody", async () => {
+    const deliverTarget = vi.fn().mockRejectedValue(new Error("origin unconfirmed"));
+    const result = await deliverApprovalRequestViaChannelNativePlan({
+      cfg: {},
+      approvalKind: "exec",
+      request: execRequest,
+      adapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "origin",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+        }),
+        resolveOriginTarget: () => ({ to: "origin" }),
+        resolveApproverDmTargets: () => [{ to: "backup" }],
+      },
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: plannedTarget.target.to,
+      }),
+      onAttempt: (target) => target.surface === "origin",
+      deliverTarget,
+    });
+    expect(deliverTarget).toHaveBeenCalledTimes(1);
+    expect(result.attemptedTargets.map((target) => target.target.to)).toEqual(["origin"]);
+    expect(result.entries).toEqual([]);
+  });
+
+  it("rechecks coordinator custody after a transport await", async () => {
+    const entered = createDeferredCore();
+    const gate = createDeferredCore();
+    const send = vi.fn();
+    let active = true;
+    const delivery = deliverApprovalRequestViaChannelNativePlan({
+      cfg: {},
+      approvalKind: "exec",
+      request: execRequest,
+      adapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: () => [{ to: "backup" }],
+      },
+      prepareTarget: () => ({ dedupeKey: "backup", target: "backup" }),
+      onAttempt: () => active,
+      deliverTarget: async ({ shouldSend }) => {
+        entered.resolve();
+        await gate.promise;
+        if (!shouldSend?.()) {
+          return null;
+        }
+        send();
+        return { messageId: "unexpected" };
+      },
+    });
+    await entered.promise;
+    active = false;
+    gate.resolve();
+    const result = await delivery;
+    expect(send).not.toHaveBeenCalled();
+    expect(result.entries).toEqual([]);
+    expect(result.attemptedTargets).toHaveLength(1);
+  });
+
   it("dedupes converged prepared targets", async () => {
     const adapter: ChannelApprovalNativeAdapter = {
       describeDeliveryCapabilities: () => ({
@@ -164,6 +404,7 @@ describe("createChannelNativeApprovalRuntime", () => {
     const finalizeExpired = vi.fn().mockResolvedValue(undefined);
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/system-agent-native-runtime",
+      nowMs: () => 0,
       clientDisplayName: "Test",
       channel: "telegram",
       channelLabel: "Telegram",
@@ -235,6 +476,7 @@ describe("createChannelNativeApprovalRuntime", () => {
     const finalizeResolved = vi.fn().mockResolvedValue(undefined);
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime",
+      nowMs: () => 0,
       clientDisplayName: "Test",
       channel: "telegram",
       channelLabel: "Telegram",
@@ -321,6 +563,7 @@ describe("createChannelNativeApprovalRuntime", () => {
     const buildPendingContent = vi.fn().mockResolvedValue("pending");
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-legacy-kind",
+      nowMs: () => 0,
       clientDisplayName: "Test",
       cfg: {} as never,
       resolveApprovalKind,
@@ -465,5 +708,156 @@ describe("createChannelNativeApprovalRuntime", () => {
     expect(requireRecord(expiredCall.request).id).toBe("req-1");
     expect(expiredCall.entries).toEqual([{ chatId: "owner", messageId: "m1" }]);
     vi.useRealTimers();
+  });
+});
+
+describe("native approval delivery validity", () => {
+  it.each(["resolved", "stopped", "expired"])(
+    "does not start a fallback after original send loses validity (%s)",
+    async (terminal) => {
+      const gate = createDeferredCore<null>();
+      const entered = createDeferredCore();
+      const delivered: string[] = [];
+      let now = Date.now();
+      const request = { ...execRequest, expiresAtMs: now + 60_000 };
+      const runtime = createChannelNativeApprovalRuntime({
+        label: "test/native-validity",
+        clientDisplayName: "Test",
+        cfg: {},
+        nowMs: () => now,
+        isConfigured: () => true,
+        shouldHandle: () => true,
+        nativeAdapter: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "origin",
+            supportsOriginSurface: true,
+            supportsApproverDmSurface: true,
+          }),
+          resolveOriginTarget: () => ({ to: "origin" }),
+          resolveApproverDmTargets: () => [{ to: "backup" }],
+        },
+        buildPendingContent: () => "pending",
+        prepareTarget: ({ plannedTarget }) => ({
+          dedupeKey: plannedTarget.target.to,
+          target: plannedTarget.target.to,
+        }),
+        deliverTarget: async ({ preparedTarget }) => {
+          if (typeof preparedTarget !== "string") {
+            throw new Error("unexpected prepared target");
+          }
+          delivered.push(preparedTarget);
+          if (preparedTarget === "origin") {
+            entered.resolve();
+            return await gate.promise;
+          }
+          return { messageId: "unexpected" };
+        },
+        finalizeResolved: async () => {},
+      });
+      const sending = runtime.handleRequested(request);
+      await entered.promise;
+      if (terminal === "resolved") {
+        await runtime.handleResolved({ id: request.id, decision: "deny", ts: Date.now() });
+      }
+      if (terminal === "stopped") {
+        await runtime.stop();
+      }
+      if (terminal === "expired") {
+        now = request.expiresAtMs + 1;
+      }
+      gate.resolve(null);
+      await sending;
+      expect(delivered).toEqual(["origin"]);
+    },
+  );
+
+  it("rechecks pending authority after an asynchronous target preparation", async () => {
+    const gate = createDeferredCore();
+    const entered = createDeferredCore();
+    const deliverTarget = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/prepare-validity",
+      clientDisplayName: "Test",
+      cfg: {},
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: () => [{ to: "backup" }],
+      },
+      buildPendingContent: () => "pending",
+      prepareTarget: async () => {
+        entered.resolve();
+        await gate.promise;
+        return { dedupeKey: "backup", target: "backup" };
+      },
+      deliverTarget,
+      finalizeResolved: async () => {},
+    });
+    const request = { ...execRequest, expiresAtMs: Date.now() + 60_000 };
+    const sending = runtime.handleRequested(request);
+    await entered.promise;
+    await runtime.handleResolved({ id: request.id, decision: "deny", ts: Date.now() });
+    gate.resolve();
+    await sending;
+    expect(deliverTarget).not.toHaveBeenCalled();
+  });
+});
+
+describe("native Gateway lifetime", () => {
+  it("cancels delivery if the owning Gateway retires during preparation", async () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const gate = createDeferredCore();
+    const entered = createDeferredCore();
+    const deliverTarget = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+    const runtime = withGatewayNativeApprovalRuntime(
+      {
+        routeCoordinator: coordinator,
+        subscribe: () => () => {},
+        request: async () => {
+          throw new Error("unused");
+        },
+        requestRoute: async () => {
+          throw new Error("unused");
+        },
+      },
+      () =>
+        createChannelNativeApprovalRuntime({
+          label: "test/gateway-validity",
+          clientDisplayName: "Test",
+          cfg: {},
+          isConfigured: () => true,
+          shouldHandle: () => true,
+          nativeAdapter: {
+            describeDeliveryCapabilities: () => ({
+              enabled: true,
+              preferredSurface: "approver-dm",
+              supportsOriginSurface: false,
+              supportsApproverDmSurface: true,
+            }),
+            resolveApproverDmTargets: () => [{ to: "backup" }],
+          },
+          buildPendingContent: () => "pending",
+          prepareTarget: async () => {
+            entered.resolve();
+            await gate.promise;
+            return { dedupeKey: "backup", target: "backup" };
+          },
+          deliverTarget,
+          finalizeResolved: async () => {},
+        }),
+    );
+    const sending = runtime.handleRequested({ ...execRequest, expiresAtMs: Date.now() + 60_000 });
+    await entered.promise;
+    coordinator.close();
+    gate.resolve();
+    await sending;
+    expect(deliverTarget).not.toHaveBeenCalled();
   });
 });

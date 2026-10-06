@@ -111,6 +111,8 @@ export function createExecApprovalChannelRuntime<
   let unsubscribeGatewayRuntime: (() => void) | null = null;
   let started = false;
   let shouldRun = false;
+  let stopped = false;
+  let deliveryGeneration = 0;
   let startPromise: Promise<void> | null = null;
   let replayPromise: Promise<void> | null = null;
 
@@ -164,7 +166,15 @@ export function createExecApprovalChannelRuntime<
     const entry = pending.begin(request.id, { request, entries: [] });
     let entries: TPending[];
     try {
-      entries = await adapter.deliverRequested(request);
+      const generation = deliveryGeneration;
+      entries = await adapter.deliverRequested(request, {
+        shouldSend: () =>
+          !stopped &&
+          generation === deliveryGeneration &&
+          pending.isCurrent(entry) &&
+          !entry.queued &&
+          request.expiresAtMs > nowMs(),
+      });
     } catch (err) {
       pending.remove(request.id, entry);
       throw err;
@@ -292,6 +302,7 @@ export function createExecApprovalChannelRuntime<
       }
 
       shouldRun = true;
+      stopped = false;
       startPromise = (async () => {
         if (!adapter.isConfigured()) {
           log.debug("disabled");
@@ -398,6 +409,8 @@ export function createExecApprovalChannelRuntime<
     },
 
     async stop(): Promise<void> {
+      stopped = true;
+      deliveryGeneration++;
       shouldRun = false;
       if (startPromise) {
         await startPromise.catch(() => {});

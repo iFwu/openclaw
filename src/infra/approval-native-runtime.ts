@@ -14,6 +14,7 @@ import type {
   ChannelNativeApprovalTransportSpec,
   PreparedChannelNativeApprovalTarget,
 } from "./approval-native-runtime-types.js";
+import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
 import type {
   ApprovalRequestInput,
@@ -35,6 +36,7 @@ type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
   entries: TPendingEntry[];
   deliveryPlan: ChannelApprovalNativeDeliveryPlan;
   deliveredTargets: ChannelApprovalNativePlannedTarget[];
+  attemptedTargets: ChannelApprovalNativePlannedTarget[];
 };
 
 /** Delivers an approval request to the adapter-planned native targets and returns pending entries. */
@@ -48,6 +50,8 @@ export async function deliverApprovalRequestViaChannelNativePlan<
   approvalKind: ChannelApprovalKind;
   request: TRequest;
   adapter?: ChannelApprovalNativeAdapter | null;
+  shouldSend?: () => boolean;
+  onAttempt?: (target: ChannelApprovalNativePlannedTarget) => boolean | void;
   prepareTarget: (params: {
     plannedTarget: ChannelApprovalNativePlannedTarget;
     request: TRequest;
@@ -58,6 +62,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
   deliverTarget: (params: {
     plannedTarget: ChannelApprovalNativePlannedTarget;
     preparedTarget: TPreparedTarget;
+    shouldSend?: () => boolean;
     request: TRequest;
   }) => TPendingEntry | null | Promise<TPendingEntry | null>;
   onDeliveryError?: (params: {
@@ -85,38 +90,57 @@ export async function deliverApprovalRequestViaChannelNativePlan<
     adapter: params.adapter,
   });
 
-  const deliveredKeys = new Set<string>();
+  const attemptedKeys = new Set<string>();
+  const originKeys = new Set<string>();
   const pendingEntries: TPendingEntry[] = [];
   const deliveredTargets: ChannelApprovalNativePlannedTarget[] = [];
-  for (const plannedTarget of deliveryPlan.targets) {
+  const attemptedTargets: ChannelApprovalNativePlannedTarget[] = [];
+  const canSend = () => params.shouldSend?.() ?? true;
+  const deliver = async (plannedTarget: ChannelApprovalNativePlannedTarget) => {
+    if (!canSend()) {
+      return;
+    }
     try {
       const preparedTarget = await params.prepareTarget({
         plannedTarget,
         request: params.request,
       });
-      if (!preparedTarget) {
-        continue;
+      if (!preparedTarget || !canSend()) {
+        return;
+      }
+      // A fallback must be a different surface, not a retry of the unconfirmed origin.
+      if (plannedTarget.surface === "origin") {
+        originKeys.add(preparedTarget.dedupeKey);
       }
       // Dedupe after preparation because different surfaces can converge on the same message target.
-      if (deliveredKeys.has(preparedTarget.dedupeKey)) {
+      if (
+        attemptedKeys.has(preparedTarget.dedupeKey) ||
+        (plannedTarget.reason === "fallback" && originKeys.has(preparedTarget.dedupeKey))
+      ) {
         params.onDuplicateSkipped?.({
           plannedTarget,
           preparedTarget,
           request: params.request,
         });
-        continue;
+        return;
       }
 
+      if (params.onAttempt?.(plannedTarget) === false) {
+        return;
+      }
+      attemptedKeys.add(preparedTarget.dedupeKey);
+      attemptedTargets.push(plannedTarget);
       const entry = await params.deliverTarget({
         plannedTarget,
         preparedTarget: preparedTarget.target,
+        // Awaiting transports must revalidate coordinator custody at the effect boundary.
+        shouldSend: () => canSend() && params.onAttempt?.(plannedTarget) !== false,
         request: params.request,
       });
       if (!entry) {
-        continue;
+        return;
       }
 
-      deliveredKeys.add(preparedTarget.dedupeKey);
       pendingEntries.push(entry);
       deliveredTargets.push(plannedTarget);
       params.onDelivered?.({
@@ -132,12 +156,77 @@ export async function deliverApprovalRequestViaChannelNativePlan<
         request: params.request,
       });
     }
+  };
+  for (const plannedTarget of deliveryPlan.targets) {
+    await deliver(plannedTarget);
+  }
+
+  // A configured origin is not proof of delivery. Retry only on adapter-owned
+  // DM surfaces after an origin-only plan returned no confirmed entry.
+  if (
+    params.approvalKind !== "system-agent" &&
+    canSend() &&
+    deliveryPlan.targets.some((target) => target.surface === "origin") &&
+    deliveryPlan.targets.every((target) => target.surface === "origin") &&
+    deliveredTargets.length === 0 &&
+    params.adapter?.resolveApproverDmTargets
+  ) {
+    const capabilities = params.adapter.describeDeliveryCapabilities(params);
+    if (
+      capabilities.enabled &&
+      capabilities.preferredSurface === "origin" &&
+      capabilities.supportsApproverDmSurface
+    ) {
+      const fallbackTargets = await params.adapter.resolveApproverDmTargets(params);
+      const normalizeTarget = (target: ChannelApprovalNativePlannedTarget["target"]) =>
+        params.adapter?.normalizeTarget
+          ? params.adapter.normalizeTarget({
+              cfg: params.cfg,
+              accountId: params.accountId,
+              target,
+            })
+          : target;
+      const normalizedOrigin = deliveryPlan.originTarget
+        ? normalizeTarget(deliveryPlan.originTarget)
+        : null;
+      const originKey = normalizedOrigin
+        ? buildChannelApprovalNativeTargetKey(normalizedOrigin)
+        : null;
+      const plannedKeys = new Set(
+        deliveryPlan.targets.flatMap((plannedTarget) => {
+          const target = normalizeTarget(plannedTarget.target);
+          return target ? [buildChannelApprovalNativeTargetKey(target)] : [];
+        }),
+      );
+      for (const fallbackTarget of fallbackTargets) {
+        if (!canSend()) {
+          break;
+        }
+        const target = normalizeTarget(fallbackTarget);
+        if (!target) {
+          continue;
+        }
+        const key = buildChannelApprovalNativeTargetKey(target);
+        if (key === originKey || plannedKeys.has(key)) {
+          continue;
+        }
+        plannedKeys.add(key);
+        const plannedTarget: ChannelApprovalNativePlannedTarget = {
+          surface: "approver-dm",
+          target,
+          reason: "fallback",
+        };
+        deliveryPlan.targets.push(plannedTarget);
+        await deliver(plannedTarget);
+      }
+    }
   }
 
   return {
     entries: pendingEntries,
     deliveryPlan,
     deliveredTargets,
+    attemptedTargets,
   };
 }
 
@@ -277,7 +366,8 @@ export function createChannelNativeApprovalRuntime<
       routeReporter.start();
     },
     nowMs,
-    deliverRequested: async (request) => {
+    deliverRequested: async (request, context) => {
+      const shouldSend = () => context?.shouldSend() === true && routeReporter.isActive();
       const approvalKind = adapter.resolveApprovalKind?.(request) ?? request.approvalKind;
       let deliveryPlan: ChannelApprovalNativeDeliveryPlan = {
         targets: [],
@@ -285,6 +375,7 @@ export function createChannelNativeApprovalRuntime<
         notifyOriginWhenDmOnly: false,
       };
       let deliveredTargets: ChannelApprovalNativePlannedTarget[] = [];
+      let attemptedTargets: ChannelApprovalNativePlannedTarget[] = [];
       try {
         const pendingContent = await adapter.buildPendingContent({
           request,
@@ -297,6 +388,9 @@ export function createChannelNativeApprovalRuntime<
           approvalKind,
           request,
           adapter: adapter.nativeAdapter,
+          shouldSend,
+          onAttempt: (plannedTarget) =>
+            routeReporter.reportAttempt({ request, approvalKind, plannedTarget }),
           prepareTarget: async (target) =>
             await adapter.prepareTarget({
               ...target,
@@ -339,14 +433,20 @@ export function createChannelNativeApprovalRuntime<
         });
         deliveryPlan = deliveryResult.deliveryPlan;
         deliveredTargets = deliveryResult.deliveredTargets;
+        attemptedTargets = deliveryResult.attemptedTargets;
         return deliveryResult.entries;
       } finally {
-        await routeReporter.reportDelivery({
-          approvalKind,
-          request,
-          deliveryPlan,
-          deliveredTargets,
-        });
+        if (shouldSend()) {
+          await routeReporter.reportDelivery({
+            approvalKind,
+            request,
+            deliveryPlan,
+            deliveredTargets,
+            attemptedTargets,
+          });
+        } else {
+          routeReporter.completeRequest(request.id);
+        }
       }
     },
   });

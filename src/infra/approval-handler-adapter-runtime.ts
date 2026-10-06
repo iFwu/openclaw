@@ -78,8 +78,13 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
     transport: {
       prepareTarget: async (runtimeParams) =>
         (await loadHook((runtime) => runtime.transport.prepareTarget))(runtimeParams),
-      deliverPending: async (runtimeParams) =>
-        (await loadHook((runtime) => runtime.transport.deliverPending))(runtimeParams),
+      deliverPending: async (runtimeParams) => {
+        const deliver = await loadHook((runtime) => runtime.transport.deliverPending);
+        if (runtimeParams.shouldSend && !runtimeParams.shouldSend()) {
+          return null;
+        }
+        return await deliver(runtimeParams);
+      },
       updateEntry: async (runtimeParams) =>
         await (
           await loadHook((runtime) => runtime.transport.updateEntry)

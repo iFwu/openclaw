@@ -162,6 +162,8 @@ describe("config help copy quality", () => {
       fields: [
         ["approvals.exec.sessionFilter", [/substring|regex/i, "discord:", "^agent:ops:"]],
         ["approvals.exec.agentFilter", ["primary", "ops-agent"]],
+        ["approvals.exec.fallbackTargets", [/conditional/i, /unconfirmed/i, /does not grant/i]],
+        ["approvals.plugin.fallbackTargets", [/conditional/i, /unconfirmed/i, /does not grant/i]],
         [
           "approvals.exec.targets[].to",
           [/channel ID|user ID|thread root/i, /differs|per provider/i],

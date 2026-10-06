@@ -393,6 +393,7 @@ describe("legacy config migration end to end", () => {
     expect(
       applyLegacyDoctorMigrations(result.config, { sourceConfigBeforeMigrations: result.config }),
     ).toEqual({ next: null, changes: [] });
+    expect(result.config).toHaveProperty("messages.removeAckAfterReply", true);
     const serialized = JSON.stringify(result.config);
     for (const key of [
       "pdfMaxBytesMb",
@@ -401,7 +402,6 @@ describe("legacy config migration end to end", () => {
       "enableNoVnc",
       "preserveFilenames",
       "ownerDisplay",
-      "removeAckAfterReply",
     ]) {
       expect(serialized).not.toContain(`"${key}"`);
     }
