@@ -472,7 +472,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             stale: null,
           },
         },
-        { enforceStatusHolds: true },
+        { enforceStatusHolds: true, expectedUpdatedAt: existing.updatedAt },
       );
       return await this.promoteDependencyReady(reclaimed.id, now);
     });

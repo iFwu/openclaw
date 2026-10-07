@@ -48,6 +48,23 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it.each([true, false])(
+    "renders bare cancellation rather than a provider timeout: named=%s",
+    (named) => {
+      const message = "This operation was aborted";
+      const error = named ? Object.assign(new Error(message), { name: "AbortError" }) : undefined;
+      const result = buildExternalRunFailureReply({ message, error });
+      expect(result).toEqual({
+        text: "⚠️ Stopped before finishing — the run was cancelled.",
+        isGenericRunnerFailure: false,
+      });
+    },
+  );
+  it("preserves a typed provider timeout even when its diagnostic mentions abort", () => {
+    const message = "The operation was aborted due to provider request timeout";
+    const error = new FailoverError(message, { reason: "timeout" });
+    expect(buildExternalRunFailureReply({ message, error }).text).toMatch(/timed out|timeout/iu);
+  });
   it("does not expose a foreign error's userMessage property", () => {
     const error = Object.assign(new Error("private-diagnostic-canary"), {
       userMessage: "untrusted-public-canary",

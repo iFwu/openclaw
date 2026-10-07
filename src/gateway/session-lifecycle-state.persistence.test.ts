@@ -17,6 +17,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   emitAgentEvent,
@@ -47,6 +48,7 @@ import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import {
   bindSessionRowProjection,
@@ -73,6 +75,117 @@ const silentLog: SubsystemLogger = {
   raw: vi.fn(),
   child: () => silentLog,
 };
+
+it.each(["observe", "persist"] as const)(
+  "records a failed child turn without borrowing another active writer's context through %s",
+  async (method) => {
+    const tempDirs = createTempDirTracker();
+    const target = {
+      agentId: "main",
+      storePath: path.join(tempDirs.make("openclaw-terminal-context-"), "sessions.json"),
+      sessionKey: "agent:main:subagent:failed-child",
+      sessionId: "failed-child-session",
+    };
+    const runId = "failed-child-run";
+    const unrelatedCommit = vi.fn();
+    const scheduler = createTestGatewayScheduler();
+    const owner = createSessionLifecyclePersistenceOwner(scheduler);
+    routing.loadSessionEntry.mockImplementation(() => ({
+      ...target,
+      canonicalKey: target.sessionKey,
+      entry: loadSessionEntry(target),
+    }));
+    try {
+      await replaceSessionEntry(target, {
+        sessionId: target.sessionId,
+        lifecycleRunId: runId,
+        status: "running",
+        updatedAt: 1_000,
+      });
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: {
+            ...target,
+            sessionKey: "agent:main:unrelated-active-turn",
+            sessionId: "other-session",
+            expectedWriterRunId: "other-writer",
+          },
+          assertCommitAllowed: unrelatedCommit,
+          withTranscriptWrite: async (write) => await write(),
+        },
+        async () => {
+          await owner[method]({
+            sessionKey: target.sessionKey,
+            agentId: target.agentId,
+            event: {
+              runId,
+              seq: 1,
+              stream: "lifecycle",
+              sessionId: target.sessionId,
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              ts: 2_000,
+              data: {
+                phase: "error",
+                ...(method === "observe" ? { executionSettled: true } : {}),
+                error: "synthetic-provider-failure",
+                endedAt: 2_000,
+              },
+            },
+          });
+        },
+      );
+      expect(loadSessionEntry(target)).toMatchObject({ status: "failed", lastRunId: runId });
+      expect(await loadTranscriptEvents(target)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            details: expect.objectContaining({ runId, error: "synthetic-provider-failure" }),
+          }),
+        ]),
+      );
+      expect(unrelatedCommit).not.toHaveBeenCalled();
+      await lifecycleState.persistGatewaySessionLifecycleEvent({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        event: {
+          runId: "queued-followup-run",
+          sessionId: target.sessionId,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          ts: 3_000,
+          data: { phase: "start", startedAt: 3_000 },
+        },
+      });
+      await owner.observe({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        event: {
+          runId,
+          seq: 2,
+          stream: "lifecycle",
+          sessionId: target.sessionId,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          ts: 4_000,
+          data: {
+            phase: "error",
+            error: "late-original-failure",
+            startedAt: 1_000,
+            endedAt: 4_000,
+          },
+        },
+      });
+      expect(loadSessionEntry(target)).toMatchObject({
+        status: "running",
+        lifecycleRunId: "queued-followup-run",
+      });
+    } finally {
+      await owner.drain();
+      routing.loadSessionEntry.mockReset();
+      closeOpenClawAgentDatabasesForTest();
+      await scheduler.stop();
+      tempDirs.cleanup();
+    }
+  },
+);
 
 it.each([
   { stopReason: "restart", status: "running", recovery: "recoverable", timeoutPhase: undefined },

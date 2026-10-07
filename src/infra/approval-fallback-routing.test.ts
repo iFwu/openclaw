@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
@@ -343,7 +345,10 @@ describe("approval fallback review regressions", () => {
   it("dedupes Telegram prefixes, effective default account and encoded topic against native attempts", async () => {
     vi.useFakeTimers();
     const f = fixture();
-    const { telegramPlugin } = await import("../../extensions/telegram/channel-plugin-api.js");
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "channel-plugin-api.ts",
+    });
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
     );

@@ -216,6 +216,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       return run();
     }
     const first = this.completionAuthorities.get(resultEntry)?.authority.operatorAuthority;
+    const firstOrigin = this.completionAuthorities.get(resultEntry)?.authority.approvalOrigin;
     // Mixed waves must still prove the cancelled member's original source is live and identical.
     // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
     for (const entry of batch) {
@@ -224,6 +225,14 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         throw new Error("Subagent completion authority is no longer active");
       }
       source?.assertCurrent();
+      if (
+        !isDeepStrictEqual(
+          this.completionAuthorities.get(entry)?.authority.approvalOrigin,
+          firstOrigin,
+        )
+      ) {
+        throw new Error("Subagent completion batch has incompatible approval origin");
+      }
       if (source?.source !== first?.source || !isDeepStrictEqual(source?.scopes, first?.scopes)) {
         throw new Error("Subagent completion batch has incompatible operator authority");
       }

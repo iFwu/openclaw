@@ -6,6 +6,7 @@ import {
   buildGroupEntrySchema,
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingPreviewSchema,
+  ChannelStreamingProgressSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ProviderCommandsSchema,
@@ -82,10 +83,14 @@ const TelegramCapabilitiesSchema = z.union([
 ]);
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: ChannelStreamingPreviewSchema.optional(),
+  progress: ChannelStreamingProgressSchema.extend({
+    persist: z.boolean().optional(),
+  }).optional(),
 }).strict();
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramTopicSchema = z
   .object({
+    autoNewSession: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     requireMentionInBotThreads: z.boolean().optional(),
     ingest: z.boolean().optional(),
@@ -101,6 +106,7 @@ const TelegramTopicSchema = z
   .strict();
 
 const TelegramGroupSchema = buildGroupEntrySchema({
+  autoNewSession: z.boolean().optional(),
   requireMentionInBotThreads: z.boolean().optional(),
   ingest: z.boolean().optional(),
   disableAudioPreflight: z.boolean().optional(),
@@ -108,6 +114,33 @@ const TelegramGroupSchema = buildGroupEntrySchema({
   topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
   errorPolicy: TelegramErrorPolicySchema,
 });
+
+function rejectWildcardAutoNewSession(
+  groups:
+    | Record<
+        string,
+        | {
+            autoNewSession?: boolean;
+            topics?: Record<string, { autoNewSession?: boolean } | undefined>;
+          }
+        | undefined
+      >
+    | undefined,
+  ctx: z.RefinementCtx,
+  scope: "groups" | "direct",
+): void {
+  const wildcardGroup = groups?.["*"];
+  const wildcardTopic = Object.values(wildcardGroup?.topics ?? {}).find(
+    (topic) => topic?.autoNewSession === true,
+  );
+  if (wildcardGroup?.autoNewSession === true || wildcardTopic) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Telegram automatic new sessions require an explicit chat ID",
+      path: [scope, "*", wildcardGroup?.autoNewSession === true ? "autoNewSession" : "topics"],
+    });
+  }
+}
 
 const AutoTopicLabelSchema = z
   .union([
@@ -123,6 +156,7 @@ const AutoTopicLabelSchema = z
 
 const TelegramDirectSchema = z
   .object({
+    autoNewSession: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
@@ -131,7 +165,12 @@ const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z
-      .record(z.string(), TelegramTopicSchema.omit({ requireMentionInBotThreads: true }).optional())
+      .record(
+        z.string(),
+        TelegramTopicSchema.omit({
+          requireMentionInBotThreads: true,
+        }).optional(),
+      )
       .optional(),
     errorPolicy: TelegramErrorPolicySchema,
     requireTopic: z.boolean().optional(),
@@ -276,7 +315,11 @@ const TelegramAccountSchemaBase = z
   .strict();
 
 // DM policy validation below uses each account's effective inherited allowFrom.
-const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine(validateTelegramCustomCommands);
+const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+  validateTelegramCustomCommands(value, ctx);
+  rejectWildcardAutoNewSession(value.groups, ctx, "groups");
+  rejectWildcardAutoNewSession(value.direct, ctx, "direct");
+});
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   ...rootPolicyShape,
@@ -285,6 +328,8 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
 }).superRefine((value, ctx) => {
   refineChannelDmPolicy({ channelId: "telegram", value, ctx });
   validateTelegramCustomCommands(value, ctx);
+  rejectWildcardAutoNewSession(value.groups, ctx, "groups");
+  rejectWildcardAutoNewSession(value.direct, ctx, "direct");
 
   if (value.accounts) {
     for (const [accountId, account] of Object.entries(value.accounts)) {

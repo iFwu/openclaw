@@ -898,7 +898,11 @@ export function resolveChannelProgressDraftMaxLineChars(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
 ): number {
-  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
+  const value = resolveChannelProgressDraftConfig(entry).maxLineChars;
+  if (value === false) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  const configured = asInteger(value);
   return configured && configured > 0 ? configured : defaultValue;
 }
 
@@ -1081,8 +1085,18 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
 
 export function mergeChannelProgressDraftLineForStreaming<
   TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine, params: { maxLines: number }): TLine[] {
-  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressPriorityLine);
+>(
+  lines: TLine[],
+  line: TLine,
+  params: { maxLines: number; preserveCommentaryOnOverflow?: boolean },
+): TLine[] {
+  return mergeProgressDraftLine(
+    lines,
+    line,
+    params.maxLines,
+    isChannelProgressPriorityLine,
+    params.preserveCommentaryOnOverflow,
+  );
 }
 
 function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1090,6 +1104,7 @@ function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>
   line: TLine,
   limit: number,
   isPriorityLine: typeof isChannelProgressAttentionLine,
+  preserveCommentaryOnOverflow = false,
 ): TLine[] {
   const normalized = normalizeChannelProgressDraftLineIdentity(line);
   if (!normalized) {
@@ -1112,7 +1127,7 @@ function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>
       }
       const next = [...lines];
       next[existingIndex] = replacement;
-      return limitProgressDraftLines(next, maxLines, isPriorityLine);
+      return limitProgressDraftLines(next, maxLines, isPriorityLine, preserveCommentaryOnOverflow);
     }
   } else {
     const previous = lines.at(-1);
@@ -1120,20 +1135,43 @@ function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>
       return lines;
     }
   }
-  return limitProgressDraftLines([...lines, line], maxLines, isPriorityLine);
+  return limitProgressDraftLines(
+    [...lines, line],
+    maxLines,
+    isPriorityLine,
+    preserveCommentaryOnOverflow,
+  );
 }
 
 function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine>(
   lines: TLine[],
   maxLines: number,
   isPriorityLine: typeof isChannelProgressAttentionLine,
+  preserveCommentaryOnOverflow = false,
 ): TLine[] {
+  const isCommentary = (line: TLine) =>
+    preserveCommentaryOnOverflow &&
+    typeof line === "object" &&
+    line.id?.startsWith("commentary:") === true;
+  const attentionCount = lines.filter(isPriorityLine).length;
+  const commentaryCount = lines.filter(
+    (line) => !isPriorityLine(line) && isCommentary(line),
+  ).length;
   let attentionSlots = maxLines;
-  let ordinarySlots = Math.max(0, maxLines - lines.filter(isPriorityLine).length);
-  // Keep attention through tool/commentary bursts without changing arrival order.
+  let commentarySlots = Math.max(0, maxLines - attentionCount);
+  let ordinarySlots = Math.max(0, maxLines - attentionCount - commentaryCount);
+  // Select by priority but keep chronological order within the bounded window.
   return lines
     .toReversed()
-    .filter((line) => (isPriorityLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0))
+    .filter((line) => {
+      if (isPriorityLine(line)) {
+        return attentionSlots-- > 0;
+      }
+      if (isCommentary(line)) {
+        return commentarySlots-- > 0;
+      }
+      return ordinarySlots-- > 0;
+    })
     .toReversed();
 }
 

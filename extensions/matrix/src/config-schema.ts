@@ -90,7 +90,7 @@ export const matrixStreamingSchema = z
         label: z.union([z.string(), z.literal(false)]).optional(),
         labels: z.array(z.string()).optional(),
         maxLines: z.number().int().positive().optional(),
-        maxLineChars: z.number().int().positive().optional(),
+        maxLineChars: z.union([z.number().int().positive(), z.literal(false)]).optional(),
         toolProgress: z.boolean().optional(),
         commandText: z.enum(["raw", "status"]).optional(),
       })

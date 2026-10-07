@@ -1,4 +1,6 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { retainCancelledUserTurnInput } from "../../sessions/user-turn-transcript-admission.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
@@ -31,6 +33,7 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   occupiesLane: boolean;
   task: Promise<void>;
   settlement?: Promise<void>;
+  pendingInputSources?: Promise<UserTurnTranscriptRecorder | undefined>[];
   settlementFailure?: { error: unknown };
   stallTimer?: ReturnType<typeof setTimeout>;
   claimRefreshTimer?: ReturnType<typeof setInterval>;
@@ -118,4 +121,51 @@ export function resolveLaneKey<TPayload, TMetadata>(
 
 export function sortedKeys(keys: Iterable<string>): string[] {
   return [...keys].toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function resolveIngressPendingInputSources<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): Promise<UserTurnTranscriptRecorder[]> {
+  return (await Promise.all(state.pendingInputSources ?? [])).filter(
+    (source): source is UserTurnTranscriptRecorder => source !== undefined,
+  );
+}
+
+export function retainIngressPendingInputSources(
+  sources: readonly UserTurnTranscriptRecorder[],
+): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      if (!retainCancelledUserTurnInput(source)) {
+        throw new Error("Ingress original source cancellation was not confirmed");
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Ingress original sources were not retained");
+  }
+}
+
+export async function finishIngressPendingInputSources<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+  disposition: "cancelled" | "interrupted",
+): Promise<void> {
+  const results = await Promise.allSettled(state.pendingInputSources ?? []);
+  const failures: unknown[] = [];
+  for (const result of results) {
+    if (result.status === "rejected") {
+      continue; // Failed admission never supplied a factory receipt.
+    }
+    try {
+      result.value?.finishPendingInput?.(disposition);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to finish ingress original inputs");
+  }
 }

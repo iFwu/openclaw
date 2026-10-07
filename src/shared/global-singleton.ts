@@ -75,9 +75,17 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
   event: "close" | "plugin-registry" | "restart" = "close",
+  onReset?: (key: symbol, phase: "begin" | "end") => void,
 ): Promise<void> {
-  const resets = [...resolveGlobalSingletonResetRegistry().values()]
-    .filter(({ lifecycle }) => {
+  const observe = (key: symbol, phase: "begin" | "end") => {
+    try {
+      onReset?.(key, phase);
+    } catch {
+      // Observation must not prevent a resource owner from releasing its state.
+    }
+  };
+  const resets = [...resolveGlobalSingletonResetRegistry().entries()]
+    .filter(([, { lifecycle }]) => {
       if (event === "plugin-registry") {
         return lifecycle === "plugin-registry";
       }
@@ -86,16 +94,19 @@ export async function drainGlobalSingletonLifecycleState(
       }
       return event === "close" || lifecycle === "close-and-restart";
     })
-    .map(({ reset }) => {
+    .map(([key, { reset }]) => {
+      observe(key, "begin");
+      let result: Promise<void>;
       try {
-        return Promise.resolve(reset());
+        result = Promise.resolve(reset());
       } catch (error) {
-        return Promise.reject(
+        result = Promise.reject(
           error instanceof Error
             ? error
             : new Error("Global singleton reset failed", { cause: error }),
         );
       }
+      return result.finally(() => observe(key, "end"));
     });
   const settled = await Promise.allSettled(resets);
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));

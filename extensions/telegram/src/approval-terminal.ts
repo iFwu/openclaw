@@ -13,6 +13,68 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 const TELEGRAM_APPROVAL_DETAIL_MAX_CHARS = 2_800;
 const TELEGRAM_APPROVAL_ID_MAX_CHARS = 512;
 const TELEGRAM_APPROVAL_TERMINAL_MAX_CHARS = 4_000;
+/**
+ * Terminal receipts are scrollback, not content.
+ *
+ * A resolved card repeated its full title *and* description, so every
+ * approval left a six-line block in the chat forever. The decision, the
+ * subject in one glance, the time, and the id are what a human needs to find
+ * the event again; the full command and description stay in the logs.
+ */
+const TELEGRAM_APPROVAL_SUBJECT_MAX_CHARS = 72;
+
+/** Local wall-clock `HH:MM` for the moment the approval reached its terminal state. */
+function formatTerminalTime(now: Date = new Date()): string {
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+/** Collapse a subject to a single short line; newlines would reintroduce bulk. */
+function formatTerminalSubject(value: string | null | undefined): string {
+  const collapsed = (value ?? "").replace(/\s+/gu, " ").trim();
+  if (!collapsed) {
+    return "";
+  }
+  if (collapsed.length <= TELEGRAM_APPROVAL_SUBJECT_MAX_CHARS) {
+    return collapsed;
+  }
+  return `${truncateUtf16Safe(collapsed, TELEGRAM_APPROVAL_SUBJECT_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+/** Second line of every terminal receipt: when it happened and how to find it. */
+function formatTerminalTrailer(approvalId: string): string {
+  return `${formatTerminalTime()} · ${truncateApprovalId(approvalId)}`;
+}
+
+/** Assemble `<icon> <result> · <subject>` without leaving a dangling separator. */
+function formatTerminalHeadline(icon: string, result: string, subject: string): string {
+  return subject ? `${icon} ${result} · ${subject}` : `${icon} ${result}`;
+}
+
+/**
+ * Icon for a terminal outcome.
+ *
+ * A denial reported with ✅ is actively misleading: the receipt is the only
+ * durable record left in the chat once the card's buttons are gone.
+ */
+function iconForDecision(decision: ResolvedApprovalView["decision"] | undefined): string {
+  return decision === "deny" ? "❌" : "✅";
+}
+
+/** Same, for a canonical snapshot that carries a status rather than a decision. */
+function iconForCanonicalStatus(approval: ApprovalResolveResult["approval"]): string {
+  if (approval.status === "denied") {
+    return "❌";
+  }
+  if (approval.status === "expired") {
+    return "⏱️";
+  }
+  if (approval.status === "cancelled") {
+    return "⚠️";
+  }
+  return iconForDecision(approval.decision);
+}
 
 function formatApprovalDecision(decision: ResolvedApprovalView["decision"] | undefined): string {
   return decision ? formatApprovalDecisionLabel(decision) : "Resolved";
@@ -56,22 +118,12 @@ function finalizeTerminalText(lines: string[]): string {
 }
 
 function appendCanonicalSubject(
-  lines: string[],
   presentation: ApprovalResolveResult["approval"]["presentation"],
-): void {
+): string {
   if (presentation.kind === "exec") {
-    lines.push(
-      "",
-      "Command:",
-      truncateDetail(presentation.commandPreview ?? presentation.commandText),
-    );
-    return;
+    return formatTerminalSubject(presentation.commandPreview ?? presentation.commandText);
   }
-  lines.push("", "Request:", truncateDetail(presentation.title));
-  const description = presentation.description.trim();
-  if (description) {
-    lines.push(truncateDetail(description));
-  }
+  return formatTerminalSubject(presentation.title);
 }
 
 /** Guard previews are bounded after host sanitization, which can expand control escapes. */
@@ -88,9 +140,11 @@ function guardTerminalText(
   headline: string,
   approvalId: string,
   description: string | undefined,
+  allowWindow = false,
 ): string {
   const lines = description?.split("\n") ?? [];
   const risk = lines.find((line) => line.startsWith("风险："));
+  const window = allowWindow ? lines.find((line) => line.startsWith("限时放行：")) : undefined;
   const preview = compactGuardPreview(
     lines.filter((line) => !line.startsWith("风险：") && !line.startsWith("限时放行：")).join(" "),
   );
@@ -98,7 +152,7 @@ function guardTerminalText(
     [
       [headline, `ID：${formatGuardApprovalId(approvalId)}`, risk].filter(Boolean).join(" · "),
       preview,
-      "/guard show 查看详情",
+      [window, "Control UI 查看详情"].filter(Boolean).join(" · "),
     ].filter(Boolean),
   );
 }
@@ -125,25 +179,39 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
   }
   const approvalId = approval.id || params.fallbackApprovalId;
   if (
-    approval.status === "expired" &&
     approval.presentation?.kind === "plugin" &&
     approval.presentation.pluginId === "approval-guard"
   ) {
+    const result = {
+      allowed:
+        approval.status === "allowed" && approval.decision === "allow-always"
+          ? "已限时放行"
+          : "已允许",
+      denied: "已拒绝",
+      expired: "已过期（未执行）",
+      cancelled: "已取消",
+    }[approval.status];
     return guardTerminalText(
-      `⏱️ 已过期（未执行） · ${approval.presentation.title}`,
+      formatTerminalHeadline(
+        iconForCanonicalStatus(approval),
+        result,
+        appendCanonicalSubject(approval.presentation),
+      ),
       approvalId,
       approval.presentation.description,
+      approval.status === "allowed" && approval.decision === "allow-always",
     );
   }
-
   const lines = [
-    params.result.applied ? "✅ Approval resolved here" : "ℹ️ Approval already resolved",
-    `Canonical result: ${formatCanonicalResult(approval)}`,
-    `ID: ${truncateApprovalId(approvalId)}`,
+    formatTerminalHeadline(
+      iconForCanonicalStatus(approval),
+      params.result.applied
+        ? formatCanonicalResult(approval)
+        : `Already resolved: ${formatCanonicalResult(approval)}`,
+      approval.presentation ? appendCanonicalSubject(approval.presentation) : "",
+    ),
+    formatTerminalTrailer(approvalId),
   ];
-  if (approval.presentation) {
-    appendCanonicalSubject(lines, approval.presentation);
-  }
   return finalizeTerminalText(lines);
 }
 
@@ -153,20 +221,13 @@ export function buildTelegramLegacyApprovalTerminalText(params: {
   decision?: "allow-once" | "allow-always" | "deny";
   outcome: "resolved-here" | "no-longer-pending" | "not-actionable";
 }): string {
-  const lines =
+  const headline =
     params.outcome === "resolved-here"
-      ? ["✅ Approval resolved here", `Result: ${formatApprovalDecision(params.decision)}`]
+      ? `${iconForDecision(params.decision)} ${formatApprovalDecision(params.decision)}`
       : params.outcome === "no-longer-pending"
-        ? [
-            "ℹ️ Approval no longer pending",
-            "It was already resolved or expired; the canonical decision is unavailable here.",
-          ]
-        : [
-            "ℹ️ Approval is no longer actionable from this button",
-            "It may have been resolved, expired, or require a different authorized approval surface.",
-          ];
-  lines.push(`ID: ${truncateApprovalId(params.approvalId)}`);
-  return finalizeTerminalText(lines);
+        ? "ℹ️ No longer pending · already resolved or expired"
+        : "ℹ️ Not actionable from this button";
+  return finalizeTerminalText([headline, formatTerminalTrailer(params.approvalId)]);
 }
 
 /** Render a neutral terminal receipt for malformed callbacks in the reserved namespace. */
@@ -174,19 +235,11 @@ export function buildTelegramInvalidApprovalTerminalText(): string {
   return "ℹ️ Approval action unavailable\nThis button is invalid or no longer actionable.";
 }
 
-function appendViewSubject(
-  lines: string[],
-  view: ResolvedApprovalView | ExpiredApprovalView,
-): void {
+function appendViewSubject(view: ResolvedApprovalView | ExpiredApprovalView): string {
   if (view.approvalKind === "exec") {
-    lines.push("", "Command:", truncateDetail(view.commandPreview ?? view.commandText));
-    return;
+    return formatTerminalSubject(view.commandPreview ?? view.commandText);
   }
-  lines.push("", "Request:", truncateDetail(view.title));
-  const description = view.description?.trim();
-  if (description) {
-    lines.push(truncateDetail(description));
-  }
+  return formatTerminalSubject(view.title);
 }
 
 /** Render a canonical native resolved event while retaining safe request context. */
@@ -197,16 +250,32 @@ export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalVi
       operationSummary: truncateDetail(view.operationSummary),
     });
   }
-  const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
-  const lines = [
-    `✅ ${label} approval resolved`,
-    `Canonical result: ${formatApprovalDecision(view.decision)}`,
-  ];
-  if (view.resolvedBy?.trim()) {
-    lines.push(`Resolved by: ${formatResolvedBy(view.resolvedBy)}`);
+  if (view.approvalKind === "plugin" && view.pluginId === "approval-guard") {
+    return guardTerminalText(
+      formatTerminalHeadline(
+        iconForDecision(view.decision),
+        view.decision === "deny"
+          ? "已拒绝"
+          : view.decision === "allow-always"
+            ? "已限时放行"
+            : "已允许",
+        appendViewSubject(view),
+      ),
+      view.approvalId,
+      view.description ?? undefined,
+      view.decision === "allow-always",
+    );
   }
-  lines.push(`ID: ${truncateApprovalId(view.approvalId)}`);
-  appendViewSubject(lines, view);
+  const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
+  const resolvedBy = view.resolvedBy?.trim() ? ` · by ${formatResolvedBy(view.resolvedBy)}` : "";
+  const lines = [
+    formatTerminalHeadline(
+      iconForDecision(view.decision),
+      `${label} ${formatApprovalDecision(view.decision)}`,
+      appendViewSubject(view),
+    ),
+    `${formatTerminalTrailer(view.approvalId)}${resolvedBy}`,
+  ];
   return finalizeTerminalText(lines);
 }
 
@@ -215,21 +284,18 @@ export function buildTelegramNativeExpiredApprovalText(view: ExpiredApprovalView
   if (view.approvalKind === "system-agent") {
     return "⏱️ OpenClaw change expired. No change was made.";
   }
-
   if (view.approvalKind === "plugin" && view.pluginId === "approval-guard") {
-    // Local timers do not establish the authoritative execution outcome.
+    // Local card timers can precede a late gateway resolution; do not infer execution here.
     return guardTerminalText(
-      `⏱️ 此卡已到期 · ${view.title}`,
+      formatTerminalHeadline("⏱️", "此卡已到期", appendViewSubject(view)),
       view.approvalId,
       view.description ?? undefined,
     );
   }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [
-    `⏱️ ${label} approval expired`,
-    "Canonical result: Expired",
-    `ID: ${truncateApprovalId(view.approvalId)}`,
+    formatTerminalHeadline("⏱️", `${label} expired`, appendViewSubject(view)),
+    formatTerminalTrailer(view.approvalId),
   ];
-  appendViewSubject(lines, view);
   return finalizeTerminalText(lines);
 }

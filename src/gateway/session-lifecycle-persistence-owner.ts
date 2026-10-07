@@ -2,6 +2,7 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
@@ -110,7 +111,9 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
             }
           : {}),
       });
-    const promise = params.writeContext ? params.writeContext.run(persist) : persist();
+    const promise = params.writeContext
+      ? params.writeContext.run(persist)
+      : runWithoutOwnedSessionTranscriptWrites(persist);
     inFlight.add(promise);
     let entry: PreparedPersistence | undefined;
     const settle = () => {
@@ -181,10 +184,12 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
         return Promise.reject(createAgentRunStaleLifecycleError());
       }
       const authority = terminalEventAuthority(params.event);
-      return persistGatewaySessionLifecycleEvent({
-        ...params,
-        ...(authority ? { assertCommitAllowed: () => assertTerminalAuthority(authority) } : {}),
-      });
+      return runWithoutOwnedSessionTranscriptWrites(() =>
+        persistGatewaySessionLifecycleEvent({
+          ...params,
+          ...(authority ? { assertCommitAllowed: () => assertTerminalAuthority(authority) } : {}),
+        }),
+      );
     },
     async drain(): Promise<void> {
       await Promise.allSettled(inFlight);

@@ -26,6 +26,7 @@ import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { captureApprovalOrigin } from "../admitted-run-approval-origin.js";
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
@@ -386,6 +387,16 @@ export async function maybeSpawnVisibleSession(params: {
   // Successful admission reserves a child before Gateway work can start.
   params.options?.onSpawnEffectsStart?.();
   try {
+    const caller = getGatewayToolCallerIdentity();
+    const approvalOrigin = caller?.turnSourceLocal
+      ? Object.freeze({ turnSourceLocal: true as const })
+      : captureApprovalOrigin({
+          provider: caller?.turnSourceChannel,
+          to: caller?.turnSourceTo,
+          accountId: caller?.turnSourceAccountId,
+          threadId:
+            caller?.turnSourceThreadId == null ? undefined : String(caller.turnSourceThreadId),
+        });
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
     const createGatewayCall: InProcessGatewayCaller =
       params.options?.callGateway ??
@@ -398,6 +409,7 @@ export async function maybeSpawnVisibleSession(params: {
             actor: { type: "agent", id: requesterAgentId },
             requesterSessionKey: requesterKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(approvalOrigin ? { approvalOrigin } : {}),
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
               : {}),

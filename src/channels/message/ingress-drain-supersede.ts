@@ -1,4 +1,9 @@
-import { activeClaimKey, type ActiveHandlerState } from "./ingress-drain-state.js";
+import {
+  activeClaimKey,
+  resolveIngressPendingInputSources,
+  retainIngressPendingInputSources,
+  type ActiveHandlerState,
+} from "./ingress-drain-state.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export type IngressSupersedeDecision = boolean | (() => boolean);
@@ -48,9 +53,10 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
   for (const pending of states) {
     const decision = await params.shouldSupersedePending?.(params.candidate, pending.claim);
     // Async policy can expire before the drain resumes; check it at the effect boundary.
-    if (!(typeof decision === "function" ? decision() : decision)) {
+    if (!decision) {
       continue;
     }
+    const sources = await resolveIngressPendingInputSources(pending);
     // Revalidate after the async predicate so a late true cannot kill adopted or replaced work.
     if (
       params.activeByClaim.get(activeClaimKey(pending.claim)) !== pending ||
@@ -59,6 +65,10 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
     ) {
       continue;
     }
+    if (typeof decision === "function" && !decision()) {
+      continue;
+    }
+    retainIngressPendingInputSources(sources);
     pending.superseded = true;
     params.clearStallTimer(pending);
     pending.abortController.abort(new Error("ingress-superseded"));

@@ -35,6 +35,10 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
 } from "./run/incomplete-turn-recovery.js";
+import {
+  createModelContinuationCallbacks,
+  prepareModelContinuationParams,
+} from "./run/model-continuation.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import { createProviderReviewRun } from "./run/provider-review-run.js";
@@ -103,7 +107,12 @@ export async function runPreparedEmbeddedLoop(
     { config: params.config },
   );
   const abortSignal = input.laneController.abortSignal;
-  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext, abortSignal };
+  const continuationParams = prepareModelContinuationParams(
+    { ...params, abortSignal },
+    preparedRuntime,
+  );
+  params = continuationParams;
+  const modelContinuation = continuationParams.modelContinuation;
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     preparedRuntime.admittedRunContext,
@@ -433,12 +442,20 @@ export async function runPreparedEmbeddedLoop(
         activeErrorContext,
         resolveReplayInvalidForAttempt,
       } = normalizedAttempt;
+      const modelContinuationCallbacks = createModelContinuationCallbacks({
+        state: modelContinuation,
+        sessionPromptState,
+        assertActive: assertAdmittedActive,
+        throwIfAborted: () => input.laneController.throwIfAborted(),
+        abortSignal,
+      });
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: admittedRunInput,
         preparedRuntime,
         normalizedAttempt,
         runtimePlan,
         sessionPromptState,
+        prepareModelContinuation: modelContinuationCallbacks.prepare,
         failoverRetryController,
         compactionRuntime,
         contextEngine,
@@ -508,7 +525,8 @@ export async function runPreparedEmbeddedLoop(
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
         agentDir,
         isProbeSession,
-      });
+        prepareModelContinuation: modelContinuationCallbacks.prepare,
+      }).catch(modelContinuationCallbacks.captureFailure);
       thinkLevel = assistantFailureOutcome.thinkLevel;
       preparedRuntime.setThinkLevel(thinkLevel);
       authRetryPending = assistantFailureOutcome.authRetryPending;

@@ -15,6 +15,7 @@ import {
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -371,6 +372,11 @@ function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
+        if (cliExecution && runOptions.modelContinuation?.checkpoint) {
+          throw new AgentHarnessPreflightError(
+            "A CLI runtime cannot continue the settled embedded transcript.",
+          );
+        }
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -671,6 +677,7 @@ function createCronPromptExecutor(
           forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
+          modelContinuation: runOptions.modelContinuation,
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
         });

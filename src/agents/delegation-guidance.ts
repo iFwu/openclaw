@@ -1,7 +1,5 @@
-import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export function resolveMainSessionDelegationMode(params: {
@@ -9,28 +7,12 @@ export function resolveMainSessionDelegationMode(params: {
   agentId?: string;
   sessionKey?: string;
 }): SubagentDelegationMode {
-  const { config, agentId, sessionKey } = params;
+  const { config, agentId } = params;
   const agentSubagents =
     config && agentId ? resolveAgentConfig(config, agentId)?.subagents : undefined;
   const configuredMode =
     agentSubagents?.delegationMode ?? config?.agents?.defaults?.subagents?.delegationMode;
-  if (configuredMode) {
-    return configuredMode;
-  }
-  const baseSessionKey = parseCronRunScopeSuffix(sessionKey).baseSessionKey;
-  if (
-    agentId !== undefined &&
-    baseSessionKey !== undefined &&
-    baseSessionKey ===
-      resolveCanonicalMainSessionKey({
-        agentId,
-        mainKey: config?.session?.mainKey,
-        sessionScope: config?.session?.scope,
-      })
-  ) {
-    return "prefer";
-  }
-  return "suggest";
+  return configuredMode ?? "suggest";
 }
 
 export function buildDelegationGuidanceSection(params: {
@@ -53,9 +35,9 @@ export function buildDelegationGuidanceSection(params: {
   return [
     "## Delegation",
     "Stay responsive: incoming messages wait on your current turn.",
-    "- Answer directly: chat, known answers, quick lookups.",
+    "- Delegate only on request or when parallelism, context isolation, or independent review clearly outweighs handoff costs; otherwise work directly, even on large or slow tasks.",
     hiddenDelegationTool
-      ? `- Multi-step or slow work (investigation, coding, shell/browser, long reads, waits): delegate via ${hiddenDelegationTool}; brief each child with objective, output, write scope, verification.`
+      ? `- When eligible, delegate via ${hiddenDelegationTool}; brief each child with objective, output, write scope, verification. Keep child tasks narrower; do not redelegate the whole task.`
       : "",
     hiddenDelegationTool
       ? "- Use subagents for internal QA, research, coding, review, and test lanes; keep their results in the parent task. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session."

@@ -24,6 +24,7 @@ import { createIngressWriter } from "./ingress-claim-writes.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import {
   activeClaimKey,
+  finishIngressPendingInputSources,
   createIngressSettleOwner,
   IngressAdoptionLostError,
   resolveLaneKey,
@@ -41,6 +42,7 @@ import type {
   ChannelIngressQueueRecord,
 } from "./ingress-queue.types.js";
 import {
+  INGRESS_ADOPTION_STALL_ERROR_PREFIX,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
   type IngressNonRetryableFailure,
@@ -287,7 +289,7 @@ export function createChannelIngressDrain<
       }
       const ageMs = now() - state.startedAt;
       const displayId = state.eventId.replace(/^0+(?=\d)/, "") || state.eventId;
-      const message = `Channel ingress claim→adoption stalled for event ${displayId} on lane ${state.laneKey} after ${ageMs}ms; applying retry policy (handler-timeout).`;
+      const message = `${INGRESS_ADOPTION_STALL_ERROR_PREFIX} for event ${displayId} on lane ${state.laneKey} after ${ageMs}ms; applying retry policy (handler-timeout).`;
       const timeoutError = new Error(message);
       // Closed guillotine flag — catch must not string-sniff errors.
       state.guillotined = true;
@@ -297,7 +299,10 @@ export function createChannelIngressDrain<
       // Route the timeout through the canonical retry owner. A release/fail write
       // error must not falsely settle (would stop heartbeat and wedge recovery).
       void state
-        .settleOnce(() => applyFailureDisposition(state.claim, timeoutError))
+        .settleOnce(async () => {
+          await finishIngressPendingInputSources(state, "interrupted");
+          await applyFailureDisposition(state.claim, timeoutError);
+        })
         .catch((err: unknown) => {
           log(
             `ingress drain: failed to settle stalled event ${displayId}; holding claim: ${formatError(err)}`,
@@ -330,6 +335,15 @@ export function createChannelIngressDrain<
   ): ChannelIngressDispatchLifecycle => {
     return {
       abortSignal: state.abortController.signal,
+      registerPendingInputSource: (source) => {
+        state.abortController.signal.throwIfAborted();
+        if (state.phase !== "dispatching" && state.phase !== "deferred") {
+          throw new Error("Ingress source registration no longer owns pre-adoption work");
+        }
+        state.pendingInputSources ??= [];
+        state.pendingInputSources.push(source);
+        void source.catch(() => undefined);
+      },
       onAdopted: async () => {
         // Lost adoption is loud: guillotine/supersede already tombstoned/failed the claim.
         if (state.guillotined) {
@@ -386,14 +400,31 @@ export function createChannelIngressDrain<
           return;
         }
         // Keep recovery armed until disposition commits; removeActive clears it after success.
+        await finishIngressPendingInputSources(state, "interrupted");
         await state.settleOnce(() => applyFailureDisposition(state.claim, error));
       },
       onCancelled: async () => {
+        if (
+          (state.phase !== "dispatching" && state.phase !== "deferred") ||
+          state.guillotined ||
+          state.superseded
+        ) {
+          return;
+        }
         // Cancellation means ownership ended before delivery, so preserve every
         // prior retry fact while reopening the canonical row for replacement.
+        await finishIngressPendingInputSources(state, "interrupted");
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
+        if (
+          (state.phase !== "dispatching" && state.phase !== "deferred") ||
+          state.guillotined ||
+          state.superseded
+        ) {
+          return;
+        }
+        await finishIngressPendingInputSources(state, "interrupted");
         await releaseUnadopted(state, { lastError: "turn-abandoned" });
       },
     };
@@ -479,6 +510,7 @@ export function createChannelIngressDrain<
         }
         if (result?.kind === "failed-retryable") {
           clearStallTimer(state);
+          await finishIngressPendingInputSources(state, "interrupted");
           await state.settleOnce(() => applyFailureDisposition(claim, result.error));
           return;
         }
@@ -506,6 +538,7 @@ export function createChannelIngressDrain<
           return;
         }
         clearStallTimer(state);
+        await finishIngressPendingInputSources(state, "interrupted");
         await state.settleOnce(() => applyFailureDisposition(claim, err));
       } finally {
         releaseRootWork?.();

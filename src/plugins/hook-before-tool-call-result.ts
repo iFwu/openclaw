@@ -18,6 +18,8 @@ export type PluginHookBeforeToolCallResult = {
   requireApproval?: {
     title: string;
     description: string;
+    /** Reviewer-only full detail, sanitized by the canonical approval owner. */
+    detail?: string;
     scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
@@ -29,6 +31,8 @@ export type PluginHookBeforeToolCallResult = {
     /** Override timeout text and return the timeout as a blocked tool result. */
     timeoutReason?: string;
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    /** Only an explicit denial may end the current turn; timeouts still block the tool. */
+    onDeny?: "block" | "abort-turn";
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };

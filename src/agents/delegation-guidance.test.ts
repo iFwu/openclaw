@@ -12,7 +12,7 @@ describe("resolveMainSessionDelegationMode", () => {
       config: {},
       agentId: "main",
       sessionKey: "agent:main:main",
-      expected: "prefer",
+      expected: "suggest",
     },
     {
       name: "non-main session",
@@ -26,14 +26,14 @@ describe("resolveMainSessionDelegationMode", () => {
       config: { session: { mainKey: "inbox" } },
       agentId: "main",
       sessionKey: "agent:main:inbox",
-      expected: "prefer",
+      expected: "suggest",
     },
     {
       name: "global session scope",
       config: { session: { scope: "global" } },
       agentId: "main",
       sessionKey: "global",
-      expected: "prefer",
+      expected: "suggest",
     },
     {
       name: "explicit default prefer outside main",
@@ -106,7 +106,11 @@ describe("buildDelegationGuidanceSection", () => {
       expected: "delegate via native `spawn_agent`",
     },
   ])("injects $hiddenDelegationTool", ({ hiddenDelegationTool, expected }) => {
-    expect(buildSection({ hiddenDelegationTool }).join("\n")).toContain(expected);
+    const section = buildSection({ hiddenDelegationTool }).join("\n");
+    expect(section).toContain(expected);
+    expect(section).toContain("only on request or when parallelism");
+    expect(section).toContain("clearly outweighs handoff costs");
+    expect(section).not.toContain("Multi-step or slow work");
   });
 
   it.each([

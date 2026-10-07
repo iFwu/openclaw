@@ -308,12 +308,8 @@ vi.mock("./agent-runner-utils.js", async () => ({
         },
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
-    (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
-      provider: run.provider,
-      model: run.model,
-      cfg: run.config,
-      agentDir: run.agentDir,
-    }),
+    (await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js"))
+      .resolveModelFallbackOptions,
   ),
   resolveRunFastModeForFallbackCandidate: (params: {
     run: { fastMode?: unknown; fastModeAutoOnSeconds?: unknown };

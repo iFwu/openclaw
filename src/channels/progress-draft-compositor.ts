@@ -361,6 +361,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const mergeLine = (line: ChannelProgressDraftCompositorLine) =>
     mergeChannelProgressDraftLineForStreaming(lines, line, {
       maxLines: resolveChannelProgressDraftMaxLines(params.entry),
+      preserveCommentaryOnOverflow: params.preserveCommentaryOnOverflow,
     });
 
   const noteProgress = async (

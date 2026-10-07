@@ -9,7 +9,10 @@ import {
   countFailedChannelIngressQueueEntries,
 } from "./ingress-queue-health.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
+import {
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  INGRESS_ADOPTION_STALL_ERROR_PREFIX,
+} from "./ingress-retry-policy.js";
 
 async function recordAttempts(
   queue: ChannelIngressQueue<{ privatePayload: string }>,
@@ -80,13 +83,37 @@ describe("channel ingress queue health", () => {
           { privatePayload: "ordinary-private-payload" },
           { laneKey: "ordinary-private-lane", receivedAt: 300 },
         );
-        await recordAttempts(queue, "ordinary-private-id", 1, "ordinary-private-error");
+        await recordAttempts(
+          queue,
+          "ordinary-private-id",
+          DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+          "ordinary-private-error",
+        );
         await queue.enqueue(
           "no-error-private-id",
           { privatePayload: "no-error-private-payload" },
           { laneKey: "no-error-private-lane", receivedAt: 400 },
         );
         await recordAttempts(queue, "no-error-private-id", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+
+        const stallError = `${INGRESS_ADOPTION_STALL_ERROR_PREFIX} for event stall-private-id on lane stall-private-lane after 300000ms; applying retry policy (handler-timeout).`;
+        await queue.enqueue(
+          "stall-once-private-id",
+          { privatePayload: "stall-once-private-payload" },
+          { laneKey: "stall-once-private-lane", receivedAt: 450 },
+        );
+        await recordAttempts(queue, "stall-once-private-id", 1, stallError);
+        await queue.enqueue(
+          "stall-private-id",
+          { privatePayload: "stall-private-payload" },
+          { laneKey: "stall-private-lane", receivedAt: 460 },
+        );
+        await recordAttempts(queue, "stall-private-id", 2, stallError);
+        await queue.enqueue(
+          "stall-follower-private-id",
+          { privatePayload: "stall-follower-private-payload" },
+          { laneKey: "stall-private-lane", receivedAt: 470 },
+        );
 
         clock = now - INGRESS_CLAIM_LEASE_MS;
         await queue.enqueue(
@@ -160,10 +187,10 @@ describe("channel ingress queue health", () => {
             {
               channelId: "telegram",
               accountId: "ops",
-              laneCount: 2,
-              pendingCount: 3,
+              laneCount: 3,
+              pendingCount: 5,
               claimedCount: 1,
-              blockedCount: 2,
+              blockedCount: 3,
               oldestReceivedAt: 100,
             },
           ]);

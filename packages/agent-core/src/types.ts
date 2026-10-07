@@ -300,14 +300,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   /**
    * Returns steering messages to inject into the conversation mid-run.
    *
-   * Sequential execution checks before each tool starts, including again after
-   * asynchronous preparation. Parallel execution checks once after preparation
-   * and immediately before launching the prepared calls. A non-empty result
-   * skips calls that have not started and is added to context before the next
-   * LLM call; already-running calls continue.
-   *
-   * Once a check returns messages, the loop carries that exact result to the
-   * next turn without polling again. This preserves queue drain ordering.
+   * Drained at model boundaries, after the current response's tools settle.
+   * Ordinary steering does not cancel or skip tool calls. The exact drained
+   * messages are added before the next LLM call, preserving queue order.
+   * Explicit run cancellation and tool admission remain independent.
    *
    * Use this for "steering" the agent while it's working.
    *

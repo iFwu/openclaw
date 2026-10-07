@@ -52,18 +52,20 @@ describe("tool terminal outcome observer", () => {
     observe({
       toolName: "message",
       arguments: actionA,
+      toolCallId: "send-a",
       outcome: "failure",
       failure: { error: "A failed" },
     });
     observe({
       toolName: "message",
       arguments: actionB,
+      toolCallId: "send-b",
       outcome: "failure",
       failure: { error: "B failed" },
     });
     const afterRead = observe({ toolName: "read", arguments: {}, outcome: "success" });
 
-    expect(afterRead.lastToolError).toMatchObject({ error: "B failed" });
+    expect(afterRead.lastToolError).toMatchObject({ error: "B failed", toolCallId: "send-b" });
     const payloads = buildPayloads({ lastToolError: afterRead.lastToolError });
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toMatchObject({ isError: true });

@@ -2431,6 +2431,57 @@ describe("loadGatewayPlugins", () => {
     expect(normalizeProviderModelIdWithRuntime).toHaveBeenCalledOnce();
   });
 
+  test("plugin policy authorizes overrides when the request-scope client lacks override privilege", async () => {
+    const runtime = await createSubagentRuntime(voiceCallOverrideConfig());
+    const context = createTestContext("scoped-client-policy-override");
+    serverPluginsModule.setFallbackGatewayContext(context);
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(
+      { context, client, isWebchatConnect: () => false },
+      () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
+          runtime.run({
+            sessionKey: "s-scoped-client-override",
+            message: "use policy override with scoped client",
+            provider: "anthropic",
+            model: "claude-haiku-4-5",
+            deliver: false,
+          }),
+        ),
+    );
+    expect(getRequiredLastDispatchedParams()).toMatchObject({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+    });
+    expect(getLastDispatchedClientInternal().allowModelOverride).toBe(true);
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(client.internal?.allowModelOverride).not.toBe(true);
+  });
+
+  test("rejects overrides for scoped clients when no plugin policy trusts the plugin", async () => {
+    const runtime = await createSubagentRuntime();
+    const context = createTestContext("scoped-client-untrusted");
+    serverPluginsModule.setFallbackGatewayContext(context);
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect: () => false },
+        () =>
+          gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
+            runtime.run({
+              sessionKey: "s-scoped-client-untrusted",
+              message: "use untrusted override with scoped client",
+              provider: "anthropic",
+              model: "claude-haiku-4-5",
+              deliver: false,
+            }),
+          ),
+      ),
+    ).rejects.toThrow(/not trusted|override is not authorized/u);
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(client.internal?.allowModelOverride).not.toBe(true);
+  });
+
   test("keeps fallback model policy bound to the runtime that loaded it", async () => {
     const allowedRuntime = await createSubagentRuntime(voiceCallOverrideConfig());
     const deniedRuntime = await createSubagentRuntime();

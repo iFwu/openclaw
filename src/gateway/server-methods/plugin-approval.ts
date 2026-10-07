@@ -31,6 +31,7 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
+import { resolveAgentRuntimeApprovalOrigin } from "./approval-session-origin.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -175,6 +176,9 @@ export function createPluginApprovalHandlers(
         normalizeTrimmedString(value) === null
           ? null
           : sanitizeExecApprovalDisplayText(normalizeTrimmedString(value)!);
+      const approvalOrigin = trustedAgentRuntime
+        ? resolveAgentRuntimeApprovalOrigin(trustedAgentRuntime)
+        : undefined;
       const request: PluginApprovalRequestPayload = {
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
@@ -201,16 +205,16 @@ export function createPluginApprovalHandlers(
         sessionKey,
         runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
         turnSourceChannel: trustedAgentRuntime
-          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceChannel)
+          ? normalizeTrimmedString(approvalOrigin?.turnSourceChannel)
           : normalizeTrimmedString(p.turnSourceChannel),
         turnSourceTo: trustedAgentRuntime
-          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceTo)
+          ? normalizeTrimmedString(approvalOrigin?.turnSourceTo)
           : normalizeTrimmedString(p.turnSourceTo),
         turnSourceAccountId: trustedAgentRuntime
-          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceAccountId)
+          ? normalizeTrimmedString(approvalOrigin?.turnSourceAccountId)
           : normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceThreadId ?? null)
+          ? (approvalOrigin?.turnSourceThreadId ?? null)
           : (p.turnSourceThreadId ?? null),
       };
 

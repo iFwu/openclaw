@@ -1,12 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { FailoverError } from "../failover-error.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
+import {
+  createModelContinuationCallbacks,
+  createModelContinuationState,
+} from "./run/model-continuation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
@@ -91,6 +100,145 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("resumes a settled checkpoint as internal context without repeating the user request", async () => {
+    await using state = await createState({
+      modelContinuation: {
+        runId: BASE_RUN_PARAMS.runId,
+        checkpoint: {
+          sessionId: BASE_RUN_PARAMS.sessionId,
+          sessionFile: BASE_RUN_PARAMS.sessionFile,
+          toolCallIds: ["write-1"],
+          includeToolFailureInstruction: true,
+        },
+      },
+    });
+
+    expect(state.activePrompt).toEqual({
+      override: CONTINUE_AFTER_TOOL_FAILURE_PROMPT,
+      persisted: true,
+      internal: true,
+    });
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it.each(["run", "session", "file"])(
+    "rejects a checkpoint from a different %s",
+    async (identity) => {
+      await expect(
+        createState({
+          modelContinuation: {
+            runId: identity === "run" ? "other-run" : BASE_RUN_PARAMS.runId,
+            checkpoint: {
+              sessionId: identity === "session" ? "other-session" : BASE_RUN_PARAMS.sessionId,
+              sessionFile: identity === "file" ? "/tmp/other.jsonl" : BASE_RUN_PARAMS.sessionFile,
+              toolCallIds: ["write-1"],
+              includeToolFailureInstruction: false,
+            },
+          },
+        }),
+      ).rejects.toThrow("Model continuation no longer owns the current session transcript");
+    },
+  );
+
+  it.each([
+    ["persistence", "abort"],
+    ["persistence", "authority"],
+    ["projection", "abort"],
+    ["projection", "authority"],
+  ] as const)("rejects %s checkpoint preparation after %s revocation", async (stage, revoke) => {
+    const runId = `run:checkpoint-${stage}-${revoke}`;
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "checkpoint-test");
+    const controller = new AbortController();
+    const entered = createDeferred();
+    const release = createDeferred();
+    try {
+      const admittedRunContext = await admission.admit("embedded");
+      const assertRunActive = resolveAdmittedRunActiveAssertion(
+        admittedRunContext,
+        controller.signal,
+      );
+      if (!assertRunActive) {
+        throw new Error("test admission has no active authority");
+      }
+      await using state = await createState({
+        runId,
+        admittedRunContext,
+        sessionPersistence: "detached",
+      });
+      state.sessionTarget = undefined;
+      vi.spyOn(
+        state,
+        stage === "persistence"
+          ? "waitForCurrentUserMessagePersistence"
+          : "settleOwnedTranscriptProjection",
+      ).mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const modelContinuation = createModelContinuationState(runId);
+      const callbacks = createModelContinuationCallbacks({
+        state: modelContinuation,
+        sessionPromptState: state,
+        assertActive: assertRunActive,
+        throwIfAborted: () => controller.signal.throwIfAborted(),
+        abortSignal: controller.signal,
+      });
+      const pending = callbacks.prepare({
+        toolCallIds: ["write-1"],
+        includeToolFailureInstruction: false,
+      });
+      const rejected = expect(pending).rejects.toThrow(
+        "admitted run authority is no longer active",
+      );
+      await entered.promise;
+      if (revoke === "abort") {
+        controller.abort(new Error("checkpoint cancelled"));
+      } else {
+        admission.close();
+      }
+      release.resolve();
+      await rejected;
+      expect(modelContinuation.checkpoint).toBeUndefined();
+      expect(state.activePrompt.internal).toBe(false);
+    } finally {
+      release.resolve();
+      admission.close();
+    }
+  });
+
+  it("does not authorize fallback after its prepared run loses authority", async () => {
+    const runId = "run:checkpoint-capture";
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "checkpoint-test");
+    try {
+      const admittedRunContext = await admission.admit("embedded");
+      const assertRunActive = resolveAdmittedRunActiveAssertion(admittedRunContext);
+      if (!assertRunActive) {
+        throw new Error("test admission has no active authority");
+      }
+      const modelContinuation = createModelContinuationState(runId);
+      await using state = await createState({
+        runId,
+        admittedRunContext,
+        sessionPersistence: "detached",
+      });
+      state.sessionTarget = undefined;
+      const callbacks = createModelContinuationCallbacks({
+        state: modelContinuation,
+        sessionPromptState: state,
+        assertActive: assertRunActive,
+        throwIfAborted: () => {},
+      });
+      await callbacks.prepare({ toolCallIds: ["write-1"], includeToolFailureInstruction: false });
+      admission.close();
+      expect(() =>
+        callbacks.captureFailure(new FailoverError("429", { reason: "rate_limit" })),
+      ).toThrow("admitted run authority is no longer active");
+      expect(modelContinuation.fallbackError).toBeUndefined();
+    } finally {
+      admission.close();
+    }
+  });
+
   it("keeps a compound internal prompt across a missing-assistant retry", async () => {
     await using state = await createState();
     state.activateInternalPrompt("  finish the reasoning exactly  ");
@@ -282,6 +430,27 @@ describe("embedded run session prompt state", () => {
       projection.resolve();
       waitForProjection.mockRestore();
     }
+  });
+
+  it("retains a model-only task across repeated transient continuation without persisting it", async () => {
+    const task = "FIRST perform the boot health callback, then inspect the receipt.";
+    await using state = await createState({
+      prompt: task,
+      promptIsModelOnly: true,
+      suppressNextUserMessagePersistence: true,
+    });
+    state.continueFromCurrentTranscript();
+    expect(state.activePrompt.override).toBe(`${task}\n\n${CONTINUE_FROM_TRANSCRIPT_PROMPT}`);
+    state.continueFromCurrentTranscript({ includeToolFailureInstruction: true });
+    expect(state.activePrompt.override).toBe(`${task}\n\n${CONTINUE_AFTER_TOOL_FAILURE_PROMPT}`);
+    expect(state.activePrompt.internal).toBe(true);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("does not reinsert an already persisted user request just because persistence is suppressed", async () => {
+    await using state = await createState({ suppressNextUserMessagePersistence: true });
+    state.continueFromCurrentTranscript();
+    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
   });
 
   it("adds failed-tool guidance to current-transcript continuation", async () => {

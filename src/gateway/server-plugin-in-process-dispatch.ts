@@ -13,6 +13,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import {
+  captureContinuationApprovalOrigin,
+  withContinuationApprovalOrigin,
+} from "./continuation-approval-origin.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
   bindInProcessSubagentResume,
@@ -25,7 +29,6 @@ import {
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   readOperatorToolGatewayAuthority,
-  runWithOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
 } from "./operator-tool-gateway-authority.js";
 import {
@@ -38,7 +41,6 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
-  OperatorToolGatewayAuthority,
   PrepareInProcessAgentExecutionOptions,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
@@ -53,57 +55,7 @@ import {
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
 
-/** Retains operator attribution and authority only for the awaited tool invocation. */
-export async function withOperatorToolGatewayAuthority<T>(
-  authority: Omit<OperatorToolGatewayAuthority, "signal">,
-  run: () => Promise<T>,
-): Promise<T> {
-  const lifetime = new AbortController();
-  const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
-  const captured =
-    context && (authority.operatorRunAuthority || authority.operatorRoleActor?.kind !== "system")
-      ? await captureGatewayOperatorRunAuthority({
-          client:
-            scope?.client && !authority.operatorRunAuthority
-              ? scope.client
-              : createSyntheticPluginRuntimeClient({
-                  authenticatedUserProfile: authority.authenticatedUserProfile,
-                  operatorRoleActor: authority.operatorRoleActor,
-                  operatorRunAuthority: authority.operatorRunAuthority,
-                  scopes: [...authority.scopes],
-                }),
-          context,
-          hasCurrentClientAuthority: scope?.hasCurrentClientAuthority,
-        })
-      : undefined;
-  try {
-    authority.assertCurrent?.();
-    captured?.authority.assertCurrent();
-    return await runWithOperatorToolGatewayAuthority(
-      {
-        ...authority,
-        operatorRunAuthority: captured?.authority ?? authority.operatorRunAuthority,
-        signal: lifetime.signal,
-      },
-      () =>
-        captured && scope?.client
-          ? withPluginRuntimeGatewayRequestScope(
-              {
-                ...scope,
-                client: mergePluginRuntimeClientInternal(scope.client, {
-                  operatorRunAuthority: captured.authority,
-                }),
-              },
-              run,
-            )
-          : run(),
-    );
-  } finally {
-    lifetime.abort(new Error("operator tool invocation authority expired"));
-    captured?.release();
-  }
-}
+export { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-authority.js";
 
 /** Transfer bounded cleanup without retaining the finished operator invocation. */
 export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
@@ -140,6 +92,7 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
 export function captureOperatorToolGatewayContinuationContext() {
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
+  const approvalOrigin = captureContinuationApprovalOrigin(caller);
   const resolveGatewayContext = caller?.gatewayContextResolver ?? scope?.resolveGatewayContext;
   if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
     return undefined;
@@ -207,6 +160,7 @@ export function captureOperatorToolGatewayContinuationContext() {
         lifetime.signal.throwIfAborted();
       };
       return {
+        ...(approvalOrigin ? { approvalOrigin } : {}),
         assertCurrent,
         operatorAuthority: captured?.authority,
         signal: lifetime.signal,
@@ -215,7 +169,9 @@ export function captureOperatorToolGatewayContinuationContext() {
           assertCurrent();
           return withoutGatewayToolCallerIdentity(() =>
             runOutsideOperatorToolGatewayAuthority(() =>
-              withPluginRuntimeGatewayRequestScope(continuationScope, run),
+              withContinuationApprovalOrigin(approvalOrigin, assertCurrent, () =>
+                withPluginRuntimeGatewayRequestScope(continuationScope, run),
+              ),
             ),
           );
         },
@@ -426,6 +382,7 @@ function resolveInProcessGatewayDispatch(
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
     pluginRuntimeOwnerId ||
+      options?.allowSyntheticModelOverride ||
       options?.agentRunTracking ||
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
@@ -433,6 +390,7 @@ function resolveInProcessGatewayDispatch(
       options?.delegatedToolPolicyHandoff ||
       scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
+          ...(options?.allowSyntheticModelOverride === true ? { allowModelOverride: true } : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           ...(options?.pluginSubagentRequester

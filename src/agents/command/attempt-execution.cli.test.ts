@@ -48,6 +48,7 @@ import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import { createEmbeddedRunProgressController } from "../embedded-agent-runner/run/progress-controller.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
@@ -57,6 +58,7 @@ import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js"
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
+import { sendQuestionToolPrompt } from "../tools/question-prompt-send.js";
 import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
   COMMAND_REPLY_EXPECTATION_CASES,
@@ -138,6 +140,13 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     runContext: { ...overrides.runContext } as RunAgentAttemptParams["runContext"],
   };
 }
+
+const sendQuestionBatchMock = vi.hoisted(() => vi.fn());
+vi.mock("../../channels/message/runtime.js", () => ({
+  sendDurableMessageBatchCore: (...args: unknown[]) => sendQuestionBatchMock(...args),
+  durableMessageBatchMayHaveReachedRecipient: (result: { status: string }) =>
+    result.status === "sent" || result.status === "partial_failed",
+}));
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
@@ -406,6 +415,7 @@ describe("CLI attempt execution", () => {
     configuredAuthProfileId?: string;
     timeoutMs?: number;
     runTimeoutOverrideMs?: number;
+    onEmbeddedAttempt?: (attempt: RunEmbeddedAgentInternalParams) => void;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = overrides?.sessionKey ?? `agent:main:direct:${runId}`;
@@ -431,9 +441,10 @@ describe("CLI attempt execution", () => {
       } as SessionEntry;
     }
     await writeSessionStoreSeed(sessionStore);
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      meta: { durationMs: 1 },
-    } satisfies EmbeddedAgentRunResult);
+    runEmbeddedAgentMock.mockImplementationOnce((attempt: RunEmbeddedAgentInternalParams) => {
+      overrides?.onEmbeddedAttempt?.(attempt);
+      return Promise.resolve({ meta: { durationMs: 1 } } satisfies EmbeddedAgentRunResult);
+    });
     const providerOverride = overrides?.providerOverride ?? "openai";
 
     await runAgentAttempt({
@@ -474,6 +485,7 @@ describe("CLI attempt execution", () => {
     tmpDir = await fixtureRoot.make();
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
+    sendQuestionBatchMock.mockReset();
     resetGeneratedMediaTaskActivityForTests();
     hasClaudeSessionMock.mockReset();
     hasClaudeSessionMock.mockReturnValue(false);
@@ -497,6 +509,93 @@ describe("CLI attempt execution", () => {
         },
       ],
     });
+  });
+
+  it("delivers resumed-parent questions to the original topic without broadcasting tool output", async () => {
+    sendQuestionBatchMock.mockResolvedValue({ status: "sent", results: [], receipt: {} });
+    let attempt: RunEmbeddedAgentInternalParams | undefined;
+    await runOpenClawEmbeddedAttemptForTest({
+      opts: { deliver: true, to: "telegram:-100123", threadId: "77", accountId: "secondary" },
+      onEmbeddedAttempt: (params) => {
+        attempt = params;
+      },
+    });
+    if (!attempt) {
+      throw new Error("Expected embedded continuation parameters");
+    }
+    const progress = createEmbeddedRunProgressController({
+      attempt,
+      noteLaneTaskProgress: () => {},
+      startedAtMs: Date.now(),
+    });
+    expect(progress.notifyToolResult).toBeTypeOf("function");
+    if (!progress.notifyToolResult) {
+      throw new Error("public continuation has no question sender");
+    }
+    await progress.notifyToolResult({ text: "private tool result" });
+    expect(sendQuestionBatchMock).not.toHaveBeenCalled();
+    await sendQuestionToolPrompt({
+      toolName: "ask_user",
+      questionId: "resumed-question",
+      questions: [
+        {
+          questionId: "dns",
+          header: "DNS",
+          question: "Continue?",
+          options: [{ label: "Yes" }, { label: "No" }],
+          multiSelect: false,
+        },
+      ],
+      send: progress.notifyToolResult,
+    });
+    expect(sendQuestionBatchMock).toHaveBeenCalledTimes(1);
+    expect(sendQuestionBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:-100123",
+        accountId: "secondary",
+        threadId: "77",
+        durability: "required",
+        bestEffort: false,
+        payloads: [
+          expect.objectContaining({
+            channelData: {
+              askUser: { questionId: "resumed-question", optionValues: ["Yes", "No"] },
+            },
+          }),
+        ],
+      }),
+    );
+    sendQuestionBatchMock.mockResolvedValueOnce({
+      status: "failed",
+      error: new Error("transport down"),
+    });
+    await expect(
+      progress.notifyToolResult({
+        text: "question",
+        channelData: { askUser: { questionId: "failed-question" } },
+      }),
+    ).rejects.toThrow("transport down");
+  });
+
+  it("does not claim a question delivery callback for a silent internal continuation", async () => {
+    let attempt: RunEmbeddedAgentInternalParams | undefined;
+    await runOpenClawEmbeddedAttemptForTest({
+      opts: { deliver: false, to: "telegram:-100123", threadId: "77", sessionEffects: "internal" },
+      onEmbeddedAttempt: (params) => {
+        attempt = params;
+      },
+    });
+    if (!attempt) {
+      throw new Error("Expected embedded continuation parameters");
+    }
+    const progress = createEmbeddedRunProgressController({
+      attempt,
+      noteLaneTaskProgress: () => {},
+      startedAtMs: Date.now(),
+    });
+    expect(progress.notifyToolResult).toBeUndefined();
+    expect(sendQuestionBatchMock).not.toHaveBeenCalled();
   });
 
   async function writeSessionStoreSeed(sessionStore: Record<string, SessionEntry>): Promise<void> {
@@ -973,20 +1072,20 @@ describe("CLI attempt execution", () => {
   it.each([
     "run fallback override",
     "configured fallback",
-    "implicit configured primary",
+    "channel-selected fallback",
     "live model switch",
     "canonical override repair",
   ] as const)("retains CLI image capability after a thinking-off %s", async (transition) => {
     const canonicalRepair = transition === "canonical override repair";
     const model = canonicalRepair ? "custom/child" : "claude-sonnet-4-6";
     const modelRef = `anthropic/${model}`;
-    const implicitPrimary = transition === "implicit configured primary";
-    const sessionKey = implicitPrimary
+    const channelSelected = transition === "channel-selected fallback";
+    const sessionKey = channelSelected
       ? "agent:main:discord:channel:vision-fixture"
       : "agent:main:subagent:vision-fixture";
     const sessionEntry = makeSessionEntry(
       `vision-${transition}`,
-      implicitPrimary
+      channelSelected
         ? { groupId: "vision-fixture", chatType: "group" }
         : {
             providerOverride: "custom",
@@ -1004,8 +1103,10 @@ describe("CLI attempt execution", () => {
         entries: { main: { workspace: tmpDir } },
         defaults: {
           model: {
-            primary: implicitPrimary || canonicalRepair ? modelRef : "custom/base",
-            ...(transition === "configured fallback" ? { fallbacks: [modelRef] } : {}),
+            primary: channelSelected || canonicalRepair ? modelRef : "custom/base",
+            ...(transition === "configured fallback" || channelSelected
+              ? { fallbackChains: { "custom/child": [modelRef] } }
+              : {}),
           },
           modelPolicy: {
             allow: canonicalRepair ? [modelRef] : ["custom/base", "custom/child", modelRef],
@@ -1032,7 +1133,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      ...(implicitPrimary
+      ...(channelSelected
         ? { channels: { modelByChannel: { discord: { "vision-fixture": "custom/child" } } } }
         : {}),
     };
@@ -1043,7 +1144,7 @@ describe("CLI attempt execution", () => {
       thinking: "off",
       toolsAllow: ["read"],
       ...(transition === "run fallback override" ? { modelFallbacksOverride: [modelRef] } : {}),
-      ...(implicitPrimary ? { channel: "discord" } : {}),
+      ...(channelSelected ? { channel: "discord" } : {}),
     };
     const imagePath = path.join(tmpDir, "capability-pixel.png");
     await fs.writeFile(
@@ -3880,6 +3981,18 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.disableTools).toBe(true);
     expect(embeddedArg.trustedInternalHandoff).toBeUndefined();
   });
+
+  it.each([true, false])(
+    "marks only explicitly model-only tasks for embedded continuation: suppressed=%s",
+    async (suppressPromptPersistence) => {
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        runId: `model-only-task-${suppressPromptPersistence}`,
+        body: "Inspect the internal completion receipt.",
+        opts: { suppressPromptPersistence },
+      });
+      expect(embeddedArg.promptIsModelOnly).toBe(suppressPromptPersistence ? true : undefined);
+    },
+  );
 
   it("forwards canonical transcript text without replacing embedded image content", async () => {
     const recorder = createUserTurnTranscriptRecorder({

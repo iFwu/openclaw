@@ -17,6 +17,8 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
@@ -217,6 +219,7 @@ describe("registered completion source custody", () => {
     "cancelled-by-another-operator",
     "mixed-cancellation-source",
     "mixed-cancellation-same-source",
+    "mixed-approval-origin",
     "stale-batch-member",
   ] as const)("outlives execution and closes on %s", async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -246,10 +249,26 @@ describe("registered completion source custody", () => {
               resolveGatewayContext: () => context,
               isWebchatConnect: () => false,
             },
-            () =>
-              registerSubagentRun(
-                registration(runId, { requesterAgentId: "main", requesterTurnRunId: "parent" }),
-              ),
+            () => {
+              const launch = () =>
+                registerSubagentRun(
+                  registration(runId, { requesterAgentId: "main", requesterTurnRunId: "parent" }),
+                );
+              return ending === "mixed-approval-origin"
+                ? withGatewayToolCallerIdentity(
+                    {
+                      agentId: "main",
+                      sessionKey: "agent:main:main",
+                      operationalRunInstance: createOperationalRunInstanceRef(`origin-${runId}`),
+                      receiptAuthority: () => true,
+                      operatorAuthority: source.authority,
+                      turnSourceChannel: "telegram",
+                      turnSourceTo: runId === "child" ? "telegram:-100200" : "telegram:-100300",
+                    },
+                    launch,
+                  )
+                : launch();
+            },
           );
         if (ending === "registration-rejected") {
           vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
@@ -302,6 +321,14 @@ describe("registered completion source custody", () => {
               ),
           );
           releaseSubagentRun(entry.runId);
+        } else if (ending === "mixed-approval-origin") {
+          await register("other");
+          const other = subagentRuns.get("other")!;
+          expect(() =>
+            subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong origin"),
+          ).toThrow("incompatible approval origin");
+          releaseSubagentRun(entry.runId);
+          releaseSubagentRun(other.runId);
         } else if (ending === "mixed-cancellation-source") {
           await register(
             "other",

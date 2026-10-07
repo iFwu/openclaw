@@ -112,10 +112,10 @@ Selecting a cloud profile is available only to Gateway-side visible spawns. The 
 
 ### Delegation prompt mode
 
-`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation. With no explicit setting, OpenClaw uses `prefer` in each agent's main session and `suggest` in every other session.
+`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation. With no explicit setting, OpenClaw uses `suggest` in every session.
 
-- `suggest`: keep the standard prompt nudge to use sub-agents for larger or slower work.
-- `prefer`: tell the agent to stay responsive and delegate anything more involved than a direct reply through `sessions_spawn`.
+- `suggest`: stay in the current session by default; delegate on request or when independent work clearly benefits from delegation.
+- `prefer`: add guidance to delegate when requested or when parallelism, context isolation, or independent review clearly outweighs handoff costs. Size or latency alone does not justify delegation; assigned implementers retain core work, integration, and verification.
 
 An explicit default or per-agent setting always wins, including `suggest` in a main session and `prefer` elsewhere. Per-agent overrides use `agents.entries.*.subagents.delegationMode`.
 

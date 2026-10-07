@@ -36,6 +36,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Original internal task context is absent from the user transcript. */
+  promptIsModelOnly?: boolean;
   /** Fail-closed caller input admission against the actual prepared model, before dispatch. */
   assertModelInput?: (model: Pick<Model, "input">) => void;
   /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
@@ -68,7 +70,9 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   /** Host-only transfer of attempt terminal resources to the logical turn. */
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */
-  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  onDeferredLifecycleAbort?: (
+    reason?: "user_abort" | "restart" | "superseded" | "approval-denied",
+  ) => void;
   /** Protects an admitted provider wait through the retained logical-turn owner. */
   onRetryWait?: (
     deadlineAtMs: number,

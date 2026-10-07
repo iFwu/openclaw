@@ -25,6 +25,8 @@ import {
   resolveSkillWorkshopApprovalForFinalParams,
 } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -648,4 +650,85 @@ describe("before_tool_call approval snapshots", () => {
       }),
     ).rejects.toThrow("before_tool_call mutable input isolation failed");
   });
+});
+
+describe("plugin approval explicit denial turn ownership", () => {
+  beforeEach(() => {
+    setEmbeddedMode(false);
+    mockCallGatewayTool.mockReset();
+  });
+  afterEach(() => {
+    setEmbeddedMode(false);
+    mockCallGatewayTool.mockReset();
+  });
+  it.each([
+    {
+      decision: "deny",
+      onDeny: "abort-turn",
+      activeRunId: "denied-run",
+      session: true,
+      abort: true,
+    },
+    { decision: "deny", onDeny: "block", activeRunId: "denied-run", session: true, abort: false },
+    {
+      decision: "timeout",
+      onDeny: "abort-turn",
+      activeRunId: "denied-run",
+      session: true,
+      abort: false,
+    },
+    {
+      decision: "allow-once",
+      onDeny: "abort-turn",
+      activeRunId: "denied-run",
+      session: true,
+      abort: false,
+    },
+    {
+      decision: "deny",
+      onDeny: "abort-turn",
+      activeRunId: "successor-run",
+      session: true,
+      abort: false,
+    },
+    {
+      decision: "deny",
+      onDeny: "abort-turn",
+      activeRunId: "denied-run",
+      session: false,
+      abort: false,
+    },
+  ] as const)(
+    "preserves exact denial ownership: $decision/$onDeny/$activeRunId/$session",
+    async (state) => {
+      setEmbeddedMode(false);
+      const controller = new AbortController();
+      const abort = vi.fn(() => controller.abort(new Error("explicit denial")));
+      const handle = createEmbeddedRunHandle({ runId: state.activeRunId, abort });
+      setActiveEmbeddedRun("denied-session", handle, "agent:main:deny-test");
+      mockCallGatewayTool.mockResolvedValueOnce({
+        id: "deny-test-approval",
+        decision: state.decision,
+      });
+      try {
+        const result = await resolveBeforeToolCallApprovalOutcome({
+          result: approvalResult({ onDeny: state.onDeny }),
+          toolName: "exec",
+          baseParams: { command: "unsafe" },
+          ctx: {
+            runId: "denied-run",
+            ...(state.session ? { sessionId: "denied-session" } : {}),
+            sessionKey: "agent:main:deny-test",
+          },
+          signal: controller.signal,
+        });
+        expect(abort).toHaveBeenCalledTimes(state.abort ? 1 : 0);
+        expect(controller.signal.aborted).toBe(state.abort);
+        expect(result?.blocked).toBe(state.decision !== "allow-once");
+      } finally {
+        clearActiveEmbeddedRun("denied-session", handle);
+        mockCallGatewayTool.mockReset();
+      }
+    },
+  );
 });

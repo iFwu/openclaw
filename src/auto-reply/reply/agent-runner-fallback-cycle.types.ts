@@ -37,6 +37,7 @@ export type AgentFallbackCandidateCommonParams = {
   runAbortSignal?: AbortSignal;
   runLane: RunEmbeddedAgentParams["lane"];
   isFallbackRetry: boolean;
+  modelContinuation?: RunEmbeddedAgentParams["modelContinuation"];
   modelRoutingProvenance: NonNullable<RunEmbeddedAgentParams["modelRoutingProvenance"]>;
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;

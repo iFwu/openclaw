@@ -9,18 +9,34 @@ import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
 } from "../agents/subagents/announce/subagent-announce-handoff.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { readContinuationApprovalOrigin } from "./continuation-approval-origin.js";
 
 const SUBAGENT_COMPLETION_TOOL_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
 type SubagentCompletionToolHandoffEntry = SubagentCompletionToolHandoffRegistration & {
   expiresAtMs: number;
+  approvalOrigin?: ReturnType<typeof readContinuationApprovalOrigin>;
 };
 
 const handoffs = resolveGlobalMap<string, SubagentCompletionToolHandoffEntry>(
   Symbol.for("openclaw.subagentCompletionToolHandoffs"),
   "close-and-restart",
 );
+
+const approvalOrigins = resolveGlobalSingleton<
+  WeakMap<
+    TrustedSubagentCompletionHandoff,
+    NonNullable<ReturnType<typeof readContinuationApprovalOrigin>>
+  >
+>(Symbol.for("openclaw.subagentCompletionApprovalOrigins"), () => new WeakMap());
+
+/** Reads only the exact redeemed host object; currentness is checked again at admission/read. */
+export function readSubagentCompletionApprovalOrigin(
+  handoff: TrustedSubagentCompletionHandoff | undefined,
+) {
+  return handoff ? approvalOrigins.get(handoff) : undefined;
+}
 
 function normalizeRegistration(
   params: SubagentCompletionToolHandoffRegistration,
@@ -80,7 +96,12 @@ export function registerSubagentCompletionToolHandoff(
     return undefined;
   }
   const handoffId = randomUUID();
-  handoffs.set(handoffId, { ...normalized, expiresAtMs });
+  const approvalOrigin = readContinuationApprovalOrigin(normalized.targetSessionKey);
+  handoffs.set(handoffId, {
+    ...normalized,
+    expiresAtMs,
+    ...(approvalOrigin ? { approvalOrigin } : {}),
+  });
   return handoffId;
 }
 
@@ -143,8 +164,14 @@ export function consumeSubagentCompletionToolHandoff(params: {
   ) {
     return undefined;
   }
+  try {
+    entry.approvalOrigin?.assertCurrent();
+  } catch {
+    return undefined;
+  }
   handoffs.delete(handoffId);
-  return bindNativeCompletionOwner(
+  const isCurrent = () => entry.isCurrent?.() !== false && entry.settleBatch?.isCurrent() !== false;
+  const handoff = bindNativeCompletionOwner(
     {
       kind: "subagent-completion",
       sourceSessionKey,
@@ -155,6 +182,22 @@ export function consumeSubagentCompletionToolHandoff(params: {
       model,
       ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
     },
-    () => entry.isCurrent?.() !== false && entry.settleBatch?.isCurrent() !== false,
+    isCurrent,
   );
+  const approvalOrigin = entry.approvalOrigin;
+  if (approvalOrigin) {
+    approvalOrigins.set(
+      handoff,
+      Object.freeze({
+        snapshot: approvalOrigin.snapshot,
+        assertCurrent: () => {
+          approvalOrigin.assertCurrent();
+          if (!isCurrent()) {
+            throw new Error("Subagent completion approval origin is no longer current");
+          }
+        },
+      }),
+    );
+  }
+  return handoff;
 }

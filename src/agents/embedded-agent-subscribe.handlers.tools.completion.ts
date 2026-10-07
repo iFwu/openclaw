@@ -44,6 +44,7 @@ import {
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { recordAsyncToolResult } from "./embedded-agent-subscribe.handlers.tools.async.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
@@ -86,7 +87,6 @@ import {
   extractToolErrorMessage,
   isAsyncStartedToolResult,
   isToolResultTimedOut,
-  readAsyncStartedTaskIds,
   sanitizeToolResult,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -173,8 +173,7 @@ export async function handleToolExecutionEnd(
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const meta = callSummary.meta;
-  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
-  const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult, toolName);
   // A Code Mode exec that returns "waiting" parked a run the model resumes via
   // `wait`; record that here so recovery can tell parked nested work apart
   // from any other still-active lifecycle item.
@@ -195,10 +194,11 @@ export async function handleToolExecutionEnd(
     replaySafe: callSummary.replaySafe,
     isError: observerIsError,
     ...(terminate ? { terminate: true } : {}),
-    ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
+    ...(asyncStarted ? { asyncStarted: true } : {}),
     ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
   };
   ctx.state.toolMetas.push(terminalMeta);
+  recordAsyncToolResult(ctx.state.toolMetas, startArgs, sanitizedResult, isToolError);
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)

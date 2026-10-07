@@ -264,20 +264,22 @@ describe("plugin subagent initial override policy", () => {
     },
   );
 
-  it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
-    "preserves command selection for %j with chained aliases",
-    async (override) => {
-      config.models!.providers!.fixture!.models = [];
-      await expect(run(override)).resolves.toMatchObject({ runId: "override-run" });
-      const request = dispatch.mock.calls[0]?.[1];
-      expect(request).toMatchObject(override);
-      const model = request?.model as string;
-      const selected = request?.provider
-        ? normalizeAgentCommandModelRef(config, request.provider as string, model, {})
-        : parseAgentCommandModelRef(config, "worker", model, "", {});
-      expect(selected).toEqual({ provider: "fixture", model: "permitted" });
-    },
-  );
+  it.each([
+    { provider: "fixture", model: "literal" },
+    { model: "fixture/literal" },
+    { model: "selected" },
+  ])("preserves command selection for %j with chained aliases", async (override) => {
+    config.agents!.defaults = { models: { "fixture/literal": { alias: "selected" } } };
+    config.models!.providers!.fixture!.models = [];
+    await expect(run(override)).resolves.toMatchObject({ runId: "override-run" });
+    const request = dispatch.mock.calls[0]?.[1];
+    expect(request).toMatchObject(override);
+    const model = request?.model as string;
+    const selected = request?.provider
+      ? normalizeAgentCommandModelRef(config, request.provider as string, model, {})
+      : parseAgentCommandModelRef(config, "worker", model, "", {});
+    expect(selected).toEqual({ provider: "fixture", model: "permitted" });
+  });
 
   it("allows an explicitly permitted configured literal without applying its runtime alias", async () => {
     config.plugins!.entries!["override-fixture"]!.subagent!.allowedModels = ["fixture/literal"];

@@ -282,7 +282,9 @@ describe("plugin background completions", () => {
       if (scope === "operator.admin") {
         await expect(result).resolves.toEqual({ text: "research:test-provider/override" });
       } else {
-        await expect(result).rejects.toThrow("override is not authorized");
+        await expect(result).rejects.toThrow(
+          'plugin "test-completion" is not trusted for fallback provider/model override requests.',
+        );
         expect(isolated).not.toHaveBeenCalled();
       }
     },

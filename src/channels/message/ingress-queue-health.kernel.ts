@@ -6,7 +6,13 @@ import type {
   ChannelIngressFailedHealth,
   ChannelIngressPressureHealth,
 } from "./ingress-queue-read-contract.js";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
+import {
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  INGRESS_ADOPTION_STALL_ERROR_PREFIX,
+} from "./ingress-retry-policy.js";
+
+// Repeated watchdog stalls can block a lane before retry exhaustion.
+const REPEATED_ADOPTION_STALL_ATTEMPTS = 2;
 
 /** Count failed channel ingress events per channel account for operator health surfaces. */
 export function countFailedChannelIngressQueueEntriesInDatabase(
@@ -64,6 +70,10 @@ export function countChannelIngressQueuePressureInDatabase(
               filter.and([
                 filter("attempts", ">=", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS),
                 filter("last_error", "is not", null),
+              ]),
+              filter.and([
+                filter("attempts", ">=", REPEATED_ADOPTION_STALL_ATTEMPTS),
+                filter("last_error", "like", `${INGRESS_ADOPTION_STALL_ERROR_PREFIX}%`),
               ]),
               filter.and([
                 filter("status", "=", "claimed"),

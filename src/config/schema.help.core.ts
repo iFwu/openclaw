@@ -311,9 +311,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.defaults.skills":
     "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
-    'Prompt-only sub-agent delegation strength. Defaults to "prefer" in each agent\'s main session and "suggest" elsewhere; "prefer" strongly instructs the agent to delegate non-trivial work via sessions_spawn.',
+    'Prompt-only sub-agent delegation strength. Defaults to "suggest" in every session; "prefer" adds guidance to delegate only when requested or when parallelism, context isolation, or independent review clearly outweighs handoff costs.',
   "agents.entries.*.subagents.delegationMode":
-    'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
+    'Per-agent override for sub-agent delegation strength. Omit to inherit the default "suggest" mode; explicit "prefer" or "suggest" always wins.',
   "agents.entries.*.contextInjection":
     "Per-agent override for workspace bootstrap-file injection in the embedded runtime. Omit to inherit agents.defaults.contextInjection. Does not control CLI-backed prompt preparation.",
   "agents.entries.*.cwd":

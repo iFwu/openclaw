@@ -20,7 +20,6 @@ import {
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
   observeFinalDelivery,
-  registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -40,7 +39,12 @@ import {
   normalizePreparedDeliveryPayload,
   formatTelegramGroupThreadReply,
 } from "./bot-message-dispatch-payload.js";
-import { pushToolProgress } from "./bot-message-dispatch-progress.js";
+import {
+  handleItemEvent,
+  progressOwnsCommentary,
+  pushToolProgress,
+} from "./bot-message-dispatch-progress.js";
+import { toTelegramReplyDeliveryResult } from "./bot-message-dispatch-reply-result.js";
 import { deduplicateBlockSentMedia, trackBlockMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
   TelegramDispatchTurn as Turn,
@@ -69,32 +73,6 @@ type DispatcherOptions = BufferedDispatchParams["dispatcherOptions"];
 type Deliver = DispatcherOptions["deliver"];
 type Skip = NonNullable<DispatcherOptions["onSkip"]>;
 type ErrorCallback = NonNullable<DispatcherOptions["onError"]>;
-
-function toTelegramReplyDeliveryResult(
-  turn: Turn,
-  visibleReplySent: boolean,
-  finalization?: Promise<LivePreviewDeliveryResult>,
-  deliveryResult?: LivePreviewDeliveryResult,
-): LivePreviewDeliveryResult {
-  if (deliveryResult) {
-    return {
-      ...deliveryResult,
-      visibleReplySent: visibleReplySent || deliveryResult.visibleReplySent,
-      ...(finalization ? { finalization } : {}),
-    };
-  }
-  if (finalization) {
-    return { visibleReplySent, finalization };
-  }
-  return visibleReplySent
-    ? { visibleReplySent: true }
-    : {
-        visibleReplySent: false,
-        suppression: {
-          reason: turn.previewLifecycle.finalSuppressed ? "channel_transform" : "no_visible_result",
-        },
-      };
-}
 
 function toTelegramVisiblePartialDeliveryError(error: unknown): unknown {
   return isChannelPartialDeliveryError(error)
@@ -236,8 +214,9 @@ async function adoptProgressContinuation(
   }
   const adopt = info.adoptProgressContinuation;
   await turn.draftEventQueue;
-  const stream = turn.answerLane.stream;
-  if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
+  const lane = turn.streamMode === "progress" ? turn.progressLane : turn.answerLane;
+  const stream = lane.stream;
+  if (!stream || lane.finalized || turn.isSuperseded()) {
     return false;
   }
   if (
@@ -263,6 +242,7 @@ async function adoptProgressContinuation(
     typeof messageId !== "number" ||
     !Number.isFinite(messageId) ||
     !text ||
+    (turn.streamMode === "progress" && text !== lane.lastPartialText) ||
     turn.isSuperseded()
   ) {
     return false;
@@ -282,9 +262,9 @@ async function adoptProgressContinuation(
   }
   // Core now owns the visible card. Remove the old transport before any awaited
   // retirement so late callbacks and unconditional cleanup cannot delete it.
-  turn.answerLane.stream = undefined;
+  lane.stream = undefined;
   turn.progressContinuationAdopted = true;
-  resetLaneState(turn, turn.answerLane);
+  resetLaneState(turn, lane);
   resetReasoningStepState(turn);
   turn.deliveryState.markDelivered();
   await stream.discard();
@@ -352,6 +332,40 @@ async function deliverReplyWithNormalization(
   }
   const telegramButtons = controls.buttons;
   const reply = resolveSendableOutboundReplyParts(effectivePayload);
+  if (effectivePayload.isCommentary === true && turn.streamMode === "progress") {
+    if (
+      !reply.hasMedia &&
+      telegramButtons === undefined &&
+      effectivePayload.interactive === undefined &&
+      effectivePayload.presentation === undefined &&
+      effectivePayload.channelData?.askUser === undefined &&
+      !hasExecApprovalPayload(effectivePayload)
+    ) {
+      await handleItemEvent(turn, { kind: "preamble", phase: "end", progressText: reply.text });
+      if (progressOwnsCommentary(turn, reply.text)) {
+        return { visibleReplySent: false, suppression: { reason: "channel_transform" } };
+      }
+    }
+    const result = await sendPayload(turn, effectivePayload, {
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+      onMediaAccepted,
+    });
+    return toTelegramReplyDeliveryResult(turn, result.visibleReplySent, undefined, result);
+  }
+  if (effectivePayload.channelData?.askUser !== undefined) {
+    // Questions require a new notification, not an edit of either live lane.
+    await enqueueDraftEvent(turn, async () => {});
+    const result = await sendPayload(turn, effectivePayload, {
+      durable: true,
+      silent: false,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+      onMediaAccepted,
+    });
+    return toTelegramReplyDeliveryResult(turn, result.visibleReplySent, undefined, result);
+  }
   if (
     !reply.hasMedia &&
     telegramButtons === undefined &&
@@ -470,6 +484,11 @@ async function deliverReplyWithNormalization(
           continue;
         }
       }
+      if (turn.streamMode === "progress") {
+        const delivery = await sendPayload(turn, effectivePayload, { onMediaAccepted });
+        blockDelivered ||= delivery.visibleReplySent;
+        continue;
+      }
       await prepareAnswerLaneForToolProgress(turn);
     }
 
@@ -489,23 +508,14 @@ async function deliverReplyWithNormalization(
       !turn.activeAnswerDraftIsToolProgressOnly &&
       !ownedByQueuedRotation &&
       segment.update.text.trimEnd() === turn.answerLane.lastPartialText.trimEnd();
-    const suppressProgressAnswerBlock =
-      turn.streamMode === "progress" &&
-      info.kind === "block" &&
-      segment.lane === "answer" &&
-      !reply.hasMedia &&
-      !hasExecApprovalPayload(effectivePayload) &&
-      telegramButtons === undefined;
-    if (skipTextOnlyBlock || suppressProgressAnswerBlock) {
+    if (skipTextOnlyBlock) {
       turn.activeAnswerBlockDelivery = {
         payload: effectivePayload,
         text: segment.update.text,
         buttons: telegramButtons,
       };
       turn.activeAnswerDraftIsToolProgressOnly = false;
-      if (!suppressProgressAnswerBlock) {
-        turn.progressCompositor.resetActivity();
-      }
+      turn.progressCompositor.resetActivity();
       blockDelivered = true;
       continue;
     }
@@ -517,14 +527,15 @@ async function deliverReplyWithNormalization(
         lanePayload,
         info.assistantMessageIndex,
       );
-      if (turn.streamMode !== "progress" && shouldRotate && !prepared) {
+      if (shouldRotate && !prepared) {
         await rotateAnswerLaneForNewMessage(turn);
         turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
       }
       turn.activeAnswerDraftIsToolProgressOnly = false;
-      turn.progressCompositor.resetActivity();
+      if (turn.streamMode !== "progress") {
+        turn.progressCompositor.resetActivity();
+      }
     }
-    const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
     const result =
       segment.lane === "answer" && info.kind === "final"
         ? await deliverFinalAnswerText(
@@ -542,7 +553,6 @@ async function deliverReplyWithNormalization(
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
-            ...(isAskUserPayload ? { finalizePreview: true } : {}),
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
@@ -554,12 +564,6 @@ async function deliverReplyWithNormalization(
       (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
     if (finalizedPreview) {
       await handlePreviewFinalizedResult(turn, result);
-      if (isAskUserPayload && result.kind === "preview-finalized") {
-        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, {
-          messageId: result.delivery.messageId,
-          text: result.delivery.content,
-        });
-      }
     }
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {

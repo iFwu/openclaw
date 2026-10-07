@@ -378,3 +378,26 @@ for provider selection, lifecycle, failure handling, limits, and diagnostics.
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.
+
+### Original input custody before asynchronous channel preparation
+
+An authorized durable channel input can use the lazy `reply-runtime` helper
+`stageChannelInputSource` to stage immutable original text, sender, transport and
+stable media references before buffering or downloading media. Its target and
+currentness checks remain bound to the captured physical store, session and host
+generation. The returned recorder is factory-owned; copied recorder projections
+cannot attest cancellation.
+
+The ingress lifecycle's optional `registerPendingInputSource` accepts the source
+admission promise before asynchronous authorization/preparation. An ignored or
+unauthorized input resolves to `undefined`; a failed stage rejects. Pre-adoption
+supersede waits for admitted sources and confirms their native cancellation before
+aborting or completing the ingress claim. This does not authorize a provider turn.
+Normal collected reply dispatch passes those exact recorders in
+`GetReplyOptions.pendingInputSources`, so the canonical transcript append consumes
+the originals rather than leaving a second input queue behind.
+
+Downloaded paths belong to execution hydration. They must not replace immutable
+original media references on retry. An already cancelled matching original is
+read without admitting new execution; a changed original payload remains an
+idempotency conflict.

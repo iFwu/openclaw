@@ -25,7 +25,7 @@ type ReplyRunKey = string;
 
 type ReplyBackendKind = "embedded" | "cli";
 
-export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded" | "approval-denied";
 
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 

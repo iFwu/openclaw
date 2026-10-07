@@ -154,6 +154,7 @@ export async function runEmbeddedFallbackCandidate(
         transcriptPrompt: turn.transcriptCommandBody,
         media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+        modelContinuation: params.modelContinuation,
         contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
         onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,

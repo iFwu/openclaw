@@ -121,6 +121,13 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
+  hasSessionAutoNewPendingInteraction,
+  isSessionAutoNewCandidateCurrent,
+  logJevAutoNewOutcome,
+  prepareSessionAutoNewCandidate,
+  type SessionAutoNewCandidate,
+} from "./session-auto-new.js";
+import {
   resolveSessionDefaultAccountId,
   resolveSessionConversationBindingContext,
   resolveSessionConversationBinding,
@@ -141,7 +148,7 @@ import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
-import type { SessionInitResult } from "./session-init.types.js";
+import type { SessionInitResult as NativeSessionInitResult } from "./session-init.types.js";
 import {
   canReplaceRestartTombstoneFromParent,
   prepareReplySessionParentFork,
@@ -153,6 +160,8 @@ import {
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 import { stripThreadFromSessionRoute, stripThreadId } from "./session-route-reset.js";
+
+type SessionInitResult = NativeSessionInitResult & { automaticNewTriggered?: boolean };
 
 const log = createSubsystemLogger("session-init");
 
@@ -172,6 +181,7 @@ type InitSessionStateParams = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
+  currentReplyOperation?: import("./reply-run-registry.js").ReplyOperation;
 };
 
 type InitSessionStateAttemptContext = {
@@ -194,6 +204,7 @@ type InitSessionStateAttemptOutcome =
       sessionKey: string;
       lifecycleRevision?: string;
       resetTriggered: boolean;
+      automaticNewTriggered: boolean;
     };
 
 async function resolveInitSessionStateAttemptContext(
@@ -335,8 +346,25 @@ function resolveReplySessionRolloverState(
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   prepareChannelParticipantObservation(params.ctx);
+  let autoNewCandidate: SessionAutoNewCandidate | undefined;
+  if (params.ctx.AutoNewSession === "jev" && params.pinExpectedExistingSession !== true) {
+    const preprocessingState = await resolveReplySessionPreprocessingState(params);
+    autoNewCandidate = await prepareSessionAutoNewCandidate({
+      agentId: resolveSessionAgentId({
+        sessionKey: preprocessingState.sessionKey,
+        config: params.cfg,
+        fallbackAgentId: params.ctx.AgentId,
+      }),
+      ctx: params.ctx,
+      entry: preprocessingState.sessionEntry,
+      sessionKey: preprocessingState.sessionKey,
+      signal: params.signal,
+      storePath: preprocessingState.storePath,
+      currentReplyOperation: params.currentReplyOperation,
+    });
+  }
   return await runWithSessionInitConflictRetry(
-    async () => await initSessionStateAttempt(params, false),
+    async () => await initSessionStateAttempt(params, false, autoNewCandidate),
     { signal: params.signal },
   );
 }
@@ -344,7 +372,9 @@ export async function initSessionState(params: InitSessionStateParams): Promise<
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
   staleSnapshotRetried: boolean,
+  autoNewCandidate: SessionAutoNewCandidate | undefined,
 ): Promise<SessionInitResult> {
+  let activeAutoNewCandidate = autoNewCandidate;
   const attemptContext = await resolveInitSessionStateAttemptContext(params, "initialization");
   params.signal?.throwIfAborted();
   const binding = attemptContext.conversationBinding;
@@ -418,6 +448,7 @@ async function initSessionStateAttempt(
         { ...attemptContext, storeWriterIdentity },
         staleSnapshotRetried,
         undefined,
+        activeAutoNewCandidate,
       ),
     { identities: storeWriterIdentity ? [storeWriterIdentity] : undefined },
   );
@@ -443,7 +474,13 @@ async function initSessionStateAttempt(
           const revalidated = await runExclusiveSessionStoreWrite(
             attemptContext.storePath,
             async () =>
-              await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+              await initSessionStateAttemptLocked(
+                params,
+                attemptContext,
+                false,
+                undefined,
+                activeAutoNewCandidate,
+              ),
           );
           if (
             revalidated.kind === "complete" ||
@@ -458,6 +495,22 @@ async function initSessionStateAttempt(
         };
         if (!(await revalidate())) {
           return;
+        }
+        if (candidate.automaticNewTriggered) {
+          if (await hasSessionAutoNewPendingInteraction(candidate.sessionKey)) {
+            logJevAutoNewOutcome({
+              sessionKey: candidate.sessionKey,
+              sessionId: candidate.sessionId,
+              reason: "revalidation_failed",
+              messageId: params.ctx.MessageSidFull ?? params.ctx.MessageSid,
+            });
+            activeAutoNewCandidate = undefined;
+            await revalidate();
+            return;
+          }
+          if (!(await revalidate())) {
+            return;
+          }
         }
         const drained = await interruptSessionWorkAdmissions({
           scope: attemptContext.storePath,
@@ -496,7 +549,14 @@ async function initSessionStateAttempt(
         // must match this exact fenced identity before any rollover side effect.
         return await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
+          async () =>
+            await initSessionStateAttemptLocked(
+              params,
+              attemptContext,
+              false,
+              candidate,
+              activeAutoNewCandidate,
+            ),
         );
       },
     });
@@ -514,6 +574,7 @@ async function initSessionStateAttemptLocked(
   lifecycleMutationIdentity:
     | { sessionId: string; sessionKey: string; lifecycleRevision?: string }
     | undefined,
+  autoNewCandidate?: SessionAutoNewCandidate,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
   const {
@@ -677,6 +738,20 @@ async function initSessionStateAttemptLocked(
   if (resetTriggered && isModelSelectionLocked(entry)) {
     throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
+  const automaticNewTriggered =
+    !resetTriggered &&
+    isSessionAutoNewCandidateCurrent({ candidate: autoNewCandidate, entry, sessionKey, storePath });
+  if (autoNewCandidate && !automaticNewTriggered && !resetTriggered) {
+    logJevAutoNewOutcome({
+      sessionKey,
+      sessionId: autoNewCandidate.sessionId,
+      reason: "candidate_stale",
+      messageId: ctx.MessageSidFull ?? ctx.MessageSid,
+    });
+  }
+  if (automaticNewTriggered) {
+    isNewSession = true;
+  }
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -778,7 +853,11 @@ async function initSessionStateAttemptLocked(
     activeReplyOperation?.sessionId === entry?.sessionId;
   // An implicit reset must not append a boundary or interrupt this exact active writer.
   // A bare stale result is the legacy updatedAt=0 pending-reset tombstone.
-  const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
+  const effectiveFreshEntry = automaticNewTriggered
+    ? false
+    : deferImplicitRolloverForActiveRun
+      ? true
+      : freshEntry;
   // Keep the owed reset pending until the active writer completes.
   const retainPendingResetMarker =
     deferImplicitRolloverForActiveRun && !isNewSession && entry?.updatedAt === 0;
@@ -790,10 +869,12 @@ async function initSessionStateAttemptLocked(
     (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
-    : resolveStaleSessionEndReason({
-        entry,
-        freshness: entryFreshness,
-      });
+    : automaticNewTriggered
+      ? "new"
+      : resolveStaleSessionEndReason({
+          entry,
+          freshness: entryFreshness,
+        });
   const lifecycleMutationMatches = Boolean(
     previousSessionEntry &&
     lifecycleMutationIdentity?.sessionKey === sessionKey &&
@@ -807,6 +888,7 @@ async function initSessionStateAttemptLocked(
       sessionKey,
       lifecycleRevision: previousSessionEntry.lifecycleRevision,
       resetTriggered,
+      automaticNewTriggered,
     };
   }
   const recoveredTerminalEntry =
@@ -1034,20 +1116,27 @@ async function initSessionStateAttemptLocked(
       ? previousSessionEndReason
       : "reset";
   const resetBoundary: SessionResetBoundaryRequest | undefined = previousSessionEntry
-    ? resetTriggered
-      ? { context: "clear", reason: resolveExplicitSessionEndReason(matchedResetTriggerLower) }
+    ? resetTriggered || automaticNewTriggered
+      ? {
+          context: "clear",
+          reason: automaticNewTriggered
+            ? "new"
+            : resolveExplicitSessionEndReason(matchedResetTriggerLower),
+        }
       : { context: "preserve-tail", reason: continuityReason }
     : undefined;
   const resetBoundaryAppended = resetBoundary !== undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
-    commitGuard: !entry
-      ? () => {
-          params.signal?.throwIfAborted();
-          assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
-        }
-      : undefined,
+    commitGuard: automaticNewTriggered
+      ? () => params.signal?.throwIfAborted()
+      : !entry
+        ? () => {
+            params.signal?.throwIfAborted();
+            assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
+          }
+        : undefined,
     activeSessionKey: sessionKey,
     agentId,
     archivePreviousTranscript: false,
@@ -1134,12 +1223,35 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
+    if (automaticNewTriggered) {
+      logJevAutoNewOutcome({
+        sessionKey,
+        sessionId: previousSessionEntry?.sessionId,
+        reason: "reset_boundary_not_committed",
+        willRetry: !staleSnapshotRetried,
+        messageId: ctx.MessageSidFull ?? ctx.MessageSid,
+      });
+    }
     if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        true,
+        undefined,
+        autoNewCandidate,
+      );
     }
     // Propagate a typed conflict so initSessionState can retry with backoff
     // outside the store writer lane instead of surfacing this to the caller.
     throw new ReplySessionInitConflictError(sessionKey);
+  }
+  if (automaticNewTriggered) {
+    logJevAutoNewOutcome({
+      sessionKey,
+      sessionId,
+      reason: "reset_boundary_committed",
+      messageId: ctx.MessageSidFull ?? ctx.MessageSid,
+    });
   }
   if (previousSessionEntry) {
     try {
@@ -1323,6 +1435,7 @@ async function initSessionStateAttemptLocked(
       sessionId: sessionId ?? crypto.randomUUID(),
       isNewSession: isFirstSessionTurn,
       resetTriggered,
+      automaticNewTriggered: automaticNewTriggered && resetBoundaryAppended,
       systemSent,
       abortedLastRun,
       storePath,

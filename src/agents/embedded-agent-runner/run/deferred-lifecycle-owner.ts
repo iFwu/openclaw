@@ -5,6 +5,7 @@ import {
   createDiagnosticEmbeddedRunOwner,
   type DiagnosticEmbeddedRunOwner,
 } from "../../../logging/diagnostic-run-activity.js";
+import { createApprovalDeniedAbortError } from "../../approval-denied-abort.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -124,7 +125,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
 
 export type DeferredEmbeddedRunLifecycleManager = {
   signal: AbortSignal;
-  abort: (reason?: "user_abort" | "restart" | "superseded") => void;
+  abort: (reason?: "user_abort" | "restart" | "superseded" | "approval-denied") => void;
   adopt: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   beginRetryWait: (
     deadlineAtMs: number,
@@ -147,16 +148,18 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
     ? AbortSignal.any([params.abortSignal, controller.signal])
     : controller.signal;
   let current: DeferredEmbeddedRunLifecycleOwner | undefined;
-  const abort = (reason?: "user_abort" | "restart" | "superseded") => {
+  const abort = (reason?: "user_abort" | "restart" | "superseded" | "approval-denied") => {
     if (controller.signal.aborted) {
       return;
     }
     controller.abort(
-      reason === "restart"
-        ? createAgentRunRestartAbortError()
-        : reason === "superseded"
-          ? createAgentRunSupersededAbortError()
-          : createAgentRunDirectAbortError(),
+      reason === "approval-denied"
+        ? createApprovalDeniedAbortError()
+        : reason === "restart"
+          ? createAgentRunRestartAbortError()
+          : reason === "superseded"
+            ? createAgentRunSupersededAbortError()
+            : createAgentRunDirectAbortError(),
     );
   };
   let cliOwner: EmbeddedAgentQueueHandle | undefined;

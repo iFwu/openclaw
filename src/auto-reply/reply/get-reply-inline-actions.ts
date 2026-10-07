@@ -63,6 +63,9 @@ const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchR
   () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
+const cutoffRetentionRuntimeLoader = createLazyImportLoader(
+  () => import("./abort-cutoff-retention.js"),
+);
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
 let builtinSlashCommands: Set<string> | null = null;
 
@@ -272,6 +275,19 @@ export async function handleInlineActions(params: {
         })
       : false;
     if (shouldSkip) {
+      if (opts?.turnAdoptionLifecycle?.admission === "exclusive") {
+        const { retainAbortCutoffInput } = await cutoffRetentionRuntimeLoader.load();
+        await retainAbortCutoffInput({
+          ctx,
+          cfg,
+          agentId,
+          sessionKey,
+          storePath,
+          entry: targetSessionEntry,
+          workspaceDir,
+          opts,
+        });
+      }
       const runState = resolveReplyOperationRunState(opts);
       if (runState) {
         // The stop owner cancelled this queued input; no answer remains due.

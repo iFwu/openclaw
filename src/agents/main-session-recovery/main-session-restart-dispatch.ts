@@ -64,7 +64,9 @@ const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
     "and finish the task without asking the user to repeat the request. " +
     `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} Treat a tool result ` +
     "marked interrupted or missing as having an unknown outcome; verify what happened before " +
-    `repeating an action. ${TOOL_FAILURE_INSTRUCTION}`,
+    `repeating an action. ${TOOL_FAILURE_INSTRUCTION} ` +
+    "Finish with a self-contained summary of the work completed, verified results, " +
+    "outcomes still unknown, and remaining work. Do not assume earlier progress messages were delivered.",
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =

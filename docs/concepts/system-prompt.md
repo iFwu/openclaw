@@ -59,11 +59,12 @@ Tooling also carries long-running-work guidance:
 - use `exec` / `process` only for commands that start now and continue in the background
 - when automatic completion wake is enabled, start the command once and rely on the push-based wake path
 - use `process` for logs, status, input, or intervention on a running command
-- for larger tasks, prefer `sessions_spawn` and follow its accepted completion mode: announcing children return completion events; collectors require explicit result collection
+- stay in the current session by default; use `sessions_spawn` on request or when parallelism, context isolation, or independent review clearly outweighs handoff costs, not merely because work is large or slow
+- keep child tasks narrower, retain final delivery ownership, and explain actual visibility; follow the accepted completion mode: announcing children return completion events, while collectors require explicit result collection
 - treat a child completion as the end of that run, not proof that the delegated user goal is complete; continue persistent sessions when in-scope work remains
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for completion
 
-`agents.defaults.subagents.delegationMode` can strengthen this. With no explicit setting, OpenClaw uses `"prefer"` in each agent's main session and `"suggest"` elsewhere; an explicit default or per-agent override always wins. `"prefer"` adds a dedicated **Delegation** section telling the agent to stay responsive, use hidden sub-agents for internal legwork, and use visible sidebar sessions for work the user will follow or return to. This is prompt-only; tool policy still controls whether `sessions_spawn` is available.
+`agents.defaults.subagents.delegationMode` defaults to `"suggest"` in every session, including the main session; an explicit default or per-agent override always wins. `"prefer"` adds a dedicated **Delegation** section for eligible work, including scope, visibility, and outcome ownership. It keeps the same requirement for clear delegation benefits rather than automatically delegating large or slow work. This is prompt-only; tool policy still controls whether `sessions_spawn` is available.
 
 At the `ultra` thinking level, a **Proactive Sub-Agent Orchestration** section is also added when `sessions_spawn` is available: it tells the model to parallelize independent investigation, implementation, and verification through sub-agents, keep simple or tightly coupled work local, give each sub-agent a bounded objective, and synthesize results before replying.
 

@@ -1,6 +1,7 @@
 // Proves queue caps and depth describe pending work while active identities remain in shared state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
@@ -10,6 +11,7 @@ import {
 } from "./queue.js";
 import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
 import { prepareStaleFollowupDrainRetirement } from "./queue/drain.js";
+import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
@@ -34,6 +36,76 @@ describe("followup queue in-flight ownership", () => {
     debounceMs: 0,
     cap: 1,
     dropPolicy,
+  });
+
+  it.each([false, true])(
+    "settles synchronously and reports asynchronous abandonment failure (rejects=%s)",
+    async (rejects) => {
+      const abandonment = createDeferred();
+      const failure = new Error("ingress claim release failed");
+      const errorLog = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const onAbandoned = vi.fn(() => abandonment.promise);
+      const onSettled = vi.fn();
+      const run = { turnAdoptionLifecycle: { onAdopted: vi.fn(), onAbandoned, onSettled } };
+      try {
+        completeFollowupRunLifecycle(run);
+        expect(onAbandoned).toHaveBeenCalledExactlyOnceWith();
+        expect(onSettled).toHaveBeenCalledOnce();
+        completeFollowupRunLifecycle(run);
+        expect(onAbandoned).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+        expect(errorLog).not.toHaveBeenCalled();
+        if (rejects) {
+          abandonment.reject(failure);
+        } else {
+          abandonment.resolve();
+        }
+        await Promise.allSettled([abandonment.promise]);
+        if (rejects) {
+          expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(failure.message),
+          );
+        } else {
+          expect(errorLog).not.toHaveBeenCalled();
+        }
+      } finally {
+        abandonment.resolve();
+        await Promise.allSettled([abandonment.promise]);
+        errorLog.mockRestore();
+      }
+    },
+  );
+
+  it("reports completion callback failure after a pending admission settles", async () => {
+    const gate = createDeferred();
+    const failure = new Error("queue settlement callback failed");
+    const errorLog = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const onAbandoned = vi.fn();
+    const onSettled = vi.fn(() => {
+      throw failure;
+    });
+    const run = {
+      turnAdoptionLifecycle: { onAdopted: () => gate.promise, onAbandoned, onSettled },
+    };
+    const admission = admitFollowupRunLifecycle(run);
+    try {
+      await Promise.resolve();
+      completeFollowupRunLifecycle(run);
+      expect(onSettled).not.toHaveBeenCalled();
+      gate.resolve();
+      await admission;
+      await vi.waitFor(() =>
+        expect(errorLog).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(failure.message)),
+      );
+      expect(onAbandoned).not.toHaveBeenCalled();
+      expect(onSettled).toHaveBeenCalledOnce();
+      completeFollowupRunLifecycle(run);
+      expect(onSettled).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([admission]);
+      errorLog.mockRestore();
+    }
   });
 
   it.each(["old", "summarize"] as const)(

@@ -73,7 +73,8 @@ export function buildChannelApprovalResolvedText(params: {
   const resolvedByText = params.resolved.resolvedBy
     ? ` Resolved by ${params.resolved.resolvedBy}.`
     : "";
-  return `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`;
+  const icon = params.resolved.decision === "deny" ? "❌" : "✅";
+  return `${icon} Exec approval ${params.resolved.decision}.${resolvedByText} (${params.request.id.slice(0, 8)})`;
 }
 
 /** Builds channel-visible expiration text for exec and plugin approvals. */
@@ -88,7 +89,7 @@ export function buildChannelApprovalExpiredText(params: {
   if (request.approvalKind === "plugin") {
     return buildPluginApprovalExpiredMessage(request);
   }
-  return `⏱️ Exec approval expired. ID: ${request.id}`;
+  return `⏱️ Exec approval expired (${request.id.slice(0, 8)})`;
 }
 
 /** Resolves the account id prepared for approval routing with planned/context fallback order. */

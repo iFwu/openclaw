@@ -31,16 +31,51 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   } = http;
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["rejected", "no-message-id"] as const)(
+  it.each([
+    { persist: false, isError: false, retained: false },
+    { persist: true, isError: false, retained: true },
+    { persist: false, isError: true, retained: true },
+    { persist: true, isError: true, retained: true },
+  ])(
+    "retains only the required last progress surface (persist $persist, error $isError)",
+    async ({ persist, isError, retained }) => {
+      await dispatchProgressTurn(
+        async (options) => {
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "retention" });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+        },
+        {
+          mode: "progress",
+          toolProgress: true,
+          telegramCfg: {
+            streaming: { mode: "progress", progress: { persist, toolProgress: true } },
+          },
+          finalReply: { text: "Retention final result", isError },
+        },
+      );
+      expect([...visibleMessages.values()]).toContain("Retention final result");
+      expect([...visibleMessages.values()].some((text) => text.includes("Exec"))).toBe(retained);
+    },
+  );
+
+  it.each(["rejected", "no-message-id", "rejected-edit"] as const)(
     "keeps continuation custody local after a %s provider response",
     async (response) => {
       let adopted = false;
-      http.respondToCall = (call) =>
-        call.method === "sendMessage" && String(call.fields.text).includes("Pending delegation")
+      http.respondToCall = (call) => {
+        const rejectsProgress =
+          response === "rejected-edit"
+            ? call.method === "editMessageText" &&
+              String(call.fields.text).includes("Pending delegation")
+            : call.method === "sendMessage" &&
+              (String(call.fields.text).includes("Working") ||
+                String(call.fields.text).includes("Pending delegation"));
+        return rejectsProgress
           ? response === "no-message-id"
             ? response
             : { error_code: 400, description: "Bad Request: progress rejected" }
           : undefined;
+      };
       await dispatchProgressTurn(
         async (options) => {
           await options?.onItemEvent?.({
@@ -67,11 +102,25 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           ),
         },
       );
+      if (response === "rejected-edit") {
+        expect(
+          calls.some(
+            (call) =>
+              call.method === "editMessageText" &&
+              String(call.fields.text).includes("Pending delegation"),
+          ),
+        ).toBe(true);
+      }
       expect(adopted).toBe(false);
       expect([...visibleMessages.values()]).toEqual(["Waiting for delegated work."]);
-      expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
-        true,
-      );
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "sendMessage" &&
+            (String(call.fields.text).includes("Working") ||
+              String(call.fields.text).includes("Pending delegation")),
+        ),
+      ).toBe(true);
     },
   );
 
@@ -284,7 +333,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     );
   });
 
-  it("preserves a post-progress error final when Telegram rejects cleanup", async () => {
+  it("preserves a chunked final when Telegram rejects cleanup", async () => {
     http.respondToCall = (call) =>
       call.method === "deleteMessage"
         ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
@@ -298,7 +347,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         mode: "progress",
         toolProgress: true,
         textLimit: 80,
-        finalReply: { text: "A".repeat(80) + "B".repeat(40), isError: true },
+        finalReply: { text: "A".repeat(80) + "B".repeat(40) },
       },
     );
     await vi.advanceTimersByTimeAsync(4_100);
@@ -332,7 +381,8 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           phase: "end",
           progressText: commentary,
         });
-        expect(calls.filter((call) => call.method === "sendMessage")).toEqual([]);
+        expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+        expect([...visibleMessages.values()]).toEqual([expect.stringContaining(commentary)]);
       },
       { mode: "progress", toolProgress: true, finalReply: waitingPayload },
     );
@@ -481,7 +531,8 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           progressText: "Incomplete preamble",
         });
         await vi.advanceTimersByTimeAsync(1_500);
-        expect([...visibleMessages.values()]).toEqual([]);
+        expect([...visibleMessages.values()]).toEqual(["<b>Working</b>"]);
+        expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
         await options?.onItemEvent?.({
           kind: "preamble",
           itemId: "compaction",

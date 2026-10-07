@@ -3,6 +3,10 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  bindAdmittedRunApprovalOrigin,
+  captureApprovalOrigin,
+} from "../../agents/admitted-run-approval-origin.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
   attachAgentCommandAdmissionFacts,
@@ -31,7 +35,8 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
+import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
@@ -41,6 +46,7 @@ import { resolveChatSendCallerContext } from "../server-methods/gateway-client-i
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
+import { readSubagentCompletionApprovalOrigin } from "../subagent-completion-tool-handoff.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import {
   buildAbortedAgentPayload,
@@ -69,6 +75,22 @@ import {
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
   const { prepared } = params;
+  const completionApprovalOrigin = params.canUseInternalRuntimeHandoff
+    ? readSubagentCompletionApprovalOrigin(prepared.trustedInternalHandoff)
+    : undefined;
+  const targetApprovalOrigin =
+    completionApprovalOrigin?.snapshot.origin ??
+    (params.sessionEntry?.spawnedBy && params.sessionEntry.sessionId === params.resolvedSessionId
+      ? params.sessionEntry.inheritedApprovalOrigin
+      : undefined) ??
+    (params.canUseInternalRuntimeHandoff &&
+    !params.isNewSession &&
+    params.sessionEntry?.sessionId === params.resolvedSessionId &&
+    params.delivery.originMessageChannel === INTERNAL_MESSAGE_CHANNEL &&
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "sessions_send"
+      ? captureApprovalOrigin(sessionDeliveryOrigin(params.sessionEntry))
+      : undefined);
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
     params.sessionEntry?.incognito,
@@ -512,6 +534,12 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                 operationalRunInstance: prepared.operationalRunInstance,
                 operatorAuthority: prepared.operatorAuthority,
                 onAdmittedRunContext: (admittedRunContext) => {
+                  if (targetApprovalOrigin) {
+                    bindAdmittedRunApprovalOrigin(admittedRunContext, targetApprovalOrigin, () => {
+                      assertDispatchCurrent();
+                      completionApprovalOrigin?.assertCurrent();
+                    });
+                  }
                   skillLibraryAuthoring?.bind(admittedRunContext);
                   bindGatewayContextResolver(
                     admittedRunContext,

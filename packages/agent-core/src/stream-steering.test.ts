@@ -235,10 +235,10 @@ describe("active response steering", () => {
     });
   });
   it.each(["one-at-a-time", "all"] as const)(
-    "keeps a drained %s steering batch ahead of later input while an async call settles",
+    "preserves %s steering order while an async call completes",
     async (steeringMode) => {
       const submitted = createDeferred();
-      const skipped = createDeferred();
+      const completed = createDeferred();
       const steer = vi.fn(async () => {
         submitted.resolve();
         return true;
@@ -258,7 +258,7 @@ describe("active response steering", () => {
       });
       harness.agent.subscribe((event) => {
         if (event.type === "tool_execution_end") {
-          skipped.resolve();
+          completed.resolve();
         }
       });
       const run = harness.agent.prompt("original question");
@@ -276,11 +276,11 @@ describe("active response steering", () => {
       };
       const partial = { ...assistant(""), content: [toolCall] };
       harness.firstResponse.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
-      await skipped.promise;
+      await completed.promise;
       harness.agent.steer(second);
       await setImmediate();
       expect(steer).toHaveBeenCalledTimes(1);
-      expect(execute).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledOnce();
       harness.finish({
         ...assistant("original answer"),
         content: [toolCall, { type: "text", text: "original answer" }],

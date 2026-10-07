@@ -423,14 +423,14 @@ remain available in the session transcript.
 
 ## Channel behavior
 
-| Channel         | Progress transport                     | Notes                                                                                                                                                     |
-| --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
-| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
-| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
-| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                          |
-| Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
-| Mattermost      | Editable draft post.                   | `block` mode rotates between completed text and tool-activity posts; other modes fold tool activity into the same draft-style post.                       |
+| Channel         | Progress transport                            | Notes                                                                                                                               |
+| --------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Discord         | Send one message, then edit it.               | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                            |
+| Matrix          | Send one event, then edit it.                 | Account-level streaming config controls account-level drafts.                                                                       |
+| Microsoft Teams | Native Teams stream in personal chats.        | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                     |
+| Slack           | Native stream or editable draft post.         | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.    |
+| Telegram        | Separate editable status and answer messages. | The cumulative answer finalizes in place; normal completion clears the status card unless persistence is enabled.                   |
+| Mattermost      | Editable draft post.                          | `block` mode rotates between completed text and tool-activity posts; other modes fold tool activity into the same draft-style post. |
 
 Channels without safe edit support fall back to typing indicators or
 final-only delivery. See [Streaming and chunking](/concepts/streaming) for the
@@ -511,3 +511,32 @@ Telegram.
 - [Slack](/channels/slack)
 - [Telegram](/channels/telegram)
 - [Mattermost](/channels/mattermost)
+
+## Telegram independent answer streaming
+
+Telegram's `progress` mode keeps the status card separate from cumulative answer
+text. The card begins with `Working` when answer activity or meaningful progress
+starts. Answer tokens update a second message; final delivery finalizes that
+message in place. If no answer preview exists, the durable sender posts a new
+answer. Completed answers are not reused for later assistant messages or queued
+followups.
+
+Late-classified commentary is withdrawn from its answer preview only after the
+status card has a concrete Telegram message ID and the matching text is confirmed
+visible. A failed or truncated card update keeps the commentary preview. Native
+questions use a separate notification and never take over either live surface.
+Single-use (`first`/`batched`) native reply targets are shared across the status,
+answer, reasoning, and normal-delivery paths.
+
+## Fork progress retention
+
+On Telegram, `channels.telegram.streaming.progress.persist: true` retains the
+last visible progress card after normal completion. The default remains false;
+failed and cancelled turns retain their visible progress regardless of this
+setting. Retention does not mark a progress card as a confirmed final answer.
+Configuration changes apply to subsequent turns, not messages already sent.
+
+`streaming.progress.maxLineChars: false` disables compact-line truncation.
+Numeric limits remain positive integers; channel transport limits and normal
+message pagination still apply. This setting does not expose hidden reasoning
+or additional tool arguments.

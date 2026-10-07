@@ -129,6 +129,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     ctx,
     cfg,
     isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
+    ...(params.replyOptions?.turnAdoptionLifecycle
+      ? { onAdopted: params.replyOptions.turnAdoptionLifecycle.onAdopted }
+      : {}),
   });
   if (fastAbort.handled) {
     if (fastAbort.aborted || (fastAbort.stoppedSubagents ?? 0) > 0) {

@@ -1,6 +1,7 @@
 import type { Context } from "grammy";
 import type { Message } from "grammy/types";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,6 +20,7 @@ import type {
   TelegramInboundPipeline,
 } from "./bot-handlers.types.js";
 import {
+  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -45,6 +47,7 @@ type TelegramMessageHandlerRuntime = Pick<
   | "releaseDispatchDedupeClaims"
   | "claimMessageDispatchDedupe"
   | "resolveTelegramSessionState"
+  | "prepareMessageInputSource"
   | "resolvePromptContextAmbientWatermark"
 > & {
   recordMessageForReplyChain: (
@@ -167,8 +170,16 @@ function createTelegramInboundHandlers(
     event: InboundTelegramEvent,
   ): Promise<TelegramInboundDisposition> => {
     let dispatchDedupeClaims: ChannelReplayClaimHandle[] = [];
+    const sourceAdmission =
+      createDeferred<
+        Awaited<ReturnType<NonNullable<TelegramMessagePipeline["prepareMessageInputSource"]>>>
+      >();
+    const lifecycle = getTelegramSpooledReplayLifecycle();
+    lifecycle?.registerPendingInputSource?.(sourceAdmission.promise);
+    void sourceAdmission.promise.catch(() => undefined);
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
+        sourceAdmission.resolve(undefined);
         return { kind: "ignored" };
       }
       const gate = await authorizeInboundMessage({
@@ -182,6 +193,7 @@ function createTelegramInboundHandlers(
         dmAccess: "challenge",
       });
       if (!gate.allowed) {
+        sourceAdmission.resolve(undefined);
         return { kind: "ignored" };
       }
       const { effectiveDmAllow } = gate;
@@ -216,9 +228,25 @@ function createTelegramInboundHandlers(
 
       const dispatchDedupe = await claimMessageDispatchDedupe(event.msg, event.botUserId);
       if (!dispatchDedupe.process) {
+        sourceAdmission.resolve(undefined);
         return { kind: "ignored" };
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
+      const recorder = await messageRuntime.prepareMessageInputSource?.({
+        msg: event.msg,
+        cfg: gate.context.cfg,
+        state: sessionState,
+        route: {
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
+          senderId: event.senderId,
+          runtimeCfg: gate.context.cfg,
+        },
+        claims: dispatchDedupeClaims,
+      });
+      sourceAdmission.resolve(recorder);
       await recordMessageForReplyChain(event.msg, gate.context.threadSpec, event.botUserId);
       return await processInboundMessage({
         authorizationCfg: gate.context.cfg,
@@ -241,6 +269,7 @@ function createTelegramInboundHandlers(
         ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
       });
     } catch (err) {
+      sourceAdmission.reject(err);
       releaseDispatchDedupeClaims(dispatchDedupeClaims, err);
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
       const spooledReplay = isTelegramSpooledReplayUpdate(event.ctx.update);
@@ -249,6 +278,7 @@ function createTelegramInboundHandlers(
         // Spooled replays are durably retried; live updates get one apology
         // because they are acked without replay.
         if (spooledReplay) {
+          sourceAdmission.resolve(undefined);
           return { kind: "ignored" };
         }
         await withTelegramApiErrorLogging({

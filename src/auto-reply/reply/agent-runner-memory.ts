@@ -1591,6 +1591,7 @@ export async function runMemoryFlushIfNeeded(params: {
           onDeferredLifecycleAbort: deferredLifecycle.abort,
           onRetryWait: deferredLifecycle.beginRetryWait,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
+          modelContinuation: runOptions.modelContinuation,
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,

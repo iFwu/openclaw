@@ -34,6 +34,7 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
+import { resolveActiveEmbeddedRunOwnerByRunId } from "./embedded-agent-runner/runs.js";
 import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -219,6 +220,15 @@ async function requestPluginToolApproval(params: {
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
   const resolveDecision = (decision: unknown): HookOutcome | undefined => {
     const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
+    if (resolution === PluginApprovalResolutions.DENY && approval.onDeny === "abort-turn") {
+      const runId = params.ctx?.runId?.trim();
+      const sessionId = params.ctx?.sessionId?.trim();
+      const owner = runId && sessionId ? resolveActiveEmbeddedRunOwnerByRunId(runId) : undefined;
+      // The exact owner revalidates registration at abort; never cancel a successor by session alone.
+      if (owner && owner.sessionId === sessionId) {
+        owner.abort("approval-denied");
+      }
+    }
     notifyPluginApprovalResolution(approval, resolution);
     if (
       resolution === PluginApprovalResolutions.ALLOW_ONCE ||
@@ -243,6 +253,7 @@ async function requestPluginToolApproval(params: {
           pluginId: approval.pluginId,
           title: approval.title,
           description: approval.description,
+          ...(approval.detail ? { detail: approval.detail } : {}),
           ...(approval.scope ? { scope: sanitizeApprovalScope(approval.scope) } : {}),
           severity: approval.severity,
           allowedDecisions: approval.allowedDecisions,
@@ -313,6 +324,7 @@ async function requestPluginToolApproval(params: {
           {
             title: approval.title,
             description: approval.description,
+            ...(approval.detail ? { detail: approval.detail } : {}),
             ...(approval.scope ? { scope: approval.scope } : {}),
             severity: approval.severity,
             allowedDecisions: approval.allowedDecisions,

@@ -19,6 +19,7 @@ export type ProcessTerminalDiagnostic = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  toolCallId?: string;
   executionStarted?: boolean;
   meta?: string;
   errorCode?: string;

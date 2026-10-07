@@ -97,9 +97,13 @@ export async function settleAgentFallbackCycle(params: {
   };
   if (embeddedError && isContextOverflowError(embeddedError.message)) {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    defaultRuntime.error(
-      `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
-    );
+    try {
+      defaultRuntime.error(
+        `Context overflow recovery did not complete. Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
+      );
+    } catch {
+      // Logging must not prevent the terminal failure reply.
+    }
     turn.replyOperation?.fail("run_failed", embeddedError);
     return {
       kind: "final",

@@ -17,6 +17,8 @@ export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
+/** Stable watchdog diagnostic shared with the read-only health projection. */
+export const INGRESS_ADOPTION_STALL_ERROR_PREFIX = "Channel ingress claim→adoption stalled";
 
 export type IngressRetryPolicyConfig = {
   maxAttempts?: number;

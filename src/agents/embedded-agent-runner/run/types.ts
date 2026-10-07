@@ -226,9 +226,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
-  onAttemptAbort?: () => void;
+  onAttemptAbort?: (reason?: unknown) => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  onDeferredLifecycleAbort?: (
+    reason?: "user_abort" | "restart" | "superseded" | "approval-denied",
+  ) => void;
   /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */
   pluginRuntimeRefreshPending?: () => boolean;
   /** Registers the exact attempt owner able to stop before another model request. */
@@ -381,6 +383,7 @@ export type EmbeddedRunAttemptResult = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    asyncExec?: { sessionId: string; startedAt: number; settled?: true };
     /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
     codeModeSuspended?: boolean;
   }>;

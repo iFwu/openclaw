@@ -7,6 +7,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/message/durable-receive.test.ts",
   "src/channels/message/ingress-drain-lanes.test.ts",
   "src/channels/message/ingress-drain-supersede.test.ts",
+  "src/channels/message/ingress-drain.original-source.test.ts",
   "src/channels/message/ingress-drain.async-work.test.ts",
   "src/channels/message/ingress-drain.cancellation.test.ts",
   "src/channels/message/ingress-drain.debounce-failure.test.ts",

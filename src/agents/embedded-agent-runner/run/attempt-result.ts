@@ -61,6 +61,7 @@ export function createAttemptCarryover() {
 
 export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
   answerSegments?: EmbeddedAttemptSubscription["answerSegments"];
+  assistantMessageStartIndex?: number;
   successfulNestedToolNames?: string[];
 };
 
@@ -160,6 +161,9 @@ function normalizeEmbeddedAttemptToolMetas(
       if (entry.asyncTaskId) {
         normalized.asyncTaskId = entry.asyncTaskId;
       }
+      if (entry.asyncExec) {
+        normalized.asyncExec = { ...entry.asyncExec };
+      }
       if (entry.codeModeSuspended === true) {
         normalized.codeModeSuspended = true;
       }
@@ -238,6 +242,7 @@ export function completeEmbeddedAttemptResult(
     getHeartbeatToolResponse,
     getItemLifecycle,
     getLastAssistantTextMessageIndex,
+    getAssistantMessageStartIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
     getLatestMcpAppChannelView,
@@ -356,6 +361,7 @@ export function completeEmbeddedAttemptResult(
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
+    assistantMessageStartIndex: getAssistantMessageStartIndex?.(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,
     lastToolError,

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { bindAdmittedRunApprovalOrigin } from "../../agents/admitted-run-approval-origin.js";
 import type {
   AdmittedRunContext,
   PreparedAgentRunAdmission,
@@ -503,6 +504,27 @@ async function executeAgentTurnInternal(
         ? captureCommandOwnerAssertion(params.followupRun.run)
         : undefined,
     onAdmitted: (context) => {
+      const entry =
+        params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry();
+      if (
+        entry?.spawnedBy &&
+        entry.sessionId === params.followupRun.run.sessionId &&
+        entry.inheritedApprovalOrigin
+      ) {
+        bindAdmittedRunApprovalOrigin(
+          context,
+          Object.freeze({ ...entry.inheritedApprovalOrigin }),
+          () => {
+            params.followupRun.operatorAuthority?.assertCurrent();
+            const current =
+              params.activeSessionStore?.[params.sessionKey ?? ""] ??
+              params.getActiveSessionEntry();
+            if (current?.sessionId !== entry.sessionId) {
+              throw new Error("Inherited approval origin session generation changed");
+            }
+          },
+        );
+      }
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;
       params.followupRun.run.skillLibraryAuthoring?.bind(context);

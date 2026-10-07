@@ -162,8 +162,10 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain("ALL_TOOLS");
   });
 
-  it("shares the visible-session delegation policy with a canonical main session", () => {
-    const instructions = buildInstructions();
+  it("honors explicit prefer in a canonical main session", () => {
+    const instructions = buildInstructions({
+      config: { agents: { defaults: { subagents: { delegationMode: "prefer" } } } },
+    });
 
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
@@ -181,11 +183,12 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     );
   });
 
-  it("omits the policy outside the canonical main session", () => {
-    expect(buildInstructions({ sessionKey: "agent:main:slack:channel:C01234567" })).not.toContain(
-      "## Delegation",
-    );
-  });
+  it.each(["agent:main:main", "agent:main:slack:channel:C01234567"])(
+    "omits the policy by default in %s",
+    (sessionKey) => {
+      expect(buildInstructions({ sessionKey })).not.toContain("## Delegation");
+    },
+  );
 
   it("honors an explicit suggest mode in the canonical main session", () => {
     expect(
@@ -203,7 +206,12 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     { name: "minimal subagent prompt mode", overrides: { promptMode: "minimal" } },
     { name: "prompt mode none", overrides: { promptMode: "none" } },
   ] as const)("omits the policy for $name", ({ overrides }) => {
-    expect(buildInstructions(overrides)).not.toContain("## Delegation");
+    expect(
+      buildInstructions({
+        config: { agents: { defaults: { subagents: { delegationMode: "prefer" } } } },
+        ...overrides,
+      }),
+    ).not.toContain("## Delegation");
   });
 });
 

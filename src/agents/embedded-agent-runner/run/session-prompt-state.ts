@@ -51,6 +51,16 @@ export async function createEmbeddedRunSessionPromptState(input: {
         expectedWriterRunId,
       }
     : undefined;
+  const continuation = params.modelContinuation?.checkpoint;
+  if (continuation) {
+    if (
+      params.modelContinuation?.runId !== params.runId ||
+      continuation.sessionId !== activeSessionId ||
+      continuation.sessionFile !== activeSessionFile
+    ) {
+      throw new Error("Model continuation no longer owns the current session transcript");
+    }
+  }
   const initialOwner = await prepareInitialSessionWriter({
     runParams: params,
     target: activeSessionTarget,
@@ -123,6 +133,18 @@ export async function createEmbeddedRunSessionPromptState(input: {
     activateInternalPrompt(basePromptOverride ?? "");
   };
   const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
+  const continueFromCurrentTranscript = (options?: { includeToolFailureInstruction?: boolean }) => {
+    const prompt = options?.includeToolFailureInstruction
+      ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
+      : CONTINUATION_PROMPT;
+    // Model-only tasks cannot recover their original instructions from the transcript.
+    activateInternalPrompt(
+      params.promptIsModelOnly && params.prompt.trim() ? `${params.prompt}\n\n${prompt}` : prompt,
+    );
+  };
+  if (continuation) {
+    continueFromCurrentTranscript(continuation);
+  }
   const onUserMessagePersisted: NonNullable<
     PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
   > = (message) => {
@@ -239,12 +261,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
         await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
-    continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
-      const prompt = options?.includeToolFailureInstruction
-        ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
-        : CONTINUATION_PROMPT;
-      activateInternalPrompt(prompt);
-    },
+    continueFromCurrentTranscript,
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
     prepareCompactedTranscriptRetry: async (assertActive: () => void) => {

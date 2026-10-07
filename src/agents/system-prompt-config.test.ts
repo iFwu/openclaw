@@ -416,10 +416,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
 
   it.each([
     {
-      name: "prefers delegation in the canonical main session",
+      name: "does not prefer delegation by default in the canonical main session",
       config: {} satisfies OpenClawConfig,
       sessionKey: "agent:main:main",
-      expected: true,
+      expected: false,
     },
     {
       name: "suggests delegation outside the canonical main session",
@@ -431,13 +431,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       name: "recognizes a custom canonical main key",
       config: { session: { mainKey: "inbox" } } satisfies OpenClawConfig,
       sessionKey: "agent:main:inbox",
-      expected: true,
+      expected: false,
     },
     {
       name: "recognizes the global-scope canonical main key",
       config: { session: { scope: "global" } } satisfies OpenClawConfig,
       sessionKey: "global",
-      expected: true,
+      expected: false,
     },
     {
       name: "suggests delegation without a render session key",

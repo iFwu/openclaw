@@ -372,6 +372,18 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
+  // Caller cancellation is not an invitation to retry a provider request.
+  // Keep typed provider/local-worker timeouts on their existing paths above.
+  if (
+    !isFailoverError(error) &&
+    ((error instanceof Error && error.name === "AbortError") ||
+      /\boperation was aborted\b/iu.test(normalizedMessage))
+  ) {
+    return {
+      text: "⚠️ Stopped before finishing — the run was cancelled.",
+      isGenericRunnerFailure: false,
+    };
+  }
   const classifiedFailure =
     failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {

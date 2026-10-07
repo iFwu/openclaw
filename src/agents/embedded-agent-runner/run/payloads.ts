@@ -64,6 +64,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   answerSegments?: EmbeddedAgentSubscribeState["answerSegments"];
   assistantMessageIndex?: number;
+  assistantMessageStartIndex?: number;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
   lastAssistant: AssistantMessage | undefined;
@@ -142,9 +143,14 @@ export function buildEmbeddedRunPayloads(params: {
     lastAssistant,
     currentAssistant,
     assistantMessageIndex,
+    assistantMessageStartIndex,
   }: Pick<
     typeof params,
-    "assistantTexts" | "lastAssistant" | "currentAssistant" | "assistantMessageIndex"
+    | "assistantTexts"
+    | "lastAssistant"
+    | "currentAssistant"
+    | "assistantMessageIndex"
+    | "assistantMessageStartIndex"
   >) => {
     // Silence belongs to this input's answer. An earlier steered input must not
     // hide a later input that actually failed without producing an answer.
@@ -306,7 +312,13 @@ export function buildEmbeddedRunPayloads(params: {
           ...delivery,
         };
         if (assistantMessageIndex !== undefined) {
-          setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
+          setReplyPayloadMetadata(replyPayload, {
+            assistantMessageIndex,
+            ...(assistantMessageStartIndex !== undefined &&
+            assistantMessageStartIndex !== assistantMessageIndex
+              ? { assistantMessageStartIndex }
+              : {}),
+          });
         }
         replyItems.push(
           ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
@@ -323,6 +335,7 @@ export function buildEmbeddedRunPayloads(params: {
       lastAssistant: segment.lastAssistant,
       currentAssistant: segment.lastAssistant,
       assistantMessageIndex: segment.messageEnd,
+      assistantMessageStartIndex: segment.finalMessageStart,
     });
     for (const reply of replyItems.slice(replyStart)) {
       setReplyPayloadMetadata(reply, { precedingInputAnswer: true });
@@ -334,6 +347,7 @@ export function buildEmbeddedRunPayloads(params: {
     lastAssistant: params.lastAssistant,
     currentAssistant: params.currentAssistant,
     assistantMessageIndex: params.assistantMessageIndex,
+    assistantMessageStartIndex: params.assistantMessageStartIndex,
   });
   // A conversational NO_REPLY is an authored outcome, not a missing answer.
   // Native shell calls are conservatively classified as mutating even when
@@ -384,11 +398,11 @@ export function buildEmbeddedRunPayloads(params: {
   if (heartbeatTerminalToolFailure && !replyItems.some((item) => item.isReasoning !== true)) {
     replyItems.push({ text: HEARTBEAT_TOKEN });
   }
-  const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
       const assistantMessageIndex =
         getReplyPayloadMetadata(item)?.assistantMessageIndex ?? params.assistantMessageIndex;
+      const ownsTerminalTranscript = getReplyPayloadMetadata(item)?.precedingInputAnswer !== true;
       const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
         text: trimTextPreservingCode(item.text ?? "") || undefined,
       });
@@ -431,8 +445,10 @@ export function buildEmbeddedRunPayloads(params: {
         setReplyPayloadMetadata(payload, {
           ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
           ...(item.media?.length ? { assistantTranscriptMediaUrls: [...item.media] } : {}),
-          ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
-          ...(params.assistantTranscriptIdempotencyKey
+          ...(ownsTerminalTranscript && params.assistantTranscriptOwned === true
+            ? { assistantTranscriptOwned: true }
+            : {}),
+          ...(ownsTerminalTranscript && params.assistantTranscriptIdempotencyKey
             ? {
                 assistantTranscriptIdempotencyKey: params.assistantTranscriptIdempotencyKey,
               }
@@ -448,7 +464,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.replyToCurrent !== undefined) {
         payload.replyToCurrent = item.replyToCurrent;
       }
-      if (item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length)) {
+      if (item.audioAsVoice) {
         payload.audioAsVoice = true;
       }
       if (item.presentation) {

@@ -176,12 +176,12 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           timeoutReleaseTimer.unref?.();
         }
       },
-      onAttemptAbort: () => {
+      onAttemptAbort: (reason?: unknown) => {
         if (!isCurrent()) {
           return;
         }
         state = "aborted";
-        laneTaskAbortController.abort(createAgentRunDirectAbortError());
+        laneTaskAbortController.abort(reason ?? createAgentRunDirectAbortError());
         input.onAbort?.();
       },
       close: () => {

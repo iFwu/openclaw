@@ -7,6 +7,10 @@ import { drainAgentRunTerminalWrites } from "../infra/agent-run-terminal-writes.
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  bindAdmittedRunApprovalOrigin,
+  readAdmittedRunApprovalOrigin,
+} from "./admitted-run-approval-origin.js";
+import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
@@ -171,6 +175,20 @@ export function prepareAgentCommandExecutionIdentity(params: {
     operatorAuthority: opts.operatorAuthority,
     onAdmitted: async (admittedRunContext) => {
       await opts.onAdmittedRunContext?.(admittedRunContext);
+      const inheritedOrigin =
+        prepared.sessionEntry?.spawnedBy && prepared.sessionEntry.sessionId === prepared.sessionId
+          ? prepared.sessionEntry.inheritedApprovalOrigin
+          : undefined;
+      if (inheritedOrigin && !readAdmittedRunApprovalOrigin(admittedRunContext)) {
+        bindAdmittedRunApprovalOrigin(
+          admittedRunContext,
+          Object.freeze({ ...inheritedOrigin }),
+          () => {
+            opts.abortSignal?.throwIfAborted();
+            opts.assertSourceCurrent?.();
+          },
+        );
+      }
       admittedContext = admittedRunContext;
       if (!recovery || !admittedRunContext.executionIdentityToken) {
         return;

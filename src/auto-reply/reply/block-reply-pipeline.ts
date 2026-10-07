@@ -12,6 +12,7 @@ import {
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   readReplyPayloadSourceOccurrence,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -34,8 +35,9 @@ export type BlockReplyPipeline = {
   getSourceRecovery?: (payload: ReplyPayload) => readonly BlockReplySource[] | undefined;
   hasSentExactPayload?: (payload: ReplyPayload) => boolean;
   isFinalPayloadRetryBlocked?: (payload: ReplyPayload) => boolean;
-  getSentMediaUrls: () => readonly string[];
-  getRetryBlockedMediaUrls?: () => readonly string[];
+  getSentMediaUrls: (payload?: ReplyPayload) => readonly string[];
+  getRetryBlockedMediaUrls?: (payload?: ReplyPayload) => readonly string[];
+  getResponseRecoveryPayloads?: (payload: ReplyPayload) => ReplyPayload[] | undefined;
   hasRetryBlockedTerminalDelivery?: (minimumAssistantMessageIndex?: number) => boolean;
   hasRetryBlockedDelivery: () => boolean;
 };
@@ -126,7 +128,6 @@ export function createBlockReplyPipeline(params: {
   const timeoutMs = resolveBlockReplyTimeoutMs(params.timeoutMs);
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
-  const sentMediaUrls = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
@@ -243,9 +244,6 @@ export function createBlockReplyPipeline(params: {
           }
           sentContentKeys.add(contentKey);
           sentContentKeys.add(createIndexedBlockReplyContentKey(payload));
-        }
-        for (const mediaUrl of reply.mediaUrls) {
-          sentMediaUrls.add(mediaUrl);
         }
         if (!isStatusNotice) {
           didStream = true;
@@ -384,11 +382,19 @@ export function createBlockReplyPipeline(params: {
     coalescer?.stop();
   };
 
-  const matchingAttempts = (payload: ReplyPayload) => {
-    const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    return index === undefined
+  const matchingAttempts = (payload?: ReplyPayload) => {
+    const { assistantMessageIndex: end, assistantMessageStartIndex: start } =
+      (payload && getReplyPayloadMetadata(payload)) ?? {};
+    if (start !== undefined && end !== undefined) {
+      return [
+        [...blockAttemptsByMessage]
+          .filter(([index]) => index !== undefined && index >= start && index <= end)
+          .flatMap(([, attempts]) => attempts),
+      ];
+    }
+    return end === undefined
       ? blockAttemptsByMessage.values()
-      : [blockAttemptsByMessage.get(index) ?? []];
+      : [blockAttemptsByMessage.get(end) ?? []];
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
   const matchesSource = (payload: ReplyPayload, attempts: BlockAttempt[]) => {
@@ -485,7 +491,59 @@ export function createBlockReplyPipeline(params: {
       }
       return false;
     },
-    getSentMediaUrls: () => Array.from(sentMediaUrls),
+    getResponseRecoveryPayloads: (payload) => {
+      const { assistantMessageIndex: end, assistantMessageStartIndex: start } =
+        getReplyPayloadMetadata(payload) ?? {};
+      if (
+        start === undefined ||
+        end === undefined ||
+        start >= end ||
+        hasOutboundReplyContent({ ...payload, text: undefined })
+      ) {
+        return undefined;
+      }
+      const groups = [...blockAttemptsByMessage]
+        .filter(([index]) => index !== undefined && index >= start && index <= end)
+        .toSorted(([a], [b]) => (a ?? 0) - (b ?? 0))
+        .map(([index, attempts]) => ({
+          index,
+          attempts: attempts.filter((attempt) => attempt.terminal),
+        }));
+      if (
+        !groups.some(({ attempts }) =>
+          attempts.some((attempt) => hasBlockReplyDeliveryCustody(attempt)),
+        ) ||
+        normalizeSource(
+          groups
+            .map(({ attempts }) => attempts.map((attempt) => attempt.sourceText).join(""))
+            .join("\n"),
+        ) !== normalizeSource(payload.text ?? "")
+      ) {
+        return undefined;
+      }
+      // Keep each message's native recovery handles and custody independent.
+      return groups.map(({ index, attempts }) => {
+        const recovered = copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text: attempts.map((attempt) => attempt.sourceText).join(""),
+        });
+        const sources = [...new Set(attempts.flatMap((attempt) => attempt.source ?? []))];
+        return setReplyPayloadMetadata(recovered, {
+          assistantMessageIndex: index,
+          assistantMessageStartIndex: index,
+          blockReplySources: sources.length ? sources : undefined,
+        });
+      });
+    },
+    getSentMediaUrls: (payload) => [
+      ...new Set(
+        Array.from(matchingAttempts(payload)).flatMap((attempts) =>
+          attempts
+            .filter((attempt) => attempt.outcome === "delivered" && !attempt.pending)
+            .flatMap((attempt) => attempt.mediaUrls),
+        ),
+      ),
+    ],
     hasRetryBlockedDelivery: () =>
       Array.from(blockAttemptsByMessage.values()).some((attempts) =>
         attempts.some(hasBlockReplyDeliveryCustody),
@@ -501,10 +559,10 @@ export function createBlockReplyPipeline(params: {
       }
       return false;
     },
-    getRetryBlockedMediaUrls: () =>
+    getRetryBlockedMediaUrls: (payload) =>
       Array.from(
         new Set(
-          Array.from(blockAttemptsByMessage.values()).flatMap((attempts) =>
+          Array.from(matchingAttempts(payload)).flatMap((attempts) =>
             attempts.filter(hasBlockReplyDeliveryCustody).flatMap((attempt) => attempt.mediaUrls),
           ),
         ),

@@ -140,7 +140,11 @@ export function buildExecEventPrompt(
     eventText +
     "\n\n" +
     "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
+    "If it failed, explain what went wrong. " +
+    "If the output no longer matters to the conversation or was already handled, " +
+    (useHeartbeatResponseTool
+      ? "report it with heartbeat_respond and notify=false."
+      : `reply ${SILENT_REPLY_TOKEN} only.`)
   );
 }
 

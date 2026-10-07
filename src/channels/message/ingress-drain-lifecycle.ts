@@ -1,7 +1,11 @@
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+
 /** Full pre-adoption -> adoption ownership lifecycle for one claimed event. */
 export type ChannelIngressDispatchLifecycle = {
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
   abortSignal: AbortSignal;
+  /** Await source admission before any pre-adoption supersede terminal write. */
+  registerPendingInputSource?: (source: Promise<UserTurnTranscriptRecorder | undefined>) => void;
   /**
    * Fires when recovery-relevant session/run state is durable.
    * Drain completes (tombstones) the claim here -- never at settle.

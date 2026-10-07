@@ -125,6 +125,17 @@ function buildAbortTargetApplyParams(
   };
 }
 
+async function adoptAbortCommand(params: Parameters<CommandHandler>[0]): Promise<void> {
+  const isCurrent = params.opts?.isCommandTargetCurrent;
+  if (isCurrent?.() === false) {
+    throw new Error("The selected session changed before it could be stopped.");
+  }
+  await params.opts?.turnAdoptionLifecycle?.onAdopted();
+  if (isCurrent?.() === false) {
+    throw new Error("The selected session changed before it could be stopped.");
+  }
+}
+
 export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
   async (params) => {
@@ -137,6 +148,7 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
       requesterSessionKey: abortTarget.key ?? params.sessionKey,
       requesterAgentId: params.agentId,
       beforeKill: async () => {
+        await adoptAbortCommand(params);
         abortOutcome = await applyAbortTarget({
           ...buildAbortTargetApplyParams(params, abortTarget),
           clearQueues: true,
@@ -172,6 +184,7 @@ export const handleAbortTrigger: CommandHandler = defineAuthorizedTextCommand(
   },
   async (params) => {
     const abortTarget = resolveAbortTarget(params);
+    await adoptAbortCommand(params);
     const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;

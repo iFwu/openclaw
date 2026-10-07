@@ -4,6 +4,7 @@ import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runne
 import { clearCommandLane } from "../../../process/command-queue.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { retainCancelledUserTurnInput } from "../../../sessions/user-turn-transcript-admission.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
@@ -110,8 +111,14 @@ export function prepareSessionFollowupCleanup(params: {
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
       for (const source of detached) {
+        let retained = false;
         try {
-          completeFollowupRunLifecycle(source);
+          retained = retainCancelledUserTurnInput(source.userTurnTranscriptRecorder);
+        } catch (error) {
+          defaultRuntime.error?.(`followup input retention failed: ${String(error)}`);
+        }
+        try {
+          completeFollowupRunLifecycle(source, retained ? "retained" : undefined);
         } catch (error) {
           defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
         }

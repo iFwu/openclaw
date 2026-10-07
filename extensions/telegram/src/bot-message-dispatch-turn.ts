@@ -26,6 +26,7 @@ import {
 import { formatTelegramGroupThreadReply } from "./bot-message-dispatch-payload.js";
 import {
   canPushToolProgress,
+  ensureProgressStarted,
   handleApprovalEvent,
   handleCompactionEnd,
   handleCompactionStart,
@@ -178,6 +179,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             disableBlockStreaming: turn.disableBlockStreaming,
             preserveProgressCallbackStartOrder: true,
             abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
+            pendingInputSources: turn.pendingInputSources,
             turnAdoptionLifecycle: turn.turnAdoptionLifecycle
               ? {
                   ...turn.turnAdoptionLifecycle,
@@ -192,6 +194,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onObservedReplyDelivery: async () => {
               turn.previewLifecycle.beginFinalDelivery();
               await turn.draftEventQueue;
+              await turn.materializeAnswerLaneBeforeRotation();
               turn.deliveryState.markDelivered();
               await turn.previewLifecycle.observeDelivery({ visibleReplySent: true });
             },
@@ -199,6 +202,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               turn.answerLane.stream || turn.reasoningLane.stream
                 ? (payload) => {
                     const queued = enqueueDraftEvent(turn, async () => {
+                      await ensureProgressStarted(turn);
                       await ingestDraftLaneSegments(turn, payload);
                     });
                     // Queue settlement records draft intent; a numeric provider message ID
@@ -240,12 +244,13 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                     return queued.then(() => false);
                   }
                 : undefined,
-            onReasoningProgress: turn.answerLane.stream
-              ? (payload) =>
-                  enqueueDraftEvent(turn, async () => {
-                    await pushThinkingTokenProgress(turn, payload.progressTokens);
-                  })
-              : undefined,
+            onReasoningProgress:
+              turn.progressLane.stream || turn.answerLane.stream
+                ? (payload) =>
+                    enqueueDraftEvent(turn, async () => {
+                      await pushThinkingTokenProgress(turn, payload.progressTokens);
+                    })
+                : undefined,
             onAssistantMessageStart: turn.answerLane.stream
               ? () => {
                   const queued = enqueueDraftEvent(turn, async () => {
@@ -284,7 +289,9 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   return queued.then(() => false);
                 }
               : () => false,
-            onQueuedFollowupAdmitted: () => {
+            onQueuedFollowupAdmitted: async () => {
+              await turn.draftEventQueue;
+              await turn.materializeAnswerLaneBeforeRotation();
               beginDraftQueuedFollowup(turn);
               turn.previewLifecycle.reset();
               turn.finalDispatchClaimed = false;
@@ -307,11 +314,10 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
             progressPreambleEnabled: turn.progressPreambleEnabled,
             commentaryPayloadsEnabled: turn.progressPreambleEnabled,
-            // The progress draft is the only commentary owner and retires before
-            // the clean final. A durable copy would restore the queue burst this
-            // owner boundary prevents; verbose still controls durable tool output.
+            // Core freezes this choice before publication. Let Telegram decide only
+            // after the card has an actual provider receipt, retaining failed handoffs.
             shouldDeliverCommentaryPayloads:
-              turn.progressPreambleEnabled === true ? () => false : undefined,
+              turn.progressPreambleEnabled === true ? () => true : undefined,
             reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
             onToolStart: (payload) => handleToolStart(turn, payload),
             onItemEvent: (payload) => handleItemEvent(turn, payload),

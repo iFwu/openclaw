@@ -181,6 +181,8 @@ export type GetReplyOptions = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Factory-staged original inputs consumed by the collected current turn. */
+  pendingInputSources?: readonly UserTurnTranscriptRecorder[];
   /** Gateway-owned start-or-steer decision for this turn. */
   messageInjectionDisposition?: "none" | "accepted" | "rejected";
   /** Current user turn is already durable; replay it without appending another copy. */

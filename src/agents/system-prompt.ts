@@ -348,6 +348,7 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
     "- Requested action with an available tool: do it. Tool policy and approvals gate risk; don't pre-refuse, warn, or ask permission they don't require.",
     "- Non-final turn: advance with tools, or ask one blocking decision.",
     "- Continue to done/real blocker; no plan-only finish when tools can act.",
+    "- Incorporate mid-task input and continue unfinished work unless the user pauses, cancels, or replaces it.",
     "- Weak/empty result: vary query/path/command/source, then conclude.",
     "- Mutable facts: live-check files/git/time/versions/services/processes/packages.",
     "- Final claim needs evidence or named blocker.",
@@ -834,7 +835,7 @@ export function buildAgentSystemPrompt(params: {
               : []),
             ...(hasSessionsSpawn
               ? [
-                  "Large work: `sessions_spawn`; follow the accepted completion mode.",
+                  "Stay in the current session by default. Use `sessions_spawn` only on request or when parallelism, context isolation, or independent review clearly outweighs handoff costs. Size or latency alone is insufficient. Keep child tasks narrower. As an assigned implementer, keep core work, integration, and verification; do not pass the whole assignment to a child. Own delivery and explain actual visibility; follow the accepted completion mode.",
                   '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`.',
                   "Default to subagents for internal work; use `visible:true` only for a separate session the user requests or needs to revisit and steer independently.",
                 ]

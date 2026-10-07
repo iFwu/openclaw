@@ -857,6 +857,12 @@ describe("exec notifyOnExit suppression", () => {
 
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
+    const notifiedId = expectDefined(
+      /^Exec failed \(([^,]+), /u.exec(message)?.[1],
+      "Expected the full notified exec session id",
+    );
+    expect(notifiedId.length).toBeGreaterThan(8);
+    expect(getFinishedSession(notifiedId)?.id).toBe(notifiedId);
     expect(message).toContain("external side effects may already have completed");
     expect(message).toContain("Verify the resulting state before retrying");
     expect(message).toContain("Do not automatically rerun non-idempotent commands");

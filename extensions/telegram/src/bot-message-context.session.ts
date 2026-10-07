@@ -789,6 +789,12 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     contextVisibility: contextVisibilityMode,
     extra: {
+      AutoNewSession:
+        commandSource === undefined &&
+        !/^\s*[!/]/u.test(commandBody) &&
+        (topicConfig?.autoNewSession ?? groupConfig?.autoNewSession) === true
+          ? "jev"
+          : undefined,
       GroupThread: params.groupThread,
       BotUsername: primaryCtx.me?.username ?? undefined,
       AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,

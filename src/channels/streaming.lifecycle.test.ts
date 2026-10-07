@@ -188,6 +188,21 @@ describe("channel-streaming", () => {
     ).toBe("Pearling");
   });
 
+  it("keeps complete progress lines when the configured limit is false", () => {
+    const entry = {
+      streaming: { progress: { maxLineChars: false as const, label: false as const } },
+    };
+    const text = "Authored progress ".repeat(100) + "COMPLETE_PROGRESS_TAIL";
+    expect(resolveChannelProgressDraftMaxLineChars(entry)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(formatChannelProgressDraftText({ entry, lines: [text] })).toContain(text);
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { maxLineChars: 80, label: false } } },
+        lines: [text],
+      }).length,
+    ).toBeLessThan(100);
+  });
+
   it("formats bounded progress draft text", () => {
     const entry = {
       streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80 } },

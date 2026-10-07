@@ -254,6 +254,41 @@ describe("cloud worker run ownership", () => {
     },
   );
 
+  it.each(["approval-denied", "user_abort"] as const)(
+    "preserves the exact %s reason on the live worker owner",
+    async (reason) => {
+      const { createWorkerTurnRunOwner } = await import("./worker-turn-run-owner.js");
+      const { isApprovalDeniedAbort } = await import("../../agents/approval-denied-abort.js");
+      await seedActivePlacement();
+      const runId = "worker-cancel-reason";
+      const claim = await placements.claimTurn({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId,
+        claimId: "reason-claim",
+        owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      });
+      const owner = createWorkerTurnRunOwner({
+        placements,
+        claim,
+        turn: turn(runId),
+        sessionKey: SESSION_KEY,
+      });
+      try {
+        expect(
+          resolveActiveEmbeddedRunOwner(SESSION_ID)?.abort(
+            reason === "approval-denied" ? reason : undefined,
+          ),
+        ).toBe(true);
+        expect(owner.signal.aborted).toBe(true);
+        expect(isApprovalDeniedAbort(owner.signal.reason)).toBe(reason === "approval-denied");
+      } finally {
+        owner.dispose();
+      }
+    },
+  );
+
   it.each(["replacement", "claim-loss", "shutdown"] as const)(
     "fences retained event recorders after %s, including a reused run ID",
     async (closure) => {

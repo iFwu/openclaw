@@ -18,6 +18,7 @@ import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-de
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
+import { readTelegramInputSource } from "./bot-handlers.input-source.js";
 import {
   hasInboundMedia,
   isDurablyRetryableInboundMediaError,
@@ -77,6 +78,14 @@ type TelegramMediaGroupInput = MediaAuthorization & {
 type BufferedMediaGroupEntry = MediaGroupEntry &
   Omit<TelegramMediaGroupInput, "ctx" | "msg"> & {
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
+    sourceParts: Map<
+      Message,
+      {
+        claims: ChannelReplayClaimHandle[];
+        participants: TelegramSpooledReplayDeferredParticipant[];
+        resolvers: readonly TelegramChannelIngressResolver[];
+      }
+    >;
   };
 
 type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
@@ -302,60 +311,92 @@ export function createTelegramInboundMedia({
     return "process";
   };
 
+  const assembleMediaGroupPrimary = (entry: BufferedMediaGroupEntry) => {
+    let primary =
+      entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
+    if (!primary) {
+      return undefined;
+    }
+    const captionParts = entry.messages
+      .map(({ msg }) => getTelegramTextParts(msg))
+      .filter(({ text }) => text.trim());
+    if (captionParts.length > 1) {
+      const botUsername = primary.ctx.me?.username;
+      const commandCaptionIndex = captionParts.findIndex(({ text }) =>
+        hasControlCommand(text, entry.authorizationCfg, {
+          botUsername,
+        }),
+      );
+      if (commandCaptionIndex > 0) {
+        // Command detection is prefix-based in both ingress and canonical message processing.
+        const [commandCaption] = captionParts.splice(commandCaptionIndex, 1);
+        if (commandCaption) {
+          captionParts.unshift(commandCaption);
+        }
+      }
+      let caption = "";
+      const captionEntities: NonNullable<Message["caption_entities"]> = [];
+      for (const { text, entities } of captionParts) {
+        if (caption) {
+          caption += "\n";
+        }
+        const offset = caption.length;
+        caption += text;
+        for (const entity of entities) {
+          captionEntities.push({ ...entity, offset: entity.offset + offset });
+        }
+      }
+      const combinedMessage = {
+        ...primary.msg,
+        text: undefined,
+        entities: undefined,
+        caption,
+        caption_entities: captionEntities.length ? captionEntities : undefined,
+      } as Message;
+      // Keep grammY context methods/getters while exposing the complete album to every owner.
+      const combinedContext = Object.create(primary.ctx) as TelegramContext;
+      Object.defineProperty(combinedContext, "message", {
+        value: combinedMessage,
+        enumerable: true,
+      });
+      primary = { ctx: combinedContext, msg: combinedMessage };
+    }
+    return primary;
+  };
+  const partitionMediaSources = async (entry: BufferedMediaGroupEntry) => {
+    const messages: typeof entry.messages = [];
+    for (const item of entry.messages) {
+      const source = readTelegramInputSource(item.msg);
+      const part = entry.sourceParts.get(item.msg);
+      try {
+        if ((await source?.resolveDisposition()) === "retained") {
+          settleSpooledReplayParticipants(part?.participants ?? [], { kind: "completed" });
+        } else {
+          messages.push(item);
+        }
+      } catch (error) {
+        releaseDispatchDedupeClaims(part?.claims ?? [], error);
+        settleSpooledReplayParticipants(
+          part?.participants ?? [],
+          buildFailedProcessingResult(error),
+        );
+      }
+    }
+    entry.messages = messages;
+    const parts = messages.flatMap(({ msg }) => entry.sourceParts.get(msg) ?? []);
+    entry.dispatchDedupeClaims = mergeDispatchDedupeClaims(...parts.map((part) => part.claims));
+    entry.spooledReplayParticipants = parts.flatMap((part) => part.participants);
+    entry.channelIngressResolvers = parts.flatMap((part) => part.resolvers);
+  };
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
-      const finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
+      const originalIds = entry.messages.map(({ msg }) => String(msg.message_id));
+      await partitionMediaSources(entry);
+      let finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
-      let primary =
-        entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
+      let primary = assembleMediaGroupPrimary(entry);
       if (!primary) {
-        releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
-        settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
-      }
-      const captionParts = entry.messages
-        .map(({ msg }) => getTelegramTextParts(msg))
-        .filter(({ text }) => text.trim());
-      if (captionParts.length > 1) {
-        const botUsername = primary.ctx.me?.username;
-        const commandCaptionIndex = captionParts.findIndex(({ text }) =>
-          hasControlCommand(text, entry.authorizationCfg, {
-            botUsername,
-          }),
-        );
-        if (commandCaptionIndex > 0) {
-          // Command detection is prefix-based in both ingress and canonical message processing.
-          const [commandCaption] = captionParts.splice(commandCaptionIndex, 1);
-          if (commandCaption) {
-            captionParts.unshift(commandCaption);
-          }
-        }
-        let caption = "";
-        const captionEntities: NonNullable<Message["caption_entities"]> = [];
-        for (const { text, entities } of captionParts) {
-          if (caption) {
-            caption += "\n";
-          }
-          const offset = caption.length;
-          caption += text;
-          for (const entity of entities) {
-            captionEntities.push({ ...entity, offset: entity.offset + offset });
-          }
-        }
-        const combinedMessage = {
-          ...primary.msg,
-          text: undefined,
-          entities: undefined,
-          caption,
-          caption_entities: captionEntities.length ? captionEntities : undefined,
-        } as Message;
-        // Keep grammY context methods/getters while exposing the complete album to every owner.
-        const combinedContext = Object.create(primary.ctx) as TelegramContext;
-        Object.defineProperty(combinedContext, "message", {
-          value: combinedMessage,
-          enumerable: true,
-        });
-        primary = { ctx: combinedContext, msg: combinedMessage };
       }
       const mediaDisposition = await resolveUnaddressedGroupMediaDisposition({
         ...entry,
@@ -367,7 +408,9 @@ export function createTelegramInboundMedia({
         return;
       }
       const allMedia: TelegramMediaRef[] = [];
-      const selection = new Map<string, "include" | "exclude">();
+      const selection = new Map<string, "include" | "exclude">(
+        originalIds.map((id) => [id, "exclude"]),
+      );
       const mediaRuntime = resolveMediaRuntime(
         ...entry.spooledReplayParticipants.map((participant) => participant.abortSignal),
       );
@@ -411,6 +454,25 @@ export function createTelegramInboundMedia({
           skippedCount++;
         }
       }
+      await partitionMediaSources(entry);
+      primary = assembleMediaGroupPrimary(entry);
+      if (!primary) {
+        return;
+      }
+      finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
+      const executingIds = new Set(entry.messages.map(({ msg }) => String(msg.message_id)));
+      for (let index = allMedia.length - 1; index >= 0; index--) {
+        if (!executingIds.has(allMedia[index]?.sourceMessageId ?? "")) {
+          allMedia.splice(index, 1);
+        }
+      }
+      for (const id of selection.keys()) {
+        if (!executingIds.has(id)) {
+          selection.set(id, "exclude");
+        }
+      }
+      materializedCount = allMedia.filter((media) => media.path).length;
+      skippedCount = allMedia.length - materializedCount;
       if (skippedCount > 0 && mediaDisposition !== "silent-ingest") {
         const verb = skippedCount === 1 ? "was" : "were";
         await withTelegramApiErrorLogging({
@@ -438,6 +500,7 @@ export function createTelegramInboundMedia({
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           threadSpec: entry.threadSpec,
+          bufferedMessages: entry.messages.map(({ msg }) => msg),
           ...(finalIngressMessageId != null
             ? { messageIdOverride: String(finalIngressMessageId) }
             : {}),
@@ -482,6 +545,11 @@ export function createTelegramInboundMedia({
       }
       clearTimeout(existing.timer);
       existing.messages.push({ msg: input.msg, ctx: input.ctx });
+      existing.sourceParts.set(input.msg, {
+        claims: input.dispatchDedupeClaims,
+        participants: participant ? [participant] : [],
+        resolvers: input.channelIngressResolvers,
+      });
       existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
         existing.promptContextMinTimestampMs,
         input.promptContextMinTimestampMs,
@@ -508,6 +576,16 @@ export function createTelegramInboundMedia({
     const entry: BufferedMediaGroupEntry = {
       ...input,
       messages: [{ msg: input.msg, ctx: input.ctx }],
+      sourceParts: new Map([
+        [
+          input.msg,
+          {
+            claims: input.dispatchDedupeClaims,
+            participants: participant ? [participant] : [],
+            resolvers: input.channelIngressResolvers,
+          },
+        ],
+      ]),
       spooledReplayParticipants: participant ? [participant] : [],
       ...promptContextBoundaryOptions(
         input.promptContextMinTimestampMs,

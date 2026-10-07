@@ -32,6 +32,8 @@ export type ChannelProgressDraftCompositorParams = {
   entry: StreamingCompatEntry | null | undefined;
   /** Prepared items own display; raw callbacks retain diagnostic bookkeeping only. */
   preparedItems?: boolean;
+  /** Channel opt-in: retain authored commentary before routine rows, after attention. */
+  preserveCommentaryOnOverflow?: boolean;
   mode: StreamingMode;
   active: boolean;
   seed: string;

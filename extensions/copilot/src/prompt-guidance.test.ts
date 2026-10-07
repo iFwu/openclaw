@@ -47,13 +47,15 @@ describe("buildCopilotPromptGuidance", () => {
   );
 
   it("composes ordered OpenClaw policy from the final callable capabilities", () => {
-    const guidance = buildGuidance();
+    const guidance = buildGuidance({
+      config: { agents: { defaults: { subagents: { delegationMode: "prefer" } } } },
+    });
 
     expect(guidance).toContain("policy-filtered for this turn");
     expect(guidance).toContain("## Skill Workshop");
     expect(guidance).toContain("## Delegation");
     expect(guidance).toContain("delegate via `sessions_spawn`");
-    expect(guidance).toContain("spawn `sessions_spawn` with `visible=true`");
+    expect(guidance).toContain("`sessions_spawn` with `visible=true`");
     expect(guidance).toContain("Need announced results before reply: `sessions_yield`");
     expect(guidance).toContain("Collectors require explicit result collection instead.");
     expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
@@ -67,6 +69,7 @@ describe("buildCopilotPromptGuidance", () => {
   });
 
   it.each([
+    { name: "unconfigured main session", attempt: {} },
     {
       name: "explicit suggest mode",
       attempt: {
@@ -77,8 +80,20 @@ describe("buildCopilotPromptGuidance", () => {
       name: "non-main session",
       attempt: { sessionKey: "agent:main:slack:channel:C01234567" },
     },
-    { name: "minimal prompt", attempt: { promptMode: "minimal" as const } },
-    { name: "report-only delegation", attempt: { delegationCapability: "report_only" as const } },
+    {
+      name: "minimal prompt",
+      attempt: {
+        promptMode: "minimal" as const,
+        config: { agents: { defaults: { subagents: { delegationMode: "prefer" as const } } } },
+      },
+    },
+    {
+      name: "report-only delegation",
+      attempt: {
+        delegationCapability: "report_only" as const,
+        config: { agents: { defaults: { subagents: { delegationMode: "prefer" as const } } } },
+      },
+    },
   ])("suppresses delegation for $name but keeps visible-reply guidance", ({ attempt }) => {
     const guidance = buildGuidance(attempt);
 
@@ -136,7 +151,10 @@ describe("buildCopilotPromptGuidance", () => {
   );
 
   it("renders only the delegation operations present in the callable inventory", () => {
-    const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);
+    const prefer = {
+      config: { agents: { defaults: { subagents: { delegationMode: "prefer" as const } } } },
+    };
+    const guidance = buildGuidance(prefer, [" sessions_spawn ", "sessions_spawn"]);
 
     expect(guidance).toContain("## Delegation");
     expect(guidance).toContain(
@@ -144,7 +162,7 @@ describe("buildCopilotPromptGuidance", () => {
     );
     expect(guidance).not.toContain("sessions_yield");
     expect(guidance).not.toContain("subagents(action=list)");
-    expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");
+    expect(buildGuidance(prefer, ["sessions_yield", "subagents"])).not.toContain("## Delegation");
   });
 
   it("wraps conversation and subagent context without adding workspace prompt sections", () => {

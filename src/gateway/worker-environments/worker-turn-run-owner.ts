@@ -1,4 +1,5 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createApprovalDeniedAbortError } from "../../agents/approval-denied-abort.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -64,13 +65,15 @@ export function createWorkerTurnRunOwner(params: {
     sessionKey,
     runId: claim.runId,
   });
-  const cancel = (reason?: "user_abort" | "restart" | "superseded") => {
+  const cancel: NonNullable<EmbeddedAgentQueueHandle["cancel"]> = (reason) => {
     controller.abort(
-      reason === "restart"
-        ? createAgentRunRestartAbortError()
-        : reason === "superseded"
-          ? createAgentRunSupersededAbortError()
-          : undefined,
+      reason === "approval-denied"
+        ? createApprovalDeniedAbortError()
+        : reason === "restart"
+          ? createAgentRunRestartAbortError()
+          : reason === "superseded"
+            ? createAgentRunSupersededAbortError()
+            : undefined,
     );
   };
   const restartSignal = getGatewayRestartDrainSignal();

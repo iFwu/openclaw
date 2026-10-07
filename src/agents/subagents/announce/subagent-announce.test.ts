@@ -431,6 +431,25 @@ describe("subagent announce seam flow", () => {
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "classifies a thrown delivery by current source authority: revoked=%s",
+    async (revoked) => {
+      let allowed = true;
+      agentSpy.mockImplementationOnce(async () => {
+        allowed = !revoked;
+        throw new Error("completion delivery failed after await");
+      });
+      const outcome = await runAnnounceFlow({
+        childRunId: `run-delivery-error-${revoked}`,
+        roundOneReply: "frozen terminal result",
+        cleanup: "delete",
+        isCompletionDeliveryAllowed: () => allowed,
+      });
+      expect(outcome).toBe(revoked ? "intentional_non_delivery" : "retryable");
+      expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("drops requester delivery after the cleanup owner changes", async () => {
     const didAnnounce = await runAnnounceFlow({
       childSessionKey: "agent:main:subagent:retired",

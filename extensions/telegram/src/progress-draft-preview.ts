@@ -106,7 +106,26 @@ export function renderTelegramProgressDraftPreview(
   const checklistLines = checklist.steps.length + (checklist.summary ? 1 : 0);
   const lineBudget = Math.max(0, maxLines - checklistLines);
   const lines = [...activity.filter((line) => !isPriorityLine(line)), ...attention];
-  const visibleLines = lineBudget ? lines.slice(-lineBudget) : [];
+  const isCommentary = (line: ChannelProgressDraftCompositorLine) =>
+    typeof line === "object" && line.id?.startsWith("commentary:") === true;
+  const commentaryCount = activity.filter(
+    (line) => !isPriorityLine(line) && isCommentary(line),
+  ).length;
+  let attentionSlots = lineBudget;
+  let commentarySlots = Math.max(0, lineBudget - attention.length);
+  let ordinarySlots = Math.max(0, lineBudget - attention.length - commentaryCount);
+  const visibleLines = lines
+    .toReversed()
+    .filter((line) => {
+      if (isPriorityLine(line)) {
+        return attentionSlots-- > 0;
+      }
+      if (isCommentary(line)) {
+        return commentarySlots-- > 0;
+      }
+      return ordinarySlots-- > 0;
+    })
+    .toReversed();
   const diffStat =
     visibleLines.length + checklistLines < maxLines
       ? formatChannelProgressDraftDiffStat(snapshot.diffStat)

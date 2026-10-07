@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createApprovalDeniedAbortError } from "../../agents/approval-denied-abort.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
@@ -41,6 +42,16 @@ import { createReplyOperation } from "./reply-run-registry.js";
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
+  it("classifies explicit denial as native aborted without a failure payload", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(createApprovalDeniedAbortError());
+    // The shared legacy shim deliberately projects native aborts to NO_REPLY.
+    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+    expect(result.outcome).not.toHaveProperty("payload");
+  });
+
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       createTestFallbackSummaryError({

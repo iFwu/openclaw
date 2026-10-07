@@ -10,7 +10,7 @@ import { Agent } from "../../../agent-core/src/agent.js";
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const sseState = vi.hoisted(() => ({
-  clientHeaders: [] as Array<Record<string, string>>,
+  clientHeaders: [] as Array<Record<string, string | null>>,
   websocketHeaders: [] as Array<Record<string, string>>,
   outcomes: [] as Array<Error | SdkResponse>,
   requests: [] as Array<Record<string, unknown>>,
@@ -20,6 +20,7 @@ vi.mock("openai", () => {
   class MockOpenAI {
     apiKey: string;
     baseURL: string;
+    defaultHeaders: Record<string, string | null>;
     responses = {
       create: (request: Record<string, unknown>) => {
         sseState.requests.push(request);
@@ -35,18 +36,31 @@ vi.mock("openai", () => {
       },
     };
 
-    constructor(options: {
-      apiKey?: string;
-      baseURL?: string;
-      defaultHeaders?: Record<string, string>;
-    }) {
+    constructor(options: Partial<Pick<MockOpenAI, "apiKey" | "baseURL" | "defaultHeaders">>) {
       this.apiKey = options.apiKey ?? "";
       this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
-      sseState.clientHeaders.push(options.defaultHeaders ?? {});
+      this.defaultHeaders = options.defaultHeaders ?? {};
+      sseState.clientHeaders.push(this.defaultHeaders);
     }
 
-    withOptions(options: { apiKey?: string }) {
-      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
+    withOptions(options: { apiKey?: string; defaultHeaders?: Record<string, string | null> }) {
+      return new MockOpenAI({
+        apiKey: options.apiKey ?? this.apiKey,
+        baseURL: this.baseURL,
+        defaultHeaders: options.defaultHeaders ?? this.defaultHeaders,
+      });
+    }
+
+    _buildWebSocketHeaders(authHeaders: Record<string, string>) {
+      const headers = new Headers(authHeaders);
+      for (const [name, value] of Object.entries(this.defaultHeaders)) {
+        if (value === null) {
+          headers.delete(name);
+        } else {
+          headers.set(name, value);
+        }
+      }
+      return Object.fromEntries(headers);
     }
   }
 

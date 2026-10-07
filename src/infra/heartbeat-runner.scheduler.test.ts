@@ -499,3 +499,33 @@ describe("targeted unscheduled wake dispatch", () => {
     expect(calls).toHaveLength(3);
   });
 });
+
+describe("bounded wake diagnostics", () => {
+  it("keeps execution unchanged when the diagnostic sink throws", async () => {
+    start();
+    vi.spyOn(heartbeatLog, "debug").mockImplementation(() => {
+      throw new Error("sink unavailable");
+    });
+    await interval();
+    expect(runSpy).toHaveBeenCalledOnce();
+  });
+  it("redacts identities and projects unknown skip reasons without exposing free-form reason", async () => {
+    const debug = vi.spyOn(heartbeatLog, "debug").mockImplementation(() => undefined);
+    start(config("30m", [{ id: "main" }]));
+    runSpy.mockResolvedValueOnce({ status: "skipped", reason: "private-result-canary" });
+    await wake({
+      source: "manual",
+      intent: "manual",
+      reason: "private-wake-canary",
+      agentId: "main",
+      sessionKey,
+    });
+    expect(runSpy).toHaveBeenCalledOnce();
+    const settled = debug.mock.calls.find(([message]) => message === "heartbeat: wake settled");
+    expect(settled?.[1]).toMatchObject({ skipReason: "other" });
+    const rendered = JSON.stringify(debug.mock.calls);
+    expect(rendered).not.toContain("private-result-canary");
+    expect(rendered).not.toContain("private-wake-canary");
+    expect(rendered).not.toContain(sessionKey);
+  });
+});

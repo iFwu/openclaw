@@ -71,6 +71,8 @@ test("poll drains interleaved output in callback order across completion", async
   expect(text(running)).toContain("ERR-before\nOUT-after");
   expect(running.details).toMatchObject({
     status: "running",
+    sessionId: session.id,
+    startedAt: session.startedAt,
     aggregated: "ERR-before\nOUT-after\n",
   });
   const pending = poll("2000");
@@ -84,7 +86,19 @@ test("poll drains interleaved output in callback order across completion", async
   expect(text(terminal)).not.toContain("OUT-after");
   expect(terminal.details).toMatchObject({
     status: "completed",
+    sessionId: session.id,
+    startedAt: session.startedAt,
     aggregated: `ERR-before\nOUT-after\n${unread}`,
+  });
+  const log = await createProcessTool().execute("completion-log", {
+    action: "log",
+    sessionId: session.id,
+  });
+  expect(log.details).toMatchObject({
+    status: "completed",
+    sessionId: session.id,
+    startedAt: session.startedAt,
+    exitCode: 0,
   });
   expect(text(await poll())).not.toContain(unread);
 });
@@ -131,7 +145,13 @@ test("an evicted completion keeps its receipt without recommending successor log
   recordNotifyOnExitRemoval(successor, successorRemove);
   await vi.advanceTimersByTimeAsync(250);
   const original = await pending;
-  expect(original.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: output });
+  expect(original.details).toMatchObject({
+    status: "completed",
+    sessionId: session.id,
+    startedAt: session.startedAt,
+    exitCode: 0,
+    aggregated: output,
+  });
   expect(text(original)).not.toContain("[earlier]");
   expect(text(original)).toContain("[latest]");
   expect(text(original)).not.toContain("successor output");

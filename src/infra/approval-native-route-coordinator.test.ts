@@ -411,6 +411,7 @@ describe("createApprovalNativeRouteReporter", () => {
       accountId: "default",
       threadId: "1712345678.123456",
       message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+      parseMode: "plain",
       idempotencyKey: "approval-route-notice:approval-1",
     });
     expect(lateRuntimeGateway).not.toHaveBeenCalled();
@@ -487,6 +488,7 @@ describe("createApprovalNativeRouteReporter", () => {
       accountId: "work-a",
       threadId: undefined,
       message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+      parseMode: "plain",
       idempotencyKey: "approval-route-notice:approval-2",
     });
     expect(otherGateway).not.toHaveBeenCalled();
@@ -531,9 +533,10 @@ describe("createApprovalNativeRouteReporter", () => {
       accountId: "default",
       threadId: undefined,
       message:
-        "Approval required. I could not deliver the native approval request.\n" +
+        "Approval required. Native approval delivery was not confirmed.\n" +
         "Reply with: /approve deadbeef allow-once|deny\n" +
         "If the short code is ambiguous, use the full id in /approve.",
+      parseMode: "plain",
       idempotencyKey: "approval-route-notice:deadbeef-1234-4567-89ab-cdef01234567",
     });
   });

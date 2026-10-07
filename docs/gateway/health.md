@@ -219,9 +219,10 @@ events. The field is omitted when no pressured lanes are found.
 
 Ingress pressure uses conservative built-in diagnostic thresholds, not authoritative
 retry or claim policy for any plugin. A durable lane appears only when an active pending
-or claimed row has either reached at least eight attempts and has a recorded delivery
-error, or a claimed row has not refreshed its claim for 30 minutes. Ordinary retries
-1-7 are absent. Claim-recovery increments without a recorded error are also absent,
+or claimed row has reached at least eight attempts and has a recorded delivery error,
+has at least two attempts with the recorded claim→adoption watchdog stall, or is a
+claimed row that has not refreshed its claim for 30 minutes. Ordinary retries 1-7 with
+other errors are absent. Claim-recovery increments without a recorded error are also absent,
 while live claims stay absent because their claim timestamp is refreshed. Rows without
 a durable lane key are omitted because they cannot prove that later events are blocked;
 runtime persists a derived lane after a real derived-lane retry.

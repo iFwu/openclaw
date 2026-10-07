@@ -14,7 +14,7 @@ export function registerTelegramQuestionDelivery(params: {
 }): void {
   const questionId = questionGatewayRuntime.readAskUserQuestionId(params.payload);
   const text = params.text.trim();
-  if (!questionId || !text) {
+  if (!questionId) {
     return;
   }
   const { accountId, chatId, messageId, textLimit, clearButtons, annotate } = params;
@@ -24,6 +24,9 @@ export function registerTelegramQuestionDelivery(params: {
     deliveryId,
     finalize: async (statusLine) => {
       await clearButtons();
+      if (!text) {
+        return;
+      }
       const limit = Math.max(0, Math.floor(textLimit));
       const suffix = truncateUtf16Safe(statusLine.trim(), Math.min(512, limit));
       const separator = suffix && limit - suffix.length >= 2 ? "\n\n" : "";

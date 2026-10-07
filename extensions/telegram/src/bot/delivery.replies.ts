@@ -8,6 +8,7 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -24,6 +25,8 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
+import { TELEGRAM_MAX_CAPTION_LENGTH } from "../caption.js";
+import { escapeTelegramHtml, telegramHtmlToPlainTextFallback } from "../format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
@@ -35,6 +38,7 @@ import {
   type TelegramOutboundMediaSender,
 } from "../outbound-media.js";
 import type { TelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
+import { registerTelegramQuestionDelivery } from "../question-finalization.js";
 import { buildTelegramSendParams } from "../reply-parameters.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { isTelegramEmptyContentError } from "../rich-plain-fallback.js";
@@ -52,7 +56,12 @@ import {
   createTelegramReplyRequest,
   type TelegramPreparedSender,
 } from "../send-prepared.js";
-import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import {
+  buildInlineKeyboard,
+  editMessageReplyMarkupTelegram,
+  editMessageTelegram,
+  reactMessageTelegram,
+} from "../send.js";
 import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import {
@@ -683,6 +692,60 @@ async function deliverReplyPlan(
     return receipt;
   };
 
+  const registerQuestionParts = (payload: ReplyPayload, start: number) => {
+    if (payload.channelData?.askUser === undefined) {
+      return;
+    }
+    // The acceptance ledger, not authored text or a logical page, owns physical messages.
+    const parts = sender.parts
+      .slice(start)
+      .filter((part) => String(part.result.chat.id) === params.chatId);
+    const textParts = parts.filter((part) => part.plainText.trim());
+    const part =
+      textParts.find((candidate) => candidate.hasInlineKeyboard) ??
+      textParts.at(-1) ??
+      parts.find((candidate) => candidate.hasInlineKeyboard);
+    if (!part) {
+      return;
+    }
+    const isCaption = typeof part.acceptedParams.caption === "string";
+    const editOptions = {
+      api: params.bot.api,
+      cfg: params.cfg ?? getRuntimeConfig(),
+      accountId: params.accountId,
+      linkPreview: params.linkPreview,
+    };
+    registerTelegramQuestionDelivery({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId: part.messageId,
+      payload,
+      text:
+        isCaption && part.acceptedParams.parse_mode === "HTML"
+          ? telegramHtmlToPlainTextFallback(String(part.acceptedParams.caption))
+          : part.plainText,
+      textLimit: isCaption ? TELEGRAM_MAX_CAPTION_LENGTH : 4000,
+      clearButtons: async () => {
+        for (const controlled of parts.filter((candidate) => candidate.hasInlineKeyboard)) {
+          await editMessageReplyMarkupTelegram(
+            params.chatId,
+            controlled.messageId,
+            [],
+            editOptions,
+          );
+        }
+      },
+      annotate: async (text) => {
+        // Accepted plain projections must not be interpreted as fresh Markdown/rich blocks.
+        await editMessageTelegram(params.chatId, part.messageId, escapeTelegramHtml(text), {
+          ...editOptions,
+          textMode: "html",
+          ...(isCaption ? { editMode: "caption" as const } : {}),
+        });
+      },
+    });
+  };
+
   for (const originalReply of normalizedReplies) {
     let reply = canonicalizeTelegramPresentationPayload(originalReply, {
       allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
@@ -780,6 +843,7 @@ async function deliverReplyPlan(
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
 
+    const acceptedStart = sender.parts.length;
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyMarkup = buildInlineKeyboard(
@@ -888,6 +952,8 @@ async function deliverReplyPlan(
           ? { receipt: buildDeliveryReceipt(), visibleReplySent: true }
           : undefined,
       );
+    } finally {
+      registerQuestionParts(reply, acceptedStart);
     }
   }
 

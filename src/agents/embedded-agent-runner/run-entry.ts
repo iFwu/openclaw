@@ -12,15 +12,9 @@ import {
   readPreparedRunOperatorAuthority,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
-import {
-  createAssistantErrorTranscript,
-  type AssistantErrorTranscript,
-} from "../assistant-error-transcript.js";
+import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
 import { resolveModelFallbackError } from "../failover-error.js";
-import {
-  createContextEngineLogicalTurnLease,
-  type ContextEngineLogicalTurnLease,
-} from "../harness/context-engine-logical-turn.js";
+import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import {
   discardContextEngineTurnAttemptIntent,
   finalizeAcceptedContextEngineTurn,
@@ -35,7 +29,6 @@ import { runWithModelFallback } from "../model-fallback-runner.js";
 import type {
   FallbackAttempt,
   ModelCandidate,
-  ModelFallbackAttemptProvenance,
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
@@ -66,43 +59,25 @@ import {
   type EmbeddedAgentRunEntryTerminal,
   type RunEntryTerminalBehavior,
 } from "./run-entry-terminal.js";
-import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
+import type {
+  RunEntryCandidateOptions,
+  RunEntryHarnessPreparation,
+  RunEntrySessionOverride,
+} from "./run-entry.types.js";
+import {
+  assertModelContinuationRuntime,
+  createModelContinuationFallbackGuard,
+  createModelContinuationState,
+} from "./run/model-continuation.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
-
-type RunEntryCandidateOptions = {
-  agentHarnessRuntimeOverride: string | undefined;
-  assistantErrorTranscript: AssistantErrorTranscript;
-  authProfileFailurePolicy?: AuthProfileFailurePolicy;
-  classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
-  allowTransientCooldownProbe?: boolean;
-  isFinalFallbackAttempt?: boolean;
-  isFallbackRetry: boolean;
-  modelRoutingProvenance: ModelFallbackAttemptProvenance;
-  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
-  onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
-};
 
 type RunEntryCandidate<T> = {
   result: T;
   classification?: ModelFallbackResultClassification;
   turnAttempt?: ContextEngineTurnAttemptFacts;
 };
-
-type RunEntryHarnessPreparation =
-  | { kind: "direct" }
-  | {
-      kind: "measured";
-      run: (prepare: () => Promise<void>) => Promise<void>;
-    };
-
-type RunEntrySessionOverride =
-  | { kind: "preserve" }
-  | {
-      kind: "reconcile-completed";
-      reconcile: (candidate: { provider: string; model: string }) => Promise<void>;
-    };
 
 type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
   outcome: "completed" | "exhausted";
@@ -219,6 +194,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     runId: params.identity.runId,
     config: params.selection.cfg,
   });
+  const modelContinuation = createModelContinuationState(params.identity.runId);
   let failed = true;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
   let candidateIndex = 0;
@@ -274,6 +250,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         }
       : undefined;
   const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
+  const canFallbackAfterError = createModelContinuationFallbackGuard(
+    modelContinuation,
+    canFallback,
+  );
   try {
     let capturedCyberRefusal: { provider: string; model: string } | undefined;
     const runFallbackSearch = (
@@ -345,7 +325,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                     ? undefined
                     : result.classification,
             }),
-        ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
+        canFallbackAfterError,
         ...(params.behavior.kind === "maintenance"
           ? {}
           : {
@@ -367,6 +347,17 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           assistantErrorTranscript.clear();
           if (!options) {
             throw new Error("Model fallback attempt is missing routing provenance");
+          }
+          modelContinuation.fallbackError = undefined;
+          if (modelContinuation.checkpoint) {
+            assertModelContinuationRuntime({
+              provider,
+              modelId: model,
+              config: params.selection.cfg,
+              agentId: params.identity.agentId,
+              sessionKey: params.harness.sessionKey,
+              agentHarnessRuntimeOverride: resolveRuntimeOverride(provider, model),
+            });
           }
           const isFallbackRetry = runOptions.forceFallbackRetry === true || candidateIndex > 0;
           candidateIndex += 1;
@@ -393,7 +384,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 }
               }
               const classification =
-                params.behavior.kind === "maintenance"
+                params.behavior.kind === "maintenance" ||
+                modelContinuation.checkpoint ||
+                modelContinuation.crossModelBlocked
                   ? undefined
                   : classifyEmbeddedAgentRunResultForModelFallback({
                       result,
@@ -438,6 +431,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
               allowTransientCooldownProbe: options.allowTransientCooldownProbe,
               isFinalFallbackAttempt: options.isFinalFallbackAttempt,
               isFallbackRetry,
+              modelContinuation,
               modelRoutingProvenance: runOptions.forceFallbackRetry
                 ? {
                     ...options.modelRoutingProvenance,

@@ -1197,7 +1197,7 @@ export type ActiveEmbeddedRunOwner = {
   sessionId: string;
   sessionKey?: string;
   startedAtMs?: number;
-  abort: () => boolean;
+  abort: (reason?: "approval-denied") => boolean;
 };
 
 function projectActiveEmbeddedRunOwner(
@@ -1215,7 +1215,7 @@ function projectActiveEmbeddedRunOwner(
     ...(handle.startedAtMs === undefined ? {} : { startedAtMs: handle.startedAtMs }),
     // A recovered run ID is correlation only. Recheck the captured owner before
     // Stop so a stale UI action cannot abort replacement work in the session.
-    abort: () => {
+    abort: (reason) => {
       if (
         ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) !== handle ||
         ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) !== handle ||
@@ -1225,7 +1225,7 @@ function projectActiveEmbeddedRunOwner(
       }
       try {
         if (handle.cancel) {
-          handle.cancel("user_abort");
+          handle.cancel(reason ?? "user_abort");
         } else {
           handle.abort();
         }

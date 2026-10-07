@@ -9,6 +9,7 @@ import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-de
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
+import { readTelegramInputSource } from "./bot-handlers.input-source.js";
 import {
   buildSyntheticContext,
   buildSyntheticTextMessage,
@@ -154,8 +155,29 @@ export function createTelegramInboundBuffers({
           pending.reduce((total, item) => total + getTelegramTextParts(item.msg).text.length, 0) +
             getTelegramTextParts(entry.msg).text.length <=
             50_000)),
-    onFlush: (entries) => {
+    onFlush: (originalEntries) => {
       const completion = (async () => {
+        const entries: TelegramDebounceEntry[] = [];
+        for (const entry of originalEntries) {
+          const source = readTelegramInputSource(entry.msg);
+
+          try {
+            if ((await source?.resolveDisposition()) === "retained") {
+              settleSpooledReplayParticipants(spooledReplayParticipants([entry]), {
+                kind: "completed",
+              });
+            } else {
+              entries.push(entry);
+            }
+          } catch (error) {
+            runtime.error?.(danger(`telegram original input partition failed: ${String(error)}`));
+            releaseDispatchDedupeClaims(entry.dispatchDedupeClaims, error);
+            settleSpooledReplayParticipants(
+              spooledReplayParticipants([entry]),
+              buildFailedProcessingResult(error),
+            );
+          }
+        }
         const participants = spooledReplayParticipants(entries);
         const last = entries.at(-1);
         if (!last) {
@@ -272,10 +294,28 @@ export function createTelegramInboundBuffers({
       }
     },
     onCancel: (items) => {
-      releaseDispatchDedupeClaims(
-        mergeDispatchDedupeClaims(...items.map((item) => item.dispatchDedupeClaims)),
-      );
-      settleSpooledReplayParticipants(spooledReplayParticipants(items), { kind: "skipped" });
+      for (const item of items) {
+        const source = readTelegramInputSource(item.msg);
+        if (!source) {
+          releaseDispatchDedupeClaims(item.dispatchDedupeClaims);
+          settleSpooledReplayParticipants(spooledReplayParticipants([item]), { kind: "skipped" });
+          continue;
+        }
+        void source
+          .retain()
+          .then(() => {
+            settleSpooledReplayParticipants(spooledReplayParticipants([item]), {
+              kind: "completed",
+            });
+          })
+          .catch((error: unknown) => {
+            releaseDispatchDedupeClaims(item.dispatchDedupeClaims, error);
+            settleSpooledReplayParticipants(
+              spooledReplayParticipants([item]),
+              buildFailedProcessingResult(error),
+            );
+          });
+      }
     },
   });
 

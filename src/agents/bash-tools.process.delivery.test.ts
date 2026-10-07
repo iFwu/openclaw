@@ -333,7 +333,7 @@ test("replays blocked poll output immediately when the retry has a timeout", asy
 });
 
 test("composes lazy process actions through generated declarations and JavaScript", async () => {
-  createSession("first\nsecond", "typed-process");
+  const session = createSession("first\nsecond", "typed-process");
   const h = createCodeModeHarness();
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createLazyProcessTool()] });
   const run = (code: string) =>
@@ -346,17 +346,24 @@ test("composes lazy process actions through generated declarations and JavaScrip
       return await Promise.all(running.map(async session => {
         const log = await process({ action: "log", sessionId: session.sessionId });
         if ("error" in log) throw new Error(log.error);
-        return { id: session.sessionId, lines: log.totalLines, output: log.output.toUpperCase() };
+        const startedAt = log.startedAt;
+        return { id: session.sessionId, startedAt, lines: log.totalLines, output: log.output.toUpperCase() };
       }));
     }
   `;
   const declaration = await run('return await API.read("tools/process.d.ts");');
   expect(declaration).toMatchObject({ status: "completed" });
   const file = declaration.value as { content: string };
-  expect(typeCheckSources({ "/process-consumer.ts": file.content + composition })).toEqual([]);
+  const typedComposition = composition.replace(
+    "const startedAt =",
+    "const startedAt: number | undefined =",
+  );
+  expect(typeCheckSources({ "/process-consumer.ts": file.content + typedComposition })).toEqual([]);
   const result = await run(`${composition}\nreturn await consume();`);
   expect(result, JSON.stringify(result)).toMatchObject({
     status: "completed",
-    value: [{ id: "typed-process", lines: 2, output: "FIRST\nSECOND" }],
+    value: [
+      { id: "typed-process", startedAt: session.startedAt, lines: 2, output: "FIRST\nSECOND" },
+    ],
   });
 });

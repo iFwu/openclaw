@@ -493,6 +493,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               body,
               transcriptBody,
               isFallbackRetry: runOptions.isFallbackRetry,
+              modelContinuation: runOptions.modelContinuation,
               classifyResult: runOptions.classifyResult,
               preserveCliSessionBinding:
                 isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||

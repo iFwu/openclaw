@@ -50,6 +50,7 @@ export type DispatchTelegramMessageParams = {
    * (or a test double). Pre-adoption abort + adopt/defer/abandon.
    */
   turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"];
+  pendingInputSources?: GetReplyOptions["pendingInputSources"];
 };
 
 export type TelegramDispatchResult =
@@ -135,6 +136,8 @@ type TelegramReasoningStepState = ReturnType<typeof createTelegramReasoningStepS
 
 export type TelegramDraftStateSlice = {
   answerLane: DraftLaneState;
+  progressLane: DraftLaneState;
+  replyTargetState: { consumed: boolean; pending: boolean };
   reasoningLane: DraftLaneState;
   lanes: Record<LaneName, DraftLaneState>;
   streamDeliveryEnabled: boolean;

@@ -19,6 +19,47 @@ import { createReplyOperation } from "./reply-run-registry.js";
 describe("handleCompactCommand lifecycle authority", () => {
   beforeEach(resetCompactCommandMocks);
 
+  it.each(["accepted", "adoption-failed", "revoked"] as const)(
+    "adopts raw ingress before long compaction and rechecks authority: %s",
+    async (outcome) => {
+      let current = true;
+      const events: string[] = [];
+      const params = {
+        ...buildCompactParams("/compact", {}),
+        sessionEntry: { sessionId: "session-adoption", updatedAt: 1 },
+        opts: {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {
+              events.push("adopted");
+              if (outcome === "adoption-failed") {
+                throw new Error("ingress adoption failed");
+              }
+              if (outcome === "revoked") {
+                current = false;
+              }
+            },
+          },
+        },
+      };
+      vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async () => {
+        events.push("compact");
+        return { ok: false, compacted: false, reason: "synthetic compaction failure" };
+      });
+      const work = handleCompactCommand(params, true, () => {
+        if (!current) {
+          throw new Error("Command owner was revoked");
+        }
+      });
+      if (outcome === "accepted") {
+        await work;
+        expect(events).toEqual(["adopted", "compact"]);
+      } else {
+        await expect(work).rejects.toThrow(outcome === "revoked" ? "revoked" : "adoption failed");
+        expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("rejects owner revocation while compaction waits for the active run to drain", async () => {
     let ownerCurrent = true;
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);

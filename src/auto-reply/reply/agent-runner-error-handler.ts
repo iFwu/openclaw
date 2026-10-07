@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { isApprovalDeniedAbort } from "../../agents/approval-denied-abort.js";
 import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
@@ -128,6 +129,11 @@ export async function handleAgentExecutionError(params: {
     );
     return { kind: "aborted", reason };
   };
+  if (isApprovalDeniedAbort(err) || isApprovalDeniedAbort(turn.opts?.abortSignal?.reason)) {
+    takePendingLifecycleTerminal().emit("end", err, { aborted: true, stopReason: "user" });
+    // Native aborted projection returns no final payload; the approval receipt owns visibility.
+    return { kind: "aborted", reason: "user" };
+  }
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;

@@ -1,6 +1,7 @@
 // Defines Telegram channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   DmPolicy,
   GroupPolicy,
   SessionThreadBindingsConfig,
@@ -53,7 +54,12 @@ export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allow
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = ChannelExecApprovalTarget;
 
-export type TelegramPreviewStreamingConfig = ChannelPreviewStreamingConfig;
+export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
+  progress?: ChannelStreamingProgressConfig & {
+    /** Retain the last visible progress after normal completion. Default: false. */
+    persist?: boolean;
+  };
+};
 
 export type TelegramExecApprovalConfig = ChannelExecApprovalConfig;
 
@@ -134,6 +140,8 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
   };
 
 export type TelegramTopicConfig = {
+  /** Opt in to Jev segmentation; topics inherit the explicitly selected group setting. */
+  autoNewSession?: boolean;
   requireMention?: boolean;
   /** Override mention gating in forum topics created by this bot; omitted preserves existing policy. */
   requireMentionInBotThreads?: boolean;
@@ -175,6 +183,8 @@ export type AutoTopicLabelConfig =
     };
 
 export type TelegramDirectConfig = {
+  /** Opt this explicit DM into automatic new-session evaluation. Default: false. */
+  autoNewSession?: boolean;
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
   /** Optional tool policy overrides for this DM. */

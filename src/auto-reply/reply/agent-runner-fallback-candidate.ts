@@ -2,6 +2,7 @@ import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
@@ -302,6 +303,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             runAbortSignal: params.runAbortSignal,
             runLane,
             isFallbackRetry: runOptions.isFallbackRetry,
+            modelContinuation: runOptions.modelContinuation,
             modelRoutingProvenance: runOptions.modelRoutingProvenance,
             isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
             suppressQueuedUserPersistenceForCandidate:
@@ -331,6 +333,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             deferredLifecycle: params.state.deferredLifecycle,
           } satisfies AgentFallbackCandidateCommonParams;
           if (runtime.useCliExecution) {
+            if (runOptions.modelContinuation?.checkpoint) {
+              throw new AgentHarnessPreflightError(
+                "A CLI runtime cannot continue the settled embedded transcript.",
+              );
+            }
             const candidate = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,

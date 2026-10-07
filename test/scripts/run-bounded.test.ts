@@ -19,6 +19,11 @@ describe.skipIf(process.platform !== "linux")("bounded resource ownership", () =
     { available: 14, requested: "10", budget: 10, code: 0 },
     { available: 12, requested: "4", budget: 4, code: 0 },
     { available: 16, requested: "11", budget: undefined, code: 2 },
+    { available: 12, requested: "10", reserve: "1", budget: 10, code: 0 },
+    { available: 10.9, requested: "10", reserve: "1", budget: undefined, code: 75 },
+    { available: 16, requested: "10", reserve: "0", budget: undefined, code: 2 },
+    { available: 30, requested: undefined, largeMemory: "27", budget: undefined, code: 2 },
+    { available: 30, requested: undefined, fitAvailable: true, budget: undefined, code: 2 },
     { available: 16, requested: undefined, budget: 10, code: 1, loadState: "loaded" },
     ...[
       {
@@ -99,6 +104,13 @@ process.exit(Number(process.env.BOUNDED_TEST_COMMAND_EXIT));
         "--receipt",
         receipt,
         ...(scenario.requested ? ["--memory-gib", scenario.requested] : []),
+        ...("reserve" in scenario && typeof scenario.reserve === "string"
+          ? ["--reserve-gib", scenario.reserve]
+          : []),
+        ...("largeMemory" in scenario && typeof scenario.largeMemory === "string"
+          ? ["--large-memory-gib", scenario.largeMemory]
+          : []),
+        ...("fitAvailable" in scenario && scenario.fitAvailable ? ["--fit-available"] : []),
         "true",
       ],
       {

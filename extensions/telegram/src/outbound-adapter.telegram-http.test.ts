@@ -55,6 +55,21 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   });
   afterEach(resetTelegramAccountThrottlersForTest);
 
+  it("uses plain sendMessage with escaped literal notice text even when rich mode is enabled", async () => {
+    await telegramOutbound.sendPayload!({
+      cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+      to: "123",
+      text: "Approval <details> & review",
+      formatting: { parseMode: "plain" },
+      payload: { text: "Approval <details> & review" },
+    });
+    expect(requests.map(({ method }) => method)).toEqual(["sendMessage"]);
+    expect(requests[0]?.fields).toMatchObject({
+      text: "Approval &lt;details&gt; &amp; review",
+      parse_mode: "HTML",
+    });
+  });
+
   it.each([
     { name: "rich", richMessages: true, html: false },
     { name: "explicit HTML on rich", richMessages: true, html: true },

@@ -11,6 +11,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { readAdmittedRunApprovalOrigin } from "./admitted-run-approval-origin.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
   readAgentCommandExecutionIdentitySpawnFacts,
@@ -212,6 +213,43 @@ describe("Gateway agent command execution identity", () => {
       closeOpenClawAgentDatabasesForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { spawned: true, sameSession: true, expected: true },
+    { spawned: false, sameSession: true, expected: false },
+    { spawned: true, sameSession: false, expected: false },
+  ])("uses persisted approval-only origin only for its child generation: %j", async (state) => {
+    const origin = Object.freeze({
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100100",
+      turnSourceAccountId: "requester-bot",
+      turnSourceThreadId: "77",
+    });
+    const prepared = prepareAgentCommandExecutionIdentity({
+      opts: { message: "next child turn" },
+      prepared: {
+        cfg: {},
+        runId: `origin-child-${state.spawned}-${state.sameSession}`,
+        sessionAgentId: "main",
+        sessionId: "origin-child-session",
+        sessionEntry: {
+          sessionId: state.sameSession ? "origin-child-session" : "previous-session",
+          updatedAt: 100,
+          ...(state.spawned ? { spawnedBy: "agent:main:parent" } : {}),
+          inheritedApprovalOrigin: origin,
+        },
+      },
+      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+      lifecycleGeneration: "origin-test-generation",
+    });
+    const admitted = await prepared.admit("embedded");
+    try {
+      expect(readAdmittedRunApprovalOrigin(admitted)).toEqual(state.expected ? origin : undefined);
+    } finally {
+      prepared.close();
+    }
+    expect(readAdmittedRunApprovalOrigin(admitted)).toBeUndefined();
   });
 
   it("runs owner binding only after the awaited admission callback settles", async () => {

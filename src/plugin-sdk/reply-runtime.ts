@@ -72,3 +72,36 @@ export type {
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";
+
+/** Captures only recovery storage authority; never schedules a provider turn. */
+export async function prepareCancelledChannelInputTarget(
+  params: Parameters<
+    typeof import("../auto-reply/reply/abort-cutoff-retention.js").prepareCancelledChannelInputTarget
+  >[0],
+): Promise<
+  ReturnType<
+    typeof import("../auto-reply/reply/abort-cutoff-retention.js").prepareCancelledChannelInputTarget
+  >
+> {
+  const runtime = await import("../auto-reply/reply/abort-cutoff-retention.js");
+  return runtime.prepareCancelledChannelInputTarget(params);
+}
+
+export type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
+
+/** Stage original input through the native factory, never channel-owned persistence. */
+export async function stageChannelInputSource(
+  params: Parameters<
+    typeof import("../auto-reply/reply/abort-cutoff-retention.js").stageChannelInputSource
+  >[0],
+) {
+  const runtime = await import("../auto-reply/reply/abort-cutoff-retention.js");
+  return await runtime.stageChannelInputSource(params);
+}
+
+export async function retainCancelledChannelInputSource(
+  recorder: import("../sessions/user-turn-transcript.types.js").UserTurnTranscriptRecorder,
+): Promise<boolean> {
+  const runtime = await import("../auto-reply/reply/abort-cutoff-retention.js");
+  return runtime.retainCancelledUserTurnInput(recorder);
+}

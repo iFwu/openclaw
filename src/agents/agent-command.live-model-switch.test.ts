@@ -432,8 +432,9 @@ vi.mock("../config/runtime-snapshot.js", async () => {
   };
 });
 
-vi.mock("../config/sessions.js", () => ({
-  resolveAgentIdFromSessionKey: () => "default",
+vi.mock("../config/sessions.js", async () => ({
+  resolveAgentIdFromSessionKey: (await import("../routing/session-key.js"))
+    .resolveAgentIdFromSessionKey,
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
   updateSessionStore: vi.fn(
     async (_path: string, fn: (store: Record<string, unknown>) => unknown) => {
@@ -591,12 +592,16 @@ vi.mock("../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", async () => {
-  const { resolveAgentModelFallbacksOverride, resolveSubagentSpawnModelFallbacksOverride } =
-    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+  const {
+    resolveAgentModelFallbacksOverride,
+    resolveSubagentSpawnModelFallbacksOverride,
+    resolveModelFallbackAvailability,
+  } = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   const { createTestAgentScope } = await import("./agent-command.live-model-switch.test-mocks.js");
   return createTestAgentScope(state, {
     resolveAgentModelFallbacksOverride,
     resolveSubagentSpawnModelFallbacksOverride,
+    resolveModelFallbackAvailability,
   });
 });
 

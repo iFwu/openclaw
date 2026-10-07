@@ -41,14 +41,6 @@ function skipWhitespace(source: string, start: number): number {
   return cursor;
 }
 
-function skipHorizontalWhitespace(source: string, start: number): number {
-  let cursor = start;
-  while (source[cursor] === " " || source[cursor] === "\t") {
-    cursor += 1;
-  }
-  return cursor;
-}
-
 function startsWithHistoryMarker(source: string, start: number): boolean {
   return (
     source.startsWith(HISTORY_CONTEXT_MARKER, start) ||
@@ -57,54 +49,12 @@ function startsWithHistoryMarker(source: string, start: number): boolean {
   );
 }
 
-function matchesKnownSenderPrefix(prefix: string, ctx: MsgContext): boolean {
-  const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
-  if (!normalizedPrefix) {
-    return false;
-  }
-  const senderUsername = ctx.SenderUsername?.trim().replace(/^@/, "");
-  const candidates = [
-    ctx.SenderName,
-    ctx.SenderTag,
-    senderUsername,
-    senderUsername ? `@${senderUsername}` : undefined,
-    ctx.SenderName && senderUsername ? `${ctx.SenderName} (@${senderUsername})` : undefined,
-  ];
-  return candidates.some(
-    (candidate) =>
-      typeof candidate === "string" &&
-      normalizeLowercaseStringOrEmpty(candidate) === normalizedPrefix,
-  );
-}
-
-function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | undefined {
-  let cursor = skipWhitespace(source, 0);
+function resolveExplicitMessageStart(source: string): number | undefined {
+  const cursor = skipWhitespace(source, 0);
   if (startsWithHistoryMarker(source, cursor)) {
     return undefined;
   }
-
-  while (source[cursor] === "[") {
-    const lineEnd = source.indexOf("\n", cursor);
-    const envelopeEnd = source.indexOf("]", cursor + 1);
-    if (envelopeEnd === -1 || (lineEnd !== -1 && envelopeEnd > lineEnd)) {
-      break;
-    }
-    if (startsWithHistoryMarker(source, cursor)) {
-      return undefined;
-    }
-    cursor = skipHorizontalWhitespace(source, envelopeEnd + 1);
-  }
-
-  const lineEnd = source.indexOf("\n", cursor);
-  const effectiveLineEnd = lineEnd === -1 ? source.length : lineEnd;
-  const senderPrefixEnd = source.indexOf(":", cursor);
-  if (senderPrefixEnd !== -1 && senderPrefixEnd < effectiveLineEnd) {
-    const senderPrefix = source.slice(cursor, senderPrefixEnd).trim();
-    if (senderPrefix && senderPrefix.length <= 120 && matchesKnownSenderPrefix(senderPrefix, ctx)) {
-      cursor = skipHorizontalWhitespace(source, senderPrefixEnd + 1);
-    }
-  }
-
+  // Even an exact sender-name match can be pasted history, not a command envelope.
   return cursor;
 }
 
@@ -169,7 +119,7 @@ function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | und
   if (params.source === "") {
     return undefined;
   }
-  const messageStart = resolveExplicitMessageStart(params.source, params.ctx);
+  const messageStart = resolveExplicitMessageStart(params.source);
   if (messageStart === undefined) {
     return undefined;
   }
@@ -210,7 +160,7 @@ function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | und
 function resolveCommandTextForSession(
   params: SessionResetCommandContext & { commandText: string },
 ): string {
-  const messageStart = resolveExplicitMessageStart(params.commandText, params.ctx);
+  const messageStart = resolveExplicitMessageStart(params.commandText);
   const anchored =
     messageStart === undefined ? params.commandText.trim() : params.commandText.slice(messageStart);
   const withoutMentions = params.isGroup

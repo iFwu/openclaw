@@ -8,6 +8,7 @@ export * from "./session-history.js";
 export { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 export {
   bindSessionPendingInputSources,
+  retainCancelledSessionPendingInput,
   listSessionPendingInputs,
   readSessionPendingInput,
   readSessionSubmittedInput,

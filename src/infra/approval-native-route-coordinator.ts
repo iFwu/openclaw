@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ExecApprovalForwardTarget } from "../config/types.approvals.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
@@ -30,6 +31,8 @@ import type {
 } from "./approval-types.js";
 
 export type { ApprovalNativeDeliveryOutcome } from "./approval-native-route-selection.js";
+
+const log = createSubsystemLogger("approvals/delivery");
 
 type GatewayRequestFn = <T = unknown>(
   method: string,
@@ -469,10 +472,12 @@ async function maybeFinalizeApprovalRouteNotice(
       accountId: notice.target.accountId ?? undefined,
       threadId: notice.target.threadId ?? undefined,
       message: notice.text,
+      parseMode: "plain",
       idempotencyKey: `approval-route-notice:${approvalId}`,
     });
   } catch {
-    // The approval delivery already succeeded; the follow-up notice is best-effort.
+    log.warn("approval route notice delivery was not confirmed (stage=origin-notice)");
+    // The best-effort notice does not own approval resolution or trigger a new retry.
   }
 }
 

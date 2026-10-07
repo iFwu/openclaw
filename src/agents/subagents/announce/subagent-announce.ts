@@ -651,8 +651,12 @@ async function runSubagentAnnounceFlowBound(
         : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
   } catch (err) {
     shouldDeleteChildSession = false;
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
-    // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
+    if (!completionDeliveryAllowed()) {
+      announceOutcome = "intentional_non_delivery";
+    } else {
+      defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    }
+    // A revoked source owns non-delivery; do not turn its exception into a retry.
   } finally {
     // The spawn label is persisted at run start (agent request `label` →
     // buildAgentSessionPatch), so no post-run label patch is needed here.

@@ -19,6 +19,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { readAdmittedRunApprovalOrigin } from "../admitted-run-approval-origin.js";
 import {
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
@@ -179,6 +180,7 @@ export function createAdmittedGatewayToolCallerIdentity(
   }
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   const operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const approvalOrigin = readAdmittedRunApprovalOrigin(params.admittedRunContext);
   return {
     agentId,
     sessionKey,
@@ -201,11 +203,15 @@ export function createAdmittedGatewayToolCallerIdentity(
     ...(params.mintCronRequesterGrant
       ? { mintCronRequesterGrant: params.mintCronRequesterGrant }
       : {}),
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceLocal: params.turnSourceLocal,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
+    turnSourceChannel: approvalOrigin ? approvalOrigin.turnSourceChannel : params.turnSourceChannel,
+    turnSourceLocal: approvalOrigin ? approvalOrigin.turnSourceLocal : params.turnSourceLocal,
+    turnSourceTo: approvalOrigin ? approvalOrigin.turnSourceTo : params.turnSourceTo,
+    turnSourceAccountId: approvalOrigin
+      ? approvalOrigin.turnSourceAccountId
+      : params.turnSourceAccountId,
+    turnSourceThreadId: approvalOrigin
+      ? approvalOrigin.turnSourceThreadId
+      : params.turnSourceThreadId,
   };
 }
 

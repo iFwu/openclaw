@@ -252,6 +252,40 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
+  it("rejects a stored payload ID that differs from the actual update before dispatch", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const payload = updatePayload(77);
+      payload.updateId = 78;
+      const eventId = String(77).padStart(16, "0");
+      await queue.enqueue(eventId, payload, {
+        laneKey: telegramSpooledUpdateLaneKey(payload.update),
+      });
+      const dispatch = vi.fn(async () => ({ kind: "completed" as const }));
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => cfg,
+        accountId: "default",
+        dispatch,
+      });
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+          { id: eventId, reason: "invalid-event" },
+        ]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("reconciles a cached General topic when private bot topics are disabled", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
@@ -309,6 +343,15 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     {
+      name: "old control Stop lane",
+      updateKind: "message",
+      chat: { id: 1234, type: "private" },
+      topic: {},
+      laneKey: "telegram:1234:control",
+      text: "/stop@openclaw_bot",
+      suffix: "abort",
+    },
+    {
       name: "private chat",
       updateKind: "message",
       chat: { id: 1234, type: "private" },
@@ -364,7 +407,7 @@ describe("createTelegramIngressMonitor", () => {
           from: { id: 111, is_bot: false, first_name: "Ada" },
           chat: testCase.chat,
           ...testCase.topic,
-          text: "/models@openclaw_bot",
+          text: "text" in testCase ? testCase.text : "/models@openclaw_bot",
         },
       };
       const eventId = String(update.update_id).padStart(16, "0");
@@ -383,7 +426,7 @@ describe("createTelegramIngressMonitor", () => {
       closeOpenClawStateDatabaseForTest();
 
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
-      const controlLaneKey = `telegram:${testCase.chat.id}:control`;
+      const controlLaneKey = `telegram:${testCase.chat.id}:${"suffix" in testCase ? testCase.suffix : "control"}`;
       const dispatch = vi.fn(async () => {
         expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
         return { kind: "completed" as const };

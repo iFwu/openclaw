@@ -3,18 +3,27 @@ import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
+import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import {
   withPluginRuntimeGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import {
+  mintAgentRuntimeIdentityToken,
+  verifyAgentRuntimeIdentityToken,
+} from "../agent-runtime-identity-token.js";
 import * as userTurn from "../agent-turn/agent-run-user-turn.js";
 import {
   captureGatewayDeviceRevocation,
@@ -29,6 +38,9 @@ import {
   describe1AfterEach1,
   describe1BeforeEach0,
   getAgentTestMocks,
+  backendGatewayClient,
+  invokeAgent,
+  buildExistingMainStoreEntry,
   makeContext,
   operatorWriteCliClient,
   prime,
@@ -40,6 +52,204 @@ import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 describe("gateway agent caller authority custody", () => {
   beforeEach(describe1BeforeEach0);
   afterEach(describe1AfterEach1);
+
+  it.each([
+    "sessions-send",
+    "automation-send",
+    "webchat",
+    "no-external-origin",
+    "non-backend",
+  ] as const)(
+    "preserves target approval origin for %s without inheriting sender routing",
+    async (scenario) => {
+      prime();
+      const mocks = getAgentTestMocks();
+      const sessionKey = "agent:main:telegram:group:-100200:topic:7";
+      const sessionId = "existing-session-id";
+      const external = scenario !== "no-external-origin";
+      const delivery = external
+        ? normalizeSessionDeliveryState({
+            context: {
+              channel: "telegram",
+              to: "telegram:-100200",
+              accountId: "target-account",
+              threadId: "7",
+            },
+            origin: {
+              provider: "telegram",
+              surface: "telegram",
+              to: "telegram:-100200",
+              accountId: "target-account",
+              threadId: "7",
+            },
+          })
+        : { kind: "internal" as const };
+      const entry = buildExistingMainStoreEntry({
+        sessionId,
+        lifecycleRevision: "target-revision",
+        delivery,
+      });
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
+        entry,
+        canonicalKey: sessionKey,
+      });
+      mocks.updateSessionStore.mockImplementation(
+        async (_path, updater) => await updater({ [sessionKey]: entry }),
+      );
+      const context = makeContext();
+      context.resolveGatewayContext = () => context;
+      const runId = `target-approval-origin-${scenario}`;
+      let proof: Promise<void> | undefined;
+      mocks.agentCommand.mockImplementation((opts: AgentCommandGatewayIngressOpts) => {
+        proof = (async () => {
+          expect(opts.messageChannel).toBe("webchat");
+          expect(opts.deliver).toBe(false);
+          const admission = prepareAgentCommandExecutionIdentity({
+            opts,
+            prepared: { cfg: {}, runId, sessionAgentId: "main", sessionId, sessionKey },
+            ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
+            lifecycleGeneration: expectDefined(opts.lifecycleGeneration, "run generation missing"),
+          });
+          try {
+            const admitted = await admission.admit("embedded");
+            await withPreparedEmbeddedGatewayTools(
+              {
+                admittedRunContext: admitted,
+                agentId: "main",
+                sessionKey,
+                sessionId,
+                agentHarnessId: "pi",
+                disableTools: true,
+                messageChannel: opts.messageChannel,
+                currentMessagingTarget: opts.to,
+                currentChannelId: opts.runContext?.currentChannelId,
+                agentAccountId: opts.runContext?.accountId,
+                currentThreadTs: opts.runContext?.currentThreadTs,
+              },
+              () => true,
+              async () => {
+                const caller = expectDefined(
+                  getGatewayToolCallerIdentity(),
+                  "admitted caller missing",
+                );
+                const token = await mintAgentRuntimeIdentityToken({
+                  ...caller,
+                  operationalRunInstance: admitted.operationalRunInstance,
+                });
+                const identity = await verifyAgentRuntimeIdentityToken(token);
+                const { telegramPlugin } = await loadBundledPluginFacade<{
+                  telegramPlugin: ChannelPlugin;
+                }>({
+                  pluginId: "telegram",
+                  artifactBasename: "channel-plugin-api.ts",
+                });
+                const resolveTarget = expectDefined(
+                  telegramPlugin.approvalCapability?.native?.resolveOriginTarget,
+                  "native origin planner missing",
+                );
+                const account = {
+                  botToken: "test-only-token",
+                  execApprovals: { enabled: true, approvers: ["42"], target: "channel" as const },
+                };
+                const cfg = {
+                  channels: {
+                    telegram: { accounts: { "target-account": account, "other-account": account } },
+                  },
+                };
+                const request = {
+                  id: `plugin:${runId}`,
+                  createdAtMs: 0,
+                  expiresAtMs: Date.now() + 60_000,
+                  request: {
+                    title: "Target-owned approval",
+                    description: "Isolated routing proof",
+                    sessionKey,
+                    turnSourceChannel: identity?.turnSourceChannel,
+                    turnSourceTo: identity?.turnSourceTo,
+                    turnSourceAccountId: identity?.turnSourceAccountId,
+                    turnSourceThreadId: identity?.turnSourceThreadId,
+                  },
+                };
+                const target = await resolveTarget({
+                  cfg,
+                  accountId: "target-account",
+                  approvalKind: "plugin",
+                  request,
+                });
+                expect(
+                  await resolveTarget({
+                    cfg,
+                    accountId: "other-account",
+                    approvalKind: "plugin",
+                    request,
+                  }),
+                ).toBeNull();
+                if (scenario === "webchat" || scenario === "non-backend" || !external) {
+                  expect(identity?.turnSourceChannel).toBe("webchat");
+                  expect(target).toBeNull();
+                } else {
+                  expect(identity).toMatchObject({
+                    sessionKey,
+                    turnSourceChannel: "telegram",
+                    turnSourceTo: "telegram:-100200",
+                    turnSourceAccountId: "target-account",
+                    turnSourceThreadId: "7",
+                  });
+                  expect(target).toEqual({ to: "-100200", threadId: 7 });
+                }
+              },
+            );
+          } finally {
+            await admission.finish();
+          }
+        })();
+        return proof.then(() => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }));
+      });
+      const webchat = scenario === "webchat";
+      await invokeAgent(
+        {
+          message: "continue the target task",
+          sessionKey,
+          channel: "webchat",
+          deliver: false,
+          idempotencyKey: runId,
+          ...(!webchat
+            ? {
+                inputProvenance: {
+                  kind: "inter_session" as const,
+                  sourceSessionKey:
+                    scenario === "automation-send"
+                      ? "agent:main:cron:source-job"
+                      : "agent:main:telegram:group:-100999:topic:223",
+                  sourceChannel: "telegram",
+                  sourceTool: "sessions_send",
+                },
+              }
+            : {}),
+        },
+        {
+          reqId: runId,
+          context,
+          client: webchat
+            ? ({
+                connect: {
+                  client: { id: "webchat-ui", mode: "webchat" },
+                  scopes: ["operator.write"],
+                },
+              } as NonNullable<Parameters<typeof invokeAgent>[1]>["client"])
+            : scenario === "non-backend"
+              ? operatorWriteCliClient(["operator.write"])
+              : backendGatewayClient(),
+          isWebchatConnect: () => webchat,
+        },
+      );
+      await waitForAgentCommandCall();
+      await expectDefined(proof, "target origin proof missing");
+      await waitForAssertion(() => expect(context.chatAbortControllers.size).toBe(0));
+    },
+  );
 
   it.each(["operator", "maintainer", "system"] as const)(
     "preserves accepted %s authority through command admission and later tool calls",

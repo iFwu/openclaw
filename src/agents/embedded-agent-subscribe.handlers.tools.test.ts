@@ -23,6 +23,7 @@ import { addSession, deleteSession, markExited } from "./bash-process-registry.j
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
+import { resolveSettledToolTerminalContinuationInstruction } from "./embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   handleToolExecutionStart,
@@ -37,6 +38,10 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   createAskUserTool,
   normalizeAskUserParams,
@@ -1608,6 +1613,174 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it.each([
+    {
+      label: "completed",
+      details: { status: "completed", sessionId: "process-one", exitCode: 0 },
+      settled: true,
+    },
+    {
+      label: "nonzero exit",
+      details: { status: "failed", sessionId: "process-one", exitCode: 7 },
+      settled: true,
+    },
+    {
+      label: "terminated",
+      details: { status: "failed", sessionId: "process-one", exitSignal: "SIGTERM" },
+      settled: true,
+    },
+    {
+      label: "completed log",
+      action: "log",
+      details: { status: "completed", sessionId: "process-one", exitCode: 0 },
+      settled: true,
+    },
+    {
+      label: "non-observing process action",
+      action: "kill",
+      details: { status: "completed", sessionId: "process-one", exitCode: 0 },
+      settled: false,
+    },
+    {
+      label: "still running",
+      details: { status: "running", sessionId: "process-one" },
+      settled: false,
+    },
+    {
+      label: "another process",
+      details: { status: "completed", sessionId: "process-two", exitCode: 0 },
+      settled: false,
+    },
+    {
+      label: "reused process slug",
+      details: { status: "completed", sessionId: "process-one", startedAt: 2, exitCode: 0 },
+      settled: false,
+    },
+    {
+      label: "missing process generation",
+      details: { status: "completed", sessionId: "process-one", startedAt: undefined, exitCode: 0 },
+      settled: false,
+    },
+    {
+      label: "non-finite process generation",
+      details: {
+        status: "completed",
+        sessionId: "process-one",
+        startedAt: Number.NaN,
+        exitCode: 0,
+      },
+      settled: false,
+    },
+    {
+      label: "mismatched requested process",
+      details: { status: "completed", sessionId: "process-one", exitCode: 0 },
+      requestedSessionId: "process-two",
+      settled: false,
+    },
+    {
+      label: "lookup failure",
+      details: { status: "error", error: "No session found" },
+      settled: false,
+    },
+    {
+      label: "blank exit signal",
+      details: { status: "failed", sessionId: "process-one", exitSignal: " " },
+      settled: false,
+    },
+    {
+      label: "unproven failure",
+      details: { status: "failed", sessionId: "process-one" },
+      settled: false,
+    },
+  ])(
+    "records settled background exec evidence after $label without allowing replay",
+    async ({ details, settled, requestedSessionId, action }) => {
+      const { ctx } = createTestContext();
+      await executeTool(ctx, {
+        toolName: "exec",
+        toolCallId: "background-start",
+        args: { command: "perform-side-effect" },
+        isError: false,
+        result: { details: { status: "running", sessionId: "process-one", startedAt: 1 } },
+      });
+      await executeTool(ctx, {
+        toolName: "process",
+        toolCallId: "background-running-poll",
+        args: { action: "poll", sessionId: "process-one" },
+        isError: false,
+        result: { details: { status: "running", sessionId: "process-one", startedAt: 1 } },
+      });
+      await executeTool(ctx, {
+        toolName: "process",
+        toolCallId: "background-final-result",
+        args: {
+          action: action ?? "poll",
+          sessionId: requestedSessionId ?? details.sessionId ?? "process-one",
+        },
+        isError: details.status === "failed" || details.status === "error",
+        result: { details: { startedAt: 1, ...details } },
+      });
+
+      for (const meta of ctx.state.toolMetas.slice(0, 2)) {
+        expect(meta).toMatchObject({
+          asyncStarted: true,
+          asyncExec: { sessionId: "process-one", startedAt: 1 },
+        });
+        expect(meta.asyncExec?.settled === true).toBe(settled);
+      }
+      expect(ctx.state.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
+    },
+  );
+
+  it.each([
+    { toolName: "exec", status: "running", asynchronous: true },
+    { toolName: "bash", status: "running", asynchronous: true },
+    { toolName: "process", status: "running", asynchronous: true },
+    { toolName: "exec", status: "completed", asynchronous: false },
+    { toolName: "process", status: "completed", asynchronous: false },
+    { toolName: "exec", status: "approval-pending", asynchronous: false },
+    { toolName: "other_tool", status: "running", asynchronous: false },
+  ])(
+    "preserves $toolName $status terminal ownership",
+    async ({ toolName, status, asynchronous }) => {
+      const { ctx } = createTestContext();
+      await executeTool(ctx, {
+        toolName,
+        toolCallId: "tool-background",
+        args: { command: "sleep 1", action: "poll", sessionId: "process-session" },
+        isError: false,
+        result: { details: { status, sessionId: "process-session", runId: "exec-ledger-run" } },
+      });
+      const meta = ctx.state.toolMetas[0];
+      expect(meta?.asyncStarted === true).toBe(asynchronous);
+      expect(meta?.asyncTaskRunId).toBeUndefined();
+      if (status === "approval-pending") {
+        return;
+      }
+      const instruction = resolveSettledToolTerminalContinuationInstruction({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        allowEmptyStopContinuation: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          terminal: { kind: "ok" },
+          currentAttemptAssistant: buildEmbeddedRunnerAssistant({
+            model: "gpt-5.4",
+            stopReason: "stop",
+            content: [],
+          }),
+          toolMetas: [{ ...meta, toolName }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        }),
+      });
+      expect(instruction === null).toBe(asynchronous);
+    },
+  );
+
   it("marks every finalized built-in call with its explicit outcome", async () => {
     const { ctx } = createTestContext();
 
@@ -1624,7 +1797,9 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     await endTool(ctx, {
       toolName: "image_generate",
       toolCallId: "tool-image-async-started",
-      result: { details: { async: true, status: "started" } },
+      result: {
+        details: { async: true, status: "started", runId: "media-run", taskId: "media-task" },
+      },
     });
     await endTool(ctx, {
       toolName: "write",
@@ -1644,7 +1819,11 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       { toolName: "image_generate", isError: false },
       { toolName: "write", isError: true },
     ]);
-    expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
+    expect(ctx.state.toolMetas[2]).toMatchObject({
+      asyncStarted: true,
+      asyncTaskRunId: "media-run",
+      asyncTaskId: "media-task",
+    });
   });
 
   it("marks a parked Code Mode exec only when the tool is the marked control tool", async () => {

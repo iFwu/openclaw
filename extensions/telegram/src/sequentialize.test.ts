@@ -51,6 +51,36 @@ function createSequencedBot(handler: MiddlewareFn) {
 }
 
 describe("Telegram sequential middleware", () => {
+  it("dispatches Stop while a same-chat status handler is held", async () => {
+    const gate = createDeferred<void>();
+    const statusStarted = createDeferred<void>();
+    const started: string[] = [];
+    const bot = createSequencedBot(async (ctx) => {
+      const text = ctx.message?.text ?? "";
+      started.push(text);
+      if (text === "/status") {
+        statusStarted.resolve();
+        await gate.promise;
+      }
+    });
+    const statusUpdate = topicMessage(11, 111, 9);
+    const stopUpdate = topicMessage(12, 112, 9);
+    if (!statusUpdate.message || !stopUpdate.message) {
+      throw new Error("message fixture missing");
+    }
+    statusUpdate.message.text = "/status";
+    stopUpdate.message.text = "/stop";
+    const status = bot.handleUpdate(statusUpdate);
+    try {
+      await statusStarted.promise;
+      await bot.handleUpdate(stopUpdate);
+      expect(started).toEqual(["/status", "/stop"]);
+    } finally {
+      gate.resolve();
+      await status;
+    }
+  });
+
   it("reserves overlapping lanes in FIFO order without blocking other topics or deleting newer tails", async () => {
     const firstGate = createDeferred<void>();
     const secondGate = createDeferred<void>();

@@ -174,10 +174,11 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isTelegramControlLaneText({ rawText, botUsername })) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
-    }
-    return "telegram:control";
+    const abortOptions = botUsername
+      ? { botUsername }
+      : { targetedCommandMode: "pre-identity" as const };
+    const lane = isAbortRequestText(rawText, abortOptions) ? "abort" : "control";
+    return typeof chatId === "number" ? `telegram:${chatId}:${lane}` : `telegram:${lane}`;
   }
   if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
     const messageId = msg?.message_id;

@@ -59,6 +59,7 @@ export type SessionPendingInputOwner = {
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  retainCancelled?: () => boolean;
   restartRecovered?: true;
   /** Aggregate authority is the exact source closures, never persisted source identifiers. */
   sources?: readonly SessionPendingInputOwner[];
@@ -111,27 +112,51 @@ export function finishSessionPendingInputOwner(
   disposition: Exclude<SessionPendingInputState, "queued">,
   source: CapturedSessionEntryReadSource,
   options: OpenClawAgentDatabaseOptions,
-): void {
+): boolean {
   // Release authority even if recording the terminal disposition fails.
   releaseSessionPendingInputOwner(owner);
   if (owner.consumed) {
-    return;
+    return false;
   }
   const capturedOptions = { ...options, agentId: source.agentId, path: source.path };
   assertCapturedSessionEntryReadSource(source, getOpenClawAgentDatabaseIfOpen(capturedOptions));
-  runOpenClawAgentWriteTransaction(
+  return runOpenClawAgentWriteTransaction(
     (current) => {
       assertCapturedSessionEntryReadSource(source, current);
+      const db = getSessionKysely(current.db);
+      const exactInput = () =>
+        db
+          .selectFrom("session_pending_inputs")
+          .select(["state", "consumed_event_id"])
+          .where("input_id", "=", owner.inputId)
+          .where("session_key", "=", owner.sessionKey)
+          .where("session_id", "=", owner.sessionId)
+          .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+          .where("message_json", "=", owner.messageJson);
+      const before = executeSqliteQueryTakeFirstSync(current.db, exactInput());
+      if (!before || before.consumed_event_id != null) {
+        return false;
+      }
+      if (before.state === disposition) {
+        return true;
+      }
+      if (before.state !== "queued") {
+        return false;
+      }
       executeSqliteQuerySync(
         current.db,
-        getSessionKysely(current.db)
+        db
           .updateTable("session_pending_inputs")
           .set({ state: disposition })
           .where("input_id", "=", owner.inputId)
+          .where("session_key", "=", owner.sessionKey)
+          .where("session_id", "=", owner.sessionId)
           .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+          .where("message_json", "=", owner.messageJson)
           .where("state", "=", "queued")
           .where("consumed_event_id", "is", null),
       );
+      return executeSqliteQueryTakeFirstSync(current.db, exactInput())?.state === disposition;
     },
     capturedOptions,
     { operationLabel: "session.pending-input.finish-owner" },

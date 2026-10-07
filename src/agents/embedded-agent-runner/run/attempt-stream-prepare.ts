@@ -1,3 +1,4 @@
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -17,6 +18,7 @@ import {
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import { createApprovalDeniedAbortError } from "../../approval-denied-abort.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -73,7 +75,7 @@ import type { EmbeddedRunAttemptParams, StreamRunState } from "./types.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
-  cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+  cancel: (reason?: "user_abort" | "restart" | "superseded" | "approval-denied") => void;
 };
 
 type PrepareEmbeddedAttemptStreamInput = {
@@ -426,7 +428,9 @@ function prepareStream(
   });
 
   let externalAbortAccepted = false;
-  const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+  const abortActiveRunExternally = (
+    reason?: "user_abort" | "restart" | "superseded" | "approval-denied",
+  ) => {
     // Reply cancellation can synchronously re-enter through this same backend.
     // Latch before callbacks so the first reason owns every abort side effect.
     if (externalAbortAccepted) {
@@ -435,13 +439,15 @@ function prepareStream(
     externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onDeferredLifecycleAbort?.(reason);
-    attempt.onAttemptAbort?.();
     const abortReason =
-      reason === "restart"
-        ? createAgentRunRestartAbortError()
-        : reason === "superseded"
-          ? createAgentRunSupersededAbortError()
-          : undefined;
+      reason === "approval-denied"
+        ? createApprovalDeniedAbortError()
+        : reason === "restart"
+          ? createAgentRunRestartAbortError()
+          : reason === "superseded"
+            ? createAgentRunSupersededAbortError()
+            : undefined;
+    attempt.onAttemptAbort?.(abortReason);
     input.abortRun(false, abortReason);
   };
   const hasCurrentRegistration = () => {
@@ -455,7 +461,43 @@ function prepareStream(
       ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
     );
   };
-  const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
+  const canInject = () => {
+    try {
+      const accepted = isSteeringAdmissionOpen() && hasCurrentRegistration();
+      if (!accepted) {
+        try {
+          log.warn("steer injection guard rejected", {
+            runId: redactIdentifier(attempt.runId),
+            sessionId: redactIdentifier(attempt.sessionId),
+            sessionKey: redactIdentifier(attempt.sessionKey),
+            accepting: admission.accepting,
+            runAborted: input.getRunState().aborted,
+            abortSignal: input.runAbortController.signal.aborted,
+            registrationPresent: registration !== undefined,
+            registrationCurrent:
+              ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration,
+            sessionHandleCurrent: ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle,
+            runHandleCurrent: ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle,
+          });
+        } catch {
+          // Diagnostics must not change the live injection predicate.
+        }
+      }
+      return accepted;
+    } catch (error) {
+      try {
+        log.warn("steer injection guard threw", {
+          runId: redactIdentifier(attempt.runId),
+          sessionId: redactIdentifier(attempt.sessionId),
+          sessionKey: redactIdentifier(attempt.sessionKey),
+          errorType: error instanceof Error ? "Error" : typeof error,
+        });
+      } catch {
+        // Keep the original authority failure when a diagnostic sink fails.
+      }
+      throw error;
+    }
+  };
   type InputAuthority = NonNullable<
     Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
   >;

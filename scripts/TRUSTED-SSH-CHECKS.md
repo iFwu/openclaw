@@ -63,6 +63,23 @@ Resolve toolchain versions from the candidate's `package.json` and lockfile.
 The 9.7 preparation used Node 26.8.1 and pnpm 12.5.1; verify the target versions
 before execution. Do not install into a live Gateway checkout.
 
+## Disposable host memory override
+
+The bounded owner keeps 4 GiB headroom and a 24 GiB dedicated-large task by default.
+For an operator-authorized disposable host, pass `--reserve-gib 1` explicitly and
+use `--profile dedicated-large --large-memory-gib 27` when its available memory
+covers the 28 GiB admission threshold. Add `--fit-available` to select the task's
+actual hard cap as `min(27, floor(MemAvailableGiB) - 1)` instead of refusing a task
+merely because the configured ceiling is unavailable. This opt-in keeps a 14 GiB
+minimum for large tasks; the configured slice stays at 29 GiB and is still
+verified. Keep single-file lint on the ordinary explicit 8 GiB budget. The dedicated slice must be configured at
+29 GiB (task plus the existing 2 GiB slice margin), with no swap and CPUQuota=800%.
+Inspect the active slice and every ancestor limit before changing it; preserve
+unrelated settings and save the original configuration. Never resize a slice used
+by another check. Task cgroup verification, the exclusive host lock, source
+identity, and cleanup receipts remain mandatory. Other hosts inherit unchanged
+defaults unless their operator explicitly opts in.
+
 ## Run an already synchronized candidate
 
 The examples use Bash. Set `SOURCE_SHA` to the exact committed candidate on dev,

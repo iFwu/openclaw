@@ -1335,6 +1335,7 @@ export async function performGatewaySessionReset(params: {
             spawnedBy: currentEntry?.spawnedBy,
             completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
             inheritedToolPolicyVersion: currentEntry?.inheritedToolPolicyVersion,
+            inheritedApprovalOrigin: currentEntry?.inheritedApprovalOrigin,
             inheritedToolAllow: currentEntry?.inheritedToolAllow,
             inheritedToolDeny: currentEntry?.inheritedToolDeny,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,

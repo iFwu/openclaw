@@ -245,7 +245,11 @@ export async function executeFastAbortRequest(
         cfg,
         requesterSessionKey,
         requesterAgentId: agentId,
-        beforeKill: () => {
+        beforeKill: async () => {
+          if (params.isCommandTargetCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
+          await params.onAdopted?.();
           if (params.isCommandTargetCurrent?.() === false) {
             throw new Error("The selected session changed before it could be stopped.");
           }
@@ -368,6 +372,10 @@ export async function executeFastAbortRequest(
     }
   }
 
+  await params.onAdopted?.();
+  if (params.isCommandTargetCurrent?.() === false) {
+    throw new Error("The selected session changed before it could be stopped.");
+  }
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }

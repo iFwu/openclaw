@@ -383,7 +383,7 @@ async function writeSteeringToolsPlugin(
         "    api.registerTool({",
         `      name: ${JSON.stringify(STEERING_TAIL_TOOL)},`,
         '      label: "Steering Tail",',
-        '      description: "Record if the steering tail executes unexpectedly.",',
+        '      description: "Record completion of the sequential steering tail.",',
         '      parameters: { type: "object", properties: {}, additionalProperties: false },',
         '      executionMode: "sequential",',
         "      async execute() {",
@@ -840,7 +840,7 @@ describe("Gateway steer FIFO", () => {
   );
 
   it(
-    "suppresses sequential tools when a Gateway steer arrives during preflight",
+    "finishes sequential tools when a Gateway steer arrives during preflight",
     async () => {
       const fixture = await createGatewayFixture("steer-sequential-tail", {
         withSteeringTools: true,
@@ -870,6 +870,8 @@ describe("Gateway steer FIFO", () => {
           expect(await readTrace(steeringTools.tracePath)).toEqual([
             "preflight-start",
             "preflight-end",
+            "gate-executed",
+            "tail-executed",
           ]),
         WAIT_OPTS,
       );
@@ -892,15 +894,13 @@ describe("Gateway steer FIFO", () => {
       expect(gateOutputIndex).toBeGreaterThanOrEqual(0);
       expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
-      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain(
-        "Skipped to process an incoming message.",
-      );
-      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped to process an incoming message.",
-      );
+      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
+      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain("steering tail executed");
       expect(await readTrace(steeringTools.tracePath)).toEqual([
         "preflight-start",
         "preflight-end",
+        "gate-executed",
+        "tail-executed",
       ]);
       expect(fixture.modelServer.requests).toHaveLength(2);
       expect(fixture.chatErrors).toEqual([]);
@@ -909,7 +909,7 @@ describe("Gateway steer FIFO", () => {
   );
 
   it(
-    "finishes a running tool, skips its sequential tail, and injects a UI steer once",
+    "finishes a running tool and its sequential tail before injecting a UI steer once",
     async () => {
       const fixture = await createGatewayFixture("steer-running-tool-tail", {
         withSteeringTools: true,
@@ -956,6 +956,7 @@ describe("Gateway steer FIFO", () => {
           expect(await readTrace(steeringTools.tracePath)).toEqual([
             "gate-execute-start",
             "gate-execute-end",
+            "tail-executed",
           ]),
         WAIT_OPTS,
       );
@@ -979,12 +980,7 @@ describe("Gateway steer FIFO", () => {
       expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
       expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
-      expect(contentText(inputItems[gateOutputIndex]?.output)).not.toContain(
-        "Skipped to process an incoming message.",
-      );
-      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped to process an incoming message.",
-      );
+      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain("steering tail executed");
       expect(
         fixture.modelServer.requests
           .flatMap((request) => userInputs(request))

@@ -13,6 +13,8 @@ export type FastAbortRequestParams = {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   isCommandTargetCurrent?: () => boolean;
+  /** Transfer ingress custody before a non-idempotent cancellation effect. */
+  onAdopted?: () => void | Promise<void>;
 };
 
 export type FastAbortResult = {

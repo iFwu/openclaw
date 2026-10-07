@@ -15,6 +15,7 @@ import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramApprovalCallback } from "./approval-callback-data.js";
+import { deliverGuardTerminal } from "./approval-terminal-delivery.js";
 import {
   buildTelegramCanonicalApprovalTerminalText,
   buildTelegramInvalidApprovalTerminalText,
@@ -170,13 +171,27 @@ export function createTelegramCallbackApprovalRuntime(params: {
   const terminalizeCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
     result: Awaited<ReturnType<typeof resolveCanonicalApproval>>,
-  ) =>
-    await terminalizeApprovalMessage(
-      buildTelegramCanonicalApprovalTerminalText({
-        result,
-        fallbackApprovalId: approvalCallback.approvalId,
-      }),
-    );
+  ) => {
+    const text = buildTelegramCanonicalApprovalTerminalText({
+      result,
+      fallbackApprovalId: approvalCallback.approvalId,
+    });
+    if (
+      result.approval.presentation?.kind === "plugin" &&
+      result.approval.presentation.pluginId === "approval-guard" &&
+      actions.approvalMessageKey
+    ) {
+      return deliverGuardTerminal({
+        key: `${accountId}:${actions.approvalMessageKey}`,
+        edit: () => editCallbackMessage(text, { reply_markup: { inline_keyboard: [] } }),
+        fallback: async () => {
+          await clearTerminalApprovalButtons();
+          await replyToCallbackChat(text);
+        },
+      });
+    }
+    return terminalizeApprovalMessage(text);
+  };
 
   const handleCanonical = async (approvalCallback: TelegramApprovalCallback): Promise<void> => {
     const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =

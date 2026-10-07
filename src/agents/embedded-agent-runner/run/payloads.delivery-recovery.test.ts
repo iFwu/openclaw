@@ -4,6 +4,44 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads delivery recovery", () => {
+  it("keeps voice intent and terminal transcript ownership on their own answer", () => {
+    const prior = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "MEDIA:/tmp/first.ogg" }],
+      openclawDelivery: { audioAsVoice: true },
+    } as AssistantMessage;
+    const current = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "MEDIA:/tmp/second.mp3" }],
+    } as AssistantMessage;
+    const payloads = buildPayloads({
+      answerSegments: [{ textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: prior }],
+      lastAssistant: current,
+      assistantMessageIndex: 3,
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "terminal-answer",
+    });
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ mediaUrl: "/tmp/first.ogg", audioAsVoice: true });
+    expect(payloads[1]).toMatchObject({ mediaUrl: "/tmp/second.mp3" });
+    expect(payloads[1]).not.toHaveProperty("audioAsVoice");
+    expect(getReplyPayloadMetadata(payloads[0]!)).toMatchObject({
+      assistantMessageIndex: 1,
+      precedingInputAnswer: true,
+    });
+    expect(getReplyPayloadMetadata(payloads[0]!)).not.toHaveProperty("assistantTranscriptOwned");
+    expect(getReplyPayloadMetadata(payloads[0]!)).not.toHaveProperty(
+      "assistantTranscriptIdempotencyKey",
+    );
+    expect(getReplyPayloadMetadata(payloads[1]!)).toMatchObject({
+      assistantMessageIndex: 3,
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "terminal-answer",
+    });
+  });
+
   it("uses persisted delivery facts for a recovered final assistant", () => {
     const payloads = buildPayloads({
       lastAssistant: {

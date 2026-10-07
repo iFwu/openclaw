@@ -102,7 +102,8 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
         );
   const renderDraftText = (text: string): TelegramDraftPreview => renderStreamText(params, text);
 
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+  const replyTargetState = { consumed: false, pending: false };
+  const createDraftLane = (laneName: LaneName | "progress", enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: params.bot.api,
@@ -111,6 +112,12 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           thread: params.context.threadSpec,
           replyToMessageId: params.draftReplyToMessageId,
           replyToMode: params.replyToMode,
+          canUseReplyTarget: () =>
+            !replyTargetState.consumed &&
+            !replyTargetState.pending &&
+            ![progressLane, ...Object.values(lanes)].some((lane) =>
+              lane.stream?.hasConsumedReplyTarget(),
+            ),
           replyQuote:
             params.draftReplyToMessageId != null
               ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
@@ -120,7 +127,10 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,
           onRetainedPage: (page) => {
-            lanes[laneName].retainedPromptContextPages.push({
+            (laneName === "progress"
+              ? progressLane
+              : lanes[laneName]
+            ).retainedPromptContextPages.push({
               messageId: page.messageId,
               text: page.textSnapshot,
             });
@@ -181,6 +191,10 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       retainedPromptContextPages: [],
     };
   };
+  const progressLane = createDraftLane(
+    "progress",
+    canStreamAnswerDraft && params.streamMode === "progress",
+  );
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
     reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
@@ -198,6 +212,8 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
 
   return {
     answerLane: lanes.answer,
+    progressLane,
+    replyTargetState,
     reasoningLane: lanes.reasoning,
     lanes,
     streamDeliveryEnabled,
@@ -299,10 +315,7 @@ export async function rotateAnswerLaneAfterQueuedBlocksSettle(turn: Turn): Promi
 }
 
 export async function prepareAnswerLaneForText(turn: Turn): Promise<boolean> {
-  if (turn.streamMode === "progress") {
-    return false;
-  }
-  if (await rotateAnswerLaneAfterToolProgress(turn)) {
+  if (turn.streamMode !== "progress" && (await rotateAnswerLaneAfterToolProgress(turn))) {
     return true;
   }
   if (await rotateAnswerLaneAfterQueuedBlocksSettle(turn)) {
@@ -373,12 +386,14 @@ function updateTelegramDraftFromPartial(
   }
   const previousText = lane === turn.answerLane ? turn.lastAnswerPartialText : lane.lastPartialText;
   const nextText = resolveDraftPartialText(previousText, update);
-  if (!nextText || (lane === turn.answerLane && turn.streamMode === "progress")) {
+  if (!nextText) {
     return undefined;
   }
   if (lane === turn.answerLane) {
     turn.activeAnswerDraftIsToolProgressOnly = false;
-    turn.progressCompositor.resetActivity({ suppressed: true });
+    if (turn.streamMode !== "progress") {
+      turn.progressCompositor.resetActivity({ suppressed: true });
+    }
     turn.lastAnswerPartialText = nextText;
   }
   lane.hasStreamedMessage = true;
@@ -401,12 +416,11 @@ export async function ingestDraftLaneSegments(
       return;
     }
     const rotationPending =
-      turn.streamMode !== "progress" &&
-      (turn.activeAnswerDraftIsToolProgressOnly ||
-        turn.answerLane.finalized ||
-        (turn.rotateAnswerLaneWhenQueuedBlocksSettle &&
-          turn.queuedAnswerBlockRotations.length === 0 &&
-          turn.answerLane.hasStreamedMessage));
+      (turn.streamMode !== "progress" && turn.activeAnswerDraftIsToolProgressOnly) ||
+      turn.answerLane.finalized ||
+      (turn.rotateAnswerLaneWhenQueuedBlocksSettle &&
+        turn.queuedAnswerBlockRotations.length === 0 &&
+        turn.answerLane.hasStreamedMessage);
     if (rotationPending) {
       const text = update.text;
       if (!text) {
@@ -490,6 +504,7 @@ export async function prepareQueuedAnswerBlock(
   blockContext?: BlockReplyContext,
 ): Promise<void> {
   if (
+    payload.isCommentary === true ||
     !splitTextIntoLaneSegments(turn, { text: payload.text }, payload.isReasoning).segments.some(
       (segment) => segment.lane === "answer",
     )
@@ -592,7 +607,7 @@ export function isQueuedAnswerBlock(
 
 export function beginDraftQueuedFollowup(turn: Turn): void {
   turn.progressContinuationAdopted = false;
-  for (const lane of [turn.answerLane, turn.reasoningLane]) {
+  for (const lane of [turn.progressLane, ...Object.values(turn.lanes)]) {
     if (!lane.stream) {
       continue;
     }

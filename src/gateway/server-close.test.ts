@@ -1330,6 +1330,19 @@ describe("createGatewayCloseHandler", () => {
       "gmail-watcher",
       "websocket-server",
       "http-server",
+      "embedding-providers",
+      "cleanup-work",
+      "plugin-services-final-drain",
+      "request-entries-final-drain",
+      "media-cleanup-final-drain",
+      "sdk-work-final-drain",
+      "sdk-resources",
+      "plugin-registry",
+      "plugin-metadata",
+      "model-runtime",
+      "transcript-reconcile-workers",
+      "agent-databases",
+      "global-singletons",
     ]) {
       expect(messages).toContainEqual(
         expect.stringMatching(
@@ -1349,6 +1362,54 @@ describe("createGatewayCloseHandler", () => {
           message.includes("rssMb="),
       ),
     ).toBe(true);
+  });
+
+  it("identifies a held singleton close before secrets can be cleared", async () => {
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+    const pending = createDeferredCore();
+    const entered = createDeferredCore();
+    const key = Symbol("openclaw.test.pendingObservedClose");
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const prefix = "restart trace: restart.close.global-singletons";
+    const ownerPrefix =
+      "restart trace: restart.close.global-singleton.openclaw.test.pendingObservedClose";
+    mocks.logInfo.mockImplementation((message) => {
+      if (String(message).startsWith(`${prefix}.begin `)) {
+        entered.resolve();
+      }
+    });
+    resolveGlobalSingleton(
+      key,
+      () => ({}),
+      () => pending.promise,
+    );
+    startGatewayRestartTrace("restart.signal.received");
+    const closing = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }),
+    )({ reason: "gateway restarting", restartExpectedMs: 123 });
+    const messages = () => mocks.logInfo.mock.calls.map(([message]) => String(message));
+    try {
+      await Promise.race([
+        entered.promise,
+        closing.then(() => {
+          throw new Error("Shutdown finished before the held singleton stage");
+        }),
+      ]);
+      expect(messages().some((message) => message.startsWith(`${ownerPrefix}.begin `))).toBe(true);
+      expect(messages().some((message) => message.startsWith(`${ownerPrefix}.end `))).toBe(false);
+      expect(messages().some((message) => message.startsWith(`${prefix} `))).toBe(false);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+      pending.resolve();
+      await closing;
+      expect(messages().some((message) => message.startsWith(`${ownerPrefix}.end `))).toBe(true);
+      expect(messages().some((message) => message.startsWith(`${prefix} `))).toBe(true);
+      expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+    } finally {
+      pending.resolve();
+      await closing;
+      delete (globalThis as Record<PropertyKey, unknown>)[key];
+      mocks.logInfo.mockReset();
+    }
   });
 
   it("emits restart ready child spans without shortening the parent ready span", async () => {

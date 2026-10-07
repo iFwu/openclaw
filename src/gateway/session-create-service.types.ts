@@ -136,6 +136,7 @@ export type CreateGatewaySessionParams = {
   spawnToolPolicy?: {
     version: 1;
     completionOwnerSessionKey?: string;
+    approvalOrigin?: SessionEntry["inheritedApprovalOrigin"];
     allow: string[];
     deny: string[];
   };

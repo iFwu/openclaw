@@ -188,12 +188,28 @@ function readSettledToolCalls(
 }
 
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
-export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) {
+export function resolveSettledToolBatchEvidence(
+  attempt: IncompleteTurnAttempt,
+  checkpointToolCallIds?: readonly string[],
+) {
   const snapshot = attempt.messagesSnapshot ?? [];
   const latestUserIndex = snapshot.findLastIndex((message) => message.role === "user");
   let assistant = attempt.currentAttemptAssistant;
   let assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
-  if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
+  if (checkpointToolCallIds) {
+    assistantIndex = snapshot.findLastIndex((message) => {
+      if (message.role !== "assistant") {
+        return false;
+      }
+      const calls = readSettledToolCalls(message);
+      return (
+        calls.length === checkpointToolCallIds.length &&
+        calls.every((call, index) => call.id === checkpointToolCallIds[index])
+      );
+    });
+    const candidate = assistantIndex >= 0 ? snapshot[assistantIndex] : undefined;
+    assistant = candidate?.role === "assistant" ? candidate : undefined;
+  } else if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
     assistantIndex = snapshot.findLastIndex(
       (message, index) =>
         index > latestUserIndex &&

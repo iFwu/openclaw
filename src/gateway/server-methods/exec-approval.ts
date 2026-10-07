@@ -44,6 +44,7 @@ import {
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
+import { resolveAgentRuntimeApprovalOrigin } from "./approval-session-origin.js";
 import {
   handleApprovalWaitDecision,
   bindApprovalRequesterMetadata,
@@ -329,6 +330,9 @@ export function createExecApprovalHandlers(
               ...(grantDefaultExpiryDays !== null ? { expiresInDays: grantDefaultExpiryDays } : {}),
             }
           : null;
+      const approvalOrigin = trustedAgentRuntime
+        ? resolveAgentRuntimeApprovalOrigin(trustedAgentRuntime)
+        : undefined;
       const request = {
         command: sanitizedCommandText,
         commandPreview:
@@ -372,16 +376,16 @@ export function createExecApprovalHandlers(
         runId: requestRunId ?? null,
         toolCallId: normalizeOptionalString(p.toolCallId) ?? null,
         turnSourceChannel: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceChannel ?? null)
+          ? (approvalOrigin?.turnSourceChannel ?? null)
           : (normalizeOptionalString(p.turnSourceChannel) ?? null),
         turnSourceTo: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceTo ?? null)
+          ? (approvalOrigin?.turnSourceTo ?? null)
           : (normalizeOptionalString(p.turnSourceTo) ?? null),
         turnSourceAccountId: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceAccountId ?? null)
+          ? (approvalOrigin?.turnSourceAccountId ?? null)
           : (normalizeOptionalString(p.turnSourceAccountId) ?? null),
         turnSourceThreadId: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceThreadId ?? null)
+          ? (approvalOrigin?.turnSourceThreadId ?? null)
           : (p.turnSourceThreadId ?? null),
         cronExecutionSource,
         cronOperationBinding: cronExecutionSource

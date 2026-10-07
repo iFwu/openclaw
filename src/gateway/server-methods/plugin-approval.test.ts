@@ -332,7 +332,7 @@ describe("createPluginApprovalHandlers", () => {
       await manager.resolve(approvalId, "deny");
       await handlerPromise;
       expect(stored?.detail === detail.trim()).toBe(true);
-      expect(broadcastCall(opts).payload.request.detail === detail.trim()).toBe(true);
+      expect(broadcastCall(opts).payload).toMatchObject({ request: { detail: detail.trim() } });
     });
 
     it("sanitizes title/description/detail at creation so every surface gets safe text", async () => {

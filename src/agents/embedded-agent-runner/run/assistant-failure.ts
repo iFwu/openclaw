@@ -39,6 +39,10 @@ import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
+import {
+  resolveModelContinuationEvidence,
+  type createModelContinuationCallbacks,
+} from "./model-continuation.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   isEmbeddedRunTerminalInterrupted,
@@ -96,6 +100,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   suspensionSessionId: string;
   agentDir: string;
   isProbeSession: boolean;
+  prepareModelContinuation?: ReturnType<typeof createModelContinuationCallbacks>["prepare"];
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
   // Successful responses can retain stale error fields. Only current failures
   // may drive retries, profile health, or failure copy.
@@ -143,12 +148,50 @@ export async function handleEmbeddedAssistantFailure(input: {
         classifyRateLimitWindow(failedAssistant?.errorMessage).kind === "short",
     },
   );
+  const assistantSignal = failedAssistant
+    ? buildAssistantFailoverSignal(failedAssistant)
+    : undefined;
+  const assistantStatus = assistantSignal?.status;
   const terminalAssistantError = isTerminalAssistantError(input.attemptAssistant);
-  if (terminalAssistantError || !isCurrentAttemptReplaySafe(input.attempt)) {
+  const needsContinuation =
+    Boolean(input.runParams.modelContinuation?.checkpoint) ||
+    !isCurrentAttemptReplaySafe(input.attempt);
+  const continuationEvidence = needsContinuation
+    ? resolveModelContinuationEvidence({
+        attempt: input.attempt,
+        currentAttemptAssistant: input.currentAttemptAssistant,
+        state: input.runParams.modelContinuation,
+      })
+    : undefined;
+  const canContinue =
+    !terminalAssistantError &&
+    !terminalInterrupted &&
+    !signalOwnedInterruption &&
+    !aborted &&
+    !timedOut &&
+    !promptError &&
+    !input.pluginHarnessOwnsTransport &&
+    (assistantFailoverReason === "rate_limit" ||
+      assistantFailoverReason === "overloaded" ||
+      assistantFailoverReason === "server_error" ||
+      (assistantFailoverReason === "timeout" &&
+        assistantStatus !== undefined &&
+        assistantStatus >= 500 &&
+        assistantStatus < 600)) &&
+    continuationEvidence !== undefined &&
+    input.prepareModelContinuation !== undefined;
+  if (
+    terminalAssistantError ||
+    input.runParams.modelContinuation?.crossModelBlocked ||
+    (needsContinuation && !canContinue)
+  ) {
     return buildOutcome(input, {
       action: "proceed",
       assistantProfileFailureReason: terminalAssistantError ? null : assistantProfileFailureReason,
     });
+  }
+  if (canContinue && continuationEvidence && input.prepareModelContinuation) {
+    await input.prepareModelContinuation(continuationEvidence);
   }
   if (fallbackThinking && !terminalInterrupted) {
     log.warn(
@@ -169,10 +212,6 @@ export async function handleEmbeddedAssistantFailure(input: {
     assistantFailoverReason === "no_error_details" ||
     assistantFailoverReason === "unclassified" ||
     assistantFailoverReason === "unknown";
-  const assistantSignal = failedAssistant
-    ? buildAssistantFailoverSignal(failedAssistant)
-    : undefined;
-  const assistantStatus = assistantSignal?.status;
   const nonRetryableClientError =
     assistantSignal !== undefined &&
     assistantStatus !== undefined &&

@@ -38,7 +38,6 @@ export type AsyncToolBatchScheduling = {
 
 export type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
-  steeringMessages: AgentMessage[];
   terminate: boolean;
   terminateRun: boolean;
   intervention?: ToolLoopIntervention;

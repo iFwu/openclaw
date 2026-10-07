@@ -32,6 +32,10 @@ import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { buildErrorAgentMeta } from "./helpers.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import {
+  resolveModelContinuationEvidence,
+  type createModelContinuationCallbacks,
+} from "./model-continuation.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -56,6 +60,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   normalizedAttempt: NormalizedAttempt;
   runtimePlan: Dispatch["runtimePlan"];
   sessionPromptState: SessionPromptState;
+  prepareModelContinuation?: ReturnType<typeof createModelContinuationCallbacks>["prepare"];
   failoverRetryController: FailoverRetryController;
   compactionRuntime: CompactionRuntime;
   contextEngine: Parameters<typeof recoverEmbeddedRunTimeout>[0]["contextEngine"];
@@ -191,7 +196,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
     midTurnBatchSettled &&
-    !asyncActivity;
+    !attempt.toolMetas.some(
+      (entry) => entry.asyncStarted === true && entry.asyncExec?.settled !== true,
+    );
   // A provider can reject the next prompt after writes have settled. Compact
   // their recorded results under this owner without replaying the original task.
   const canRecoverSettledToolResults =
@@ -428,10 +435,26 @@ export async function recoverEmbeddedRunAttempt(input: {
     }))
   ) {
     runInput.laneController.throwIfAborted();
-    sessionPromptState.markOwnedTranscriptRetry();
-    sessionPromptState.continueFromCurrentTranscript({
-      includeToolFailureInstruction: Boolean(attempt.lastToolError),
-    });
+    const continuationState = params.modelContinuation;
+    const continuationEvidence =
+      !runtime.pluginHarnessOwnsTransport && !timedOut && !aborted && !promptError
+        ? resolveModelContinuationEvidence({
+            attempt,
+            currentAttemptAssistant,
+            state: continuationState,
+          })
+        : undefined;
+    if (continuationEvidence && input.prepareModelContinuation) {
+      await input.prepareModelContinuation(continuationEvidence);
+    } else {
+      if (continuationState && (!currentAttemptReplaySafe || continuationState.checkpoint)) {
+        continuationState.crossModelBlocked = true;
+      }
+      sessionPromptState.markOwnedTranscriptRetry();
+      sessionPromptState.continueFromCurrentTranscript({
+        includeToolFailureInstruction: Boolean(attempt.lastToolError),
+      });
+    }
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({
       lastRetryFailoverReason: outputLimitFailure ? input.lastRetryFailoverReason : failureReason,

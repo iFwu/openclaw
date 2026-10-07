@@ -9,6 +9,7 @@ import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.attempts.test-support.js";
+import { registerSettledContinuationTests } from "./model-fallback.run-embedded.continuation.test-support.js";
 import {
   CLOUDFLARE_502_ERROR_PAYLOAD,
   type EmbeddedAttemptParams,
@@ -225,6 +226,7 @@ async function runEmbeddedEntryFallback(params: {
           provider,
           model,
           modelRoutingProvenance: options.modelRoutingProvenance,
+          modelContinuation: options.modelContinuation,
           authProfileIdSource: "auto",
           isFinalFallbackAttempt: options.isFinalFallbackAttempt,
           timeoutMs: 5_000,
@@ -1105,4 +1107,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(primaryCalls.map((params) => params.modelId)).toStrictEqual(["mock-1", "mock-1"]);
     });
   });
+});
+
+registerSettledContinuationTests({
+  runEmbeddedAttemptMock,
+  runEmbeddedEntryFallback,
+  observedModelRoutingProvenance,
+  expectAttemptOrder,
+  expectProviderAttemptCounts,
+  countProviderAttempts,
 });

@@ -119,6 +119,12 @@ const ownedChildMetadata = {
   spawnedBy: "agent:main:main",
   completionOwnerSessionKey: "agent:main:discord:direct:alice",
   inheritedToolPolicyVersion: 1,
+  inheritedApprovalOrigin: {
+    turnSourceChannel: "telegram",
+    turnSourceTo: "-100100",
+    turnSourceAccountId: "requester-bot",
+    turnSourceThreadId: "77",
+  },
   inheritedToolAllow: ["read", "message"],
   inheritedToolDeny: ["exec"],
   spawnedWorkspaceDir: "/tmp/child-workspace",

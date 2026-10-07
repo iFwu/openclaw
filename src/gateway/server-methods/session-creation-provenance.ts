@@ -1,5 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { captureApprovalOrigin } from "../../agents/admitted-run-approval-origin.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -24,6 +25,8 @@ export type TrustedSessionCreation = {
   /** Effective host-prepared permission mode, not a public permission-change request. */
   inheritedPermissionMode?: SessionPermissionMode;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
+  /** Trusted approval-only route captured by the spawning tool. */
+  approvalOrigin?: import("../../agents/admitted-run-approval-origin.js").ApprovalOrigin;
   inheritedToolPolicy?: {
     version: 1;
     allow: string[];
@@ -69,6 +72,17 @@ export function resolveOperatorSessionCreation(
           }
         : {}),
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
+      approvalOrigin: agentRuntimeIdentity.turnSourceLocal
+        ? Object.freeze({ turnSourceLocal: true })
+        : captureApprovalOrigin({
+            provider: agentRuntimeIdentity.turnSourceChannel,
+            to: agentRuntimeIdentity.turnSourceTo,
+            accountId: agentRuntimeIdentity.turnSourceAccountId,
+            threadId:
+              agentRuntimeIdentity.turnSourceThreadId == null
+                ? undefined
+                : String(agentRuntimeIdentity.turnSourceThreadId),
+          }),
       ...(agentRuntimeIdentity.sessionSpawnContext.inheritedPermissionMode
         ? {
             inheritedPermissionMode:

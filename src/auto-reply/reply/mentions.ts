@@ -399,13 +399,11 @@ export function matchesMentionWithExplicit(params: {
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
-/** Removes structural prompt prefixes before mention stripping. */
+/** Normalizes command whitespace without promoting quoted display text to commands. */
 export function stripStructuralPrefixes(text: string): string {
   if (!text) {
     return "";
   }
-  // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
-  // detection still works in group batches that include history/context.
   if (
     text.trimStart().startsWith(HISTORY_CONTEXT_MARKER) ||
     text.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
@@ -414,11 +412,8 @@ export function stripStructuralPrefixes(text: string): string {
     // marker text. Leave it non-command-shaped instead of guessing a boundary.
     return text.trim();
   }
-  const afterEnvelope = text.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
-  const senderPrefixPattern =
-    afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
-
-  const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
+  // Channels provide command text separately; pasted names and timestamps are not boundaries.
+  const stripped = text.replace(/\\n/g, " ").trim();
   if (stripped.startsWith("/")) {
     return stripped.replace(/[ \t]+/g, " ");
   }

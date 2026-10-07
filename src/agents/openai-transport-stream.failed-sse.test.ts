@@ -1,4 +1,3 @@
-import { createServer, type Server } from "node:http";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
@@ -7,6 +6,10 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
+import {
+  closeResponsesSseServer,
+  createResponsesSseServer,
+} from "./test-helpers/responses-sse-server.test-support.js";
 
 const responsesTransports = [
   {
@@ -20,51 +23,6 @@ const responsesTransports = [
     createStream: createAzureOpenAIResponsesTransportStreamFn,
   },
 ] as const;
-
-async function createResponsesSseServer(...events: Record<string, unknown>[]): Promise<{
-  server: Server;
-  baseUrl: string;
-  requestPaths: string[];
-}> {
-  const requestPaths: string[] = [];
-  const server = createServer((request, response) => {
-    requestPaths.push(request.url ?? "");
-    request.resume();
-    request.on("end", () => {
-      response.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-      });
-      for (const event of events) {
-        response.write(`event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => reject(error);
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("Missing Responses loopback server address");
-  }
-  return { server, baseUrl: `http://127.0.0.1:${address.port}/v1`, requestPaths };
-}
-
-async function closeResponsesSseServer(server: Server): Promise<void> {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
 
 describe("failed Responses loopback SSE", () => {
   it.each(

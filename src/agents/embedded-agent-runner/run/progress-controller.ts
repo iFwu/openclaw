@@ -1,7 +1,4 @@
-import {
-  FAST_MODE_AUTO_PROGRESS_KIND,
-  type ReplyPayload,
-} from "../../../auto-reply/reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND } from "../../../auto-reply/reply-payload.js";
 import { emitAgentActivityEvent } from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
@@ -108,9 +105,7 @@ export function createEmbeddedRunProgressController(params: {
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const notifyToolResult = async (payload: ReplyPayload) => {
-    await params.attempt.onToolResult?.(payload);
-  };
+  const notifyToolResult = params.attempt.onToolResult;
   const notifyAgentEvent = async (
     event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
   ) => {

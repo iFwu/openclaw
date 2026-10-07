@@ -13808,7 +13808,7 @@ public struct SendParams: Codable, Sendable {
     public let threadid: String?
     public let forcedocument: Bool?
     public let silent: Bool?
-    public let parsemode: String?
+    public let parsemode: AnyCodable?
     public let sessionkey: String?
     public let idempotencykey: String
 
@@ -13829,7 +13829,7 @@ public struct SendParams: Codable, Sendable {
         threadid: String? = nil,
         forcedocument: Bool? = nil,
         silent: Bool? = nil,
-        parsemode: String? = nil,
+        parsemode: AnyCodable? = nil,
         sessionkey: String? = nil,
         idempotencykey: String)
     {
@@ -18081,6 +18081,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let sandboxmode: AnyCodable?
     public let nativeruntimeconsent: AnyCodable?
     public let model: AnyCodable?
+    public let modelselectionscope: String?
     public let agentruntime: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -18120,6 +18121,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         sandboxmode: AnyCodable? = nil,
         nativeruntimeconsent: AnyCodable? = nil,
         model: AnyCodable? = nil,
+        modelselectionscope: String? = nil,
         agentruntime: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -18158,6 +18160,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.sandboxmode = sandboxmode
         self.nativeruntimeconsent = nativeruntimeconsent
         self.model = model
+        self.modelselectionscope = modelselectionscope
         self.agentruntime = agentruntime
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -18198,6 +18201,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case sandboxmode = "sandboxMode"
         case nativeruntimeconsent = "nativeRuntimeConsent"
         case model
+        case modelselectionscope = "modelSelectionScope"
         case agentruntime = "agentRuntime"
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
@@ -18248,6 +18252,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let sandboxmode: AnyCodable?
     public let nativeruntimeconsent: AnyCodable?
     public let model: AnyCodable?
+    public let modelselectionscope: String?
     public let agentruntime: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -18296,6 +18301,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         sandboxmode: AnyCodable? = nil,
         nativeruntimeconsent: AnyCodable? = nil,
         model: AnyCodable? = nil,
+        modelselectionscope: String? = nil,
         agentruntime: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -18343,6 +18349,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.sandboxmode = sandboxmode
         self.nativeruntimeconsent = nativeruntimeconsent
         self.model = model
+        self.modelselectionscope = modelselectionscope
         self.agentruntime = agentruntime
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -18392,6 +18399,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case sandboxmode = "sandboxMode"
         case nativeruntimeconsent = "nativeRuntimeConsent"
         case model
+        case modelselectionscope = "modelSelectionScope"
         case agentruntime = "agentRuntime"
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"

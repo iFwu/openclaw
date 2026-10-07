@@ -56,8 +56,15 @@ describe("heartbeat event prompts", () => {
         "Uploaded file",
         "Please relay the command output to the user",
         "If it failed",
+        "If the output no longer matters to the conversation or was already handled",
+        "reply NO_REPLY only.",
       ],
-      unexpected: ["system messages above", "Handle the result internally", "[truncated]"],
+      unexpected: [
+        "system messages above",
+        "Handle the result internally",
+        "[truncated]",
+        "heartbeat_respond",
+      ],
     },
     {
       name: "builds internal-only exec prompt when delivery is disabled",
@@ -113,13 +120,17 @@ describe("heartbeat event prompts", () => {
     expect(prompt).not.toContain("HEARTBEAT_OK");
   });
 
-  it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
-    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
+  it.each(["", "Exec completed (abc12345, code 0) :: Uploaded file"])(
+    "uses heartbeat_respond for quiet exec completion events in response-tool mode (%s)",
+    (event) => {
+      const prompt = buildExecEventPrompt([event], { useHeartbeatResponseTool: true });
 
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).not.toContain("HEARTBEAT_OK");
-  });
+      expect(prompt).toContain("heartbeat_respond");
+      expect(prompt).toContain("notify=false");
+      expect(prompt).not.toContain("HEARTBEAT_OK");
+      expect(prompt).not.toContain("NO_REPLY");
+    },
+  );
 });
 
 describe("heartbeat event classification", () => {

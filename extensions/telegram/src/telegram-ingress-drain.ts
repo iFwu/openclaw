@@ -85,7 +85,8 @@ function inspectTelegramSpooledUpdate(
   const derivedLaneKey = telegramSpooledLaneKey(update, botInfo);
   const preservePreIdentityControlLane =
     botInfo !== undefined &&
-    claimedLaneKey?.endsWith(":control") === true &&
+    (claimedLaneKey?.endsWith(":control") === true ||
+      claimedLaneKey?.endsWith(":abort") === true) &&
     claimedLaneKey !== derivedLaneKey &&
     claimedLaneKey === telegramSpooledLaneKey(update);
   return {
@@ -225,7 +226,8 @@ function canReconcileTelegramLegacyLane(params: {
   const baseLaneKey = `telegram:${chatId}`;
   if (
     callback === undefined &&
-    params.derivedLaneKey === `${baseLaneKey}:control` &&
+    (params.derivedLaneKey === `${baseLaneKey}:control` ||
+      params.derivedLaneKey === `${baseLaneKey}:abort`) &&
     telegramSpooledLaneKey(update, params.botInfo) === params.derivedLaneKey
   ) {
     if (
@@ -239,7 +241,12 @@ function canReconcileTelegramLegacyLane(params: {
     // SAFETY: The resolver reads the validated chat/thread fields and parses direct-message IDs itself.
     const thread = resolveTelegramMessageThreadSpec(message as Message, forumFlag);
     const topicLaneKey = thread.id === undefined ? undefined : `${baseLaneKey}:topic:${thread.id}`;
-    return params.storedLaneKey === baseLaneKey || params.storedLaneKey === topicLaneKey;
+    return (
+      params.storedLaneKey === baseLaneKey ||
+      params.storedLaneKey === topicLaneKey ||
+      (params.derivedLaneKey === `${baseLaneKey}:abort` &&
+        params.storedLaneKey === `${baseLaneKey}:control`)
+    );
   }
   if (
     (typedApproval ? !isPrivateChat && !isGroupChat : !isPrivateChat && !isForumGroup) ||
@@ -372,6 +379,11 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       },
       deserialize: (payload) => {
         const update = payload.update;
+        if (payload.updateId !== resolveTelegramUpdateId(update)) {
+          throw new TelegramIngressPayloadError(
+            "Telegram spooled payload changed update identity.",
+          );
+        }
         if (payload.preparedPollAnswer && typeof update === "object" && update !== null) {
           recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
         }

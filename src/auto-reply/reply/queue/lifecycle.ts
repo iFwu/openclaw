@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { defaultRuntime } from "../../../runtime.js";
 import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
 import type { FollowupRun } from "./types.js";
 
@@ -141,7 +143,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 
 export function completeFollowupRunLifecycle(
   run: FollowupLifecycleRun,
-  disposition?: "consumed",
+  disposition?: "consumed" | "retained",
 ): void {
   try {
     run.steerPending?.settle(false);
@@ -149,16 +151,30 @@ export function completeFollowupRunLifecycle(
     // A failed steer notification must not strand already-detached lifecycle custody.
     const lifecycle = run.turnAdoptionLifecycle;
 
+    const reportCompletionError = (error: unknown) => {
+      defaultRuntime.error(
+        `followup queue lifecycle completion failed: ${formatErrorMessage(error)}`,
+      );
+    };
     const finish = () => {
       if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
         return;
       }
       completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-      // Async onAbandoned work must contain its own rejections; core guarantees a
-      // non-rejecting promise. onSettled must still run after a synchronous throw.
+      if (disposition === "retained" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
+        // Adoption means recovery state is durable, even when no provider will consume this input.
+        void Promise.resolve()
+          .then(() => lifecycle.onAdopted())
+          .catch(reportCompletionError)
+          .finally(() => lifecycle.onSettled?.())
+          .catch(reportCompletionError);
+        return;
+      }
+      // Queue cleanup stays synchronous; source owners retain their async work.
+      // onSettled must still run after a synchronous abandonment failure.
       try {
         if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
-          lifecycle.onAbandoned?.();
+          void Promise.resolve(lifecycle.onAbandoned?.()).catch(reportCompletionError);
         }
       } finally {
         lifecycle.onSettled?.();
@@ -176,7 +192,7 @@ export function completeFollowupRunLifecycle(
     } else {
       // Completion closes future admission immediately, but the callback waits for
       // the in-flight admission attempt so adoption and abandonment cannot race.
-      void admission.then(finish, finish).catch(() => {});
+      void admission.then(finish, finish).catch(reportCompletionError);
     }
   }
 }

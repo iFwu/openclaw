@@ -61,6 +61,7 @@ const replySpy = vi.fn<ReplyResolver>();
 const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
 const listSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.listSkillCommandsForAgents);
 const pendingUpdates = new Set<Promise<void>>();
+const dispatchTrace: Array<Record<string, unknown>> = [];
 
 async function settleUpdates(): Promise<void> {
   while (pendingUpdates.size > 0) {
@@ -69,6 +70,7 @@ async function settleUpdates(): Promise<void> {
 }
 
 export const harness = {
+  dispatchTrace,
   get state() {
     return state;
   },
@@ -169,8 +171,26 @@ export async function createBot(
     fetchAbortSignal: abort.signal,
     telegramTransport: { fetch, sourceFetch: fetch, close: async () => {} },
     telegramDeps: harness.telegramBotDepsForTest,
-    dispatchReplyFromConfig: (params) =>
-      dispatchInboundMessage({ ...params, replyResolver: replySpy }),
+    dispatchReplyFromConfig: async (params) => {
+      const facts = {
+        body: params.ctx.RawBody,
+        sessionKey: params.ctx.SessionKey,
+        target: params.ctx.CommandTargetSessionKey,
+      };
+      try {
+        const result = await dispatchInboundMessage({ ...params, replyResolver: replySpy });
+        dispatchTrace.push({
+          ...facts,
+          result,
+          aborted: params.replyOptions?.abortSignal?.aborted,
+          abortReason: String(params.replyOptions?.abortSignal?.reason ?? ""),
+        });
+        return result;
+      } catch (error) {
+        dispatchTrace.push({ ...facts, error: String(error) });
+        throw error;
+      }
+    },
   });
   const handleUpdate = bot.handleUpdate.bind(bot);
   bot.handleUpdate = (...args) => {
@@ -270,6 +290,7 @@ beforeEach(async () => {
     createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
   );
   apiCalls.mockReset();
+  dispatchTrace.length = 0;
   apiResponses.clear();
   syntheticTokens.clear();
   http.responseFor = (method, fields) => {

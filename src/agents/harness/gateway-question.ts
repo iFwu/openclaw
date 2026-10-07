@@ -83,6 +83,12 @@ const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
   },
 );
 
+/** Prevent session reset while the native question owner still holds an interaction. */
+export function hasPendingAgentQuestionForSession(sessionKey: string | undefined): boolean {
+  const normalized = sessionKey?.trim();
+  return normalized ? pendingAgentQuestions.has(normalized) : false;
+}
+
 type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () => void };
 
 /** One reservation owns both dispatch refusal and the prompt's release notification. */

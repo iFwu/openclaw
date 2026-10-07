@@ -15,6 +15,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
+import { escapeTelegramHtml } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
@@ -83,7 +84,11 @@ async function resolveTelegramOutboundSendContext(params: {
   resolveSend: ResolveTelegramSendFn;
 }) {
   const outboundTo = normalizeTelegramOutboundTarget(params.to);
-  const send = await params.resolveSend(params.deps);
+  const rawSend = await params.resolveSend(params.deps);
+  const send: typeof rawSend =
+    params.formatting?.parseMode === "plain"
+      ? (to, text, options) => rawSend(to, escapeTelegramHtml(text), options)
+      : rawSend;
   return {
     outboundTo,
     send,
@@ -107,7 +112,9 @@ async function resolveTelegramOutboundSendContext(params: {
         : undefined,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
-      ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
+      ...(params.formatting?.parseMode === "HTML" || params.formatting?.parseMode === "plain"
+        ? { textMode: "html" as const }
+        : {}),
       tableMode: params.formatting?.tableMode,
       textLimit: params.formatting?.textLimit,
       chunkMode: params.formatting?.chunkMode,
@@ -380,7 +387,7 @@ export function createTelegramOutboundAdapter(
         richMessages: resolveTelegramRichMessages({
           cfg,
           accountId,
-          htmlTextMode: formatting?.parseMode === "HTML",
+          htmlTextMode: formatting?.parseMode === "HTML" || formatting?.parseMode === "plain",
         }),
       }),
     deliveryCapabilities: {
@@ -405,7 +412,8 @@ export function createTelegramOutboundAdapter(
           richTables: resolveTelegramRichMessages({
             cfg: ctx.cfg,
             accountId: ctx.accountId,
-            htmlTextMode: ctx.formatting?.parseMode === "HTML",
+            htmlTextMode:
+              ctx.formatting?.parseMode === "HTML" || ctx.formatting?.parseMode === "plain",
           }),
         },
       ),
@@ -413,17 +421,23 @@ export function createTelegramOutboundAdapter(
       const telegramResults = results.filter(
         (candidate) => candidate.channel === "telegram" && candidate.messageId,
       );
+      const textResults = telegramResults.filter(
+        (candidate) =>
+          typeof candidate.meta?.telegramDeliveredText === "string" &&
+          candidate.meta.telegramDeliveredText.trim(),
+      );
       const result =
-        telegramResults.find((candidate) => candidate.meta?.telegramHasInlineKeyboard === true) ??
-        telegramResults.at(-1);
-      const text = (
-        typeof result?.meta?.telegramDeliveredText === "string"
-          ? result.meta.telegramDeliveredText
-          : payload.text
-      )?.trim();
-      if (!result || !text) {
+        textResults.find((candidate) => candidate.meta?.telegramHasInlineKeyboard === true) ??
+        textResults.at(-1) ??
+        telegramResults.find((candidate) => candidate.meta?.telegramHasInlineKeyboard === true);
+      if (!result) {
         return;
       }
+      // Authored text is not proof that this physical message accepted a body or caption.
+      const text =
+        typeof result.meta?.telegramDeliveredText === "string"
+          ? result.meta.telegramDeliveredText.trim()
+          : "";
       const chatId =
         result.target?.kind === "chat"
           ? result.target.id
@@ -447,11 +461,19 @@ export function createTelegramOutboundAdapter(
         textLimit: isCaptionDelivery ? TELEGRAM_MAX_CAPTION_LENGTH : TELEGRAM_TEXT_CHUNK_LIMIT,
         clearButtons: async () => {
           const { editMessageReplyMarkupTelegram } = await loadSendModule();
-          await editMessageReplyMarkupTelegram(chatId, messageId, [], {
-            cfg,
-            accountId,
-            verbose: false,
-          });
+          for (const controlled of telegramResults.filter(
+            (candidate) => candidate.meta?.telegramHasInlineKeyboard === true,
+          )) {
+            const controlledChatId =
+              controlled.target?.kind === "chat"
+                ? controlled.target.id
+                : normalizeTelegramOutboundTarget(target.to);
+            await editMessageReplyMarkupTelegram(controlledChatId, controlled.messageId, [], {
+              cfg,
+              accountId,
+              verbose: false,
+            });
+          }
         },
         annotate: async (finalText) => {
           const { editMessageTelegram } = await loadSendModule();

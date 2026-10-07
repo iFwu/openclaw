@@ -16,10 +16,10 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { normalizeUsage } from "../../usage.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
-import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import {
   disabledCompactionRuntime,
+  handleAssistantFailureAfterRecovery,
   recoverAfterTransportDrop,
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
@@ -59,50 +59,6 @@ it.each(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"])(
   },
 );
 
-function handleAssistantFailureAfterRecovery(
-  fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>,
-  previousRetryFailoverReason: Parameters<
-    typeof handleEmbeddedAssistantFailure
-  >[0]["previousRetryFailoverReason"] = null,
-) {
-  const { attempt, erroredAssistant: assistant, failoverRetryController: failover } = fixture;
-  return handleEmbeddedAssistantFailure({
-    runParams: {
-      sessionId: "session:transport-drop",
-      runId: "run:transport-drop",
-      workspaceDir: "/tmp/provider-recovery-test",
-      prompt: "Continue",
-      timeoutMs: 60_000,
-    },
-    attempt,
-    attemptAssistant: assistant,
-    currentAttemptAssistant: assistant,
-    terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-    activeErrorContext: { provider: "openai", model: "synthetic-model" },
-    provider: "openai",
-    providerOwner: undefined,
-    modelId: "synthetic-model",
-    model: "synthetic-model",
-    thinkLevel: "off",
-    getThinkLevel: () => "off",
-    attemptedThinking: new Set(["off"]),
-    fallbackConfigured: true,
-    pluginHarnessOwnsTransport: false,
-    authProfileStore: { version: 1, profiles: {} },
-    runtimeAuthRetry: false,
-    maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
-    failover,
-    emptyErrorRetries: 0,
-    overloadProfileRotations: 0,
-    previousRetryFailoverReason,
-    traceAttempts: [],
-    suspendForFailure: vi.fn(),
-    suspensionSessionId: "session:transport-drop",
-    agentDir: "/tmp/provider-recovery-test",
-    isProbeSession: false,
-  });
-}
-
 const outputLimitDetails = {
   eventType: "response.incomplete",
   stopReason: "length",
@@ -123,6 +79,44 @@ const outputLimitScenario = {
 } satisfies TransportDropScenario;
 
 describe("recoverEmbeddedRunAttempt", () => {
+  it("checkpoints settled tools before a same-model provider retry", async () => {
+    const fixture = await recoverAfterTransportDrop({
+      enableModelContinuation: true,
+      diagnostics: [],
+      errorMessage: "429 provider rate limit",
+      content: [],
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.modelContinuation.checkpoint).toMatchObject({
+      toolCallIds: ["call_1", "call_2"],
+      includeToolFailureInstruction: false,
+    });
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledOnce();
+  });
+
+  it("keeps cross-model recovery blocked after uncertain work and a model-only retry", async () => {
+    const fixture = await recoverAfterTransportDrop({
+      enableModelContinuation: true,
+      diagnostics: [],
+      errorMessage: "429 provider rate limit",
+      content: [],
+      activeCount: 1,
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.modelContinuation.crossModelBlocked).toBe(true);
+    fixture.attempt.toolMetas = [];
+    fixture.attempt.itemLifecycle = { startedCount: 0, completedCount: 0, activeCount: 0 };
+    fixture.attempt.currentAttemptReplayMetadata = {
+      replaySafe: true,
+      hadPotentialSideEffects: false,
+    };
+
+    expect((await fixture.recover()).action).toBe("retry");
+    expect(fixture.modelContinuation.crossModelBlocked).toBe(true);
+    expect(fixture.modelContinuation.checkpoint).toBeUndefined();
+    expect(fixture.prepareModelContinuation).not.toHaveBeenCalled();
+  });
+
   it.each([
     { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
     { retryAvailable: false, decision: "rejected", reason: "replay_unsafe" },
@@ -548,56 +542,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     const { recovery } = await recoverAfterTransportDrop(projection);
     expect(recovery.action).toBe("retry");
     expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(7000, undefined);
-  });
-
-  it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {
-    const fixture = await recoverAfterTransportDrop({
-      errorMessage: "429 provider rate limit",
-      diagnostics: [],
-      content: [],
-      replaySafe: true,
-    });
-    const { failoverRetryController: failover } = fixture;
-    expect(fixture.recovery.action).toBe("retry");
-    for (let retry = 2; retry <= 9; retry++) {
-      expect((await fixture.recover()).action).toBe("retry");
-    }
-    expect(failover.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(9);
-    expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.attempt)).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10,
-    ]);
-    await expect(handleAssistantFailureAfterRecovery(fixture, "rate_limit")).rejects.toMatchObject({
-      name: "FailoverError",
-      reason: "rate_limit",
-      status: 429,
-    });
-    expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { errorMessage: "WebSocket error" },
-    {
-      errorMessage: "WebSocket closed: reason included ECONNRESET",
-      errorCode: "ERR_WEBSOCKET_TRANSPORT",
-      diagnostics: [],
-    },
-    { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },
-  ])("continues a settled exec batch after $errorMessage", async (scenario) => {
-    const {
-      recovery,
-      markOwnedTranscriptRetry,
-      continueFromCurrentTranscript,
-      failoverRetryController,
-    } = await recoverAfterTransportDrop(scenario);
-
-    expect(recovery).toMatchObject({ action: "retry" });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
-    expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
   it("continues after a transient transport drop on a settled failed-tool batch", async () => {

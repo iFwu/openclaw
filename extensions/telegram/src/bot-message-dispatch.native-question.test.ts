@@ -33,7 +33,7 @@ describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
     { streamMode: "progress", controls: "buttonless", rejectControls: false },
     { streamMode: "partial", controls: "buttons", rejectControls: true },
   ] as const)(
-    "keeps the accepted $controls question on the $streamMode stream (controls rejected: $rejectControls)",
+    "sends the $controls question separately from the $streamMode preview (controls rejected: $rejectControls)",
     async ({ streamMode, controls, rejectControls }) => {
       vi.useFakeTimers();
       let draft: TelegramDraftStream | undefined;
@@ -60,7 +60,7 @@ describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
         const visible = new Map<number, string>();
         const keyboards = new Map<number, unknown>();
         let nextMessageId = 1001;
-        let rejectedControlEdits = 0;
+        let rejectedControlSends = 0;
         const fetch: typeof globalThis.fetch = async (input, init) => {
           const method = new URL(input instanceof Request ? input.url : String(input)).pathname
             .split("/")
@@ -76,8 +76,8 @@ describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
             keyboards.delete(messageId);
             return Response.json({ ok: true, result: true });
           }
-          if (method === "editMessageText" && payload.reply_markup && rejectControls) {
-            rejectedControlEdits += 1;
+          if (method === "sendMessage" && payload.reply_markup && rejectControls) {
+            rejectedControlSends += 1;
             return Response.json({
               ok: false,
               error_code: 400,
@@ -138,7 +138,8 @@ describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
               },
               { kind: "tool" },
             );
-            questionMessageId = draft?.messageId();
+            questionMessageId = [...visible].find(([, text]) => text === question.text)?.[0];
+            expect(questionMessageId).not.toBe(draft?.messageId());
             expect(visible.get(questionMessageId ?? -1)).toBe(
               "Should this harmless check continue?",
             );
@@ -174,13 +175,13 @@ describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
         });
         await vi.runOnlyPendingTimersAsync();
         if (rejectControls) {
-          expect(rejectedControlEdits).toBe(1);
+          expect(rejectedControlSends).toBe(1);
           expect(register).not.toHaveBeenCalled();
-          expect([...visible.values()]).toEqual(["Should this harmless check continue?"]);
+          expect([...visible.values()]).not.toContain(question.text);
           expect([...keyboards.values()]).toEqual([]);
           expect(statusReactionController.setError).toHaveBeenCalledOnce();
-          expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
-            expect.objectContaining({ success: false, messageId: [...visible.keys()][0] }),
+          expect(emitTelegramMessageSentHooks).not.toHaveBeenCalledWith(
+            expect.objectContaining({ success: true, content: question.text }),
           );
         } else {
           expect([...visible.values()]).toEqual([
@@ -193,7 +194,11 @@ describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
           expect(registration?.deliveryId).toBe(`telegram:default:123:${questionMessageId}`);
           await registration?.finalize("Answered: continue");
           expect(visible.get(questionMessageId ?? -1)).toContain("Answered: continue");
-          expect(keyboards.get(questionMessageId ?? -1)).toEqual({ inline_keyboard: [] });
+          if (controls === "buttons") {
+            expect(keyboards.get(questionMessageId ?? -1)).toEqual({ inline_keyboard: [] });
+          } else {
+            expect(editMessageReplyMarkupTelegram).not.toHaveBeenCalled();
+          }
           expect([...visible.values()]).toContain("The question has settled.");
         }
       } finally {

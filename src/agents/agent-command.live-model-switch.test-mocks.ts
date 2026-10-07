@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 export function createTestSessionResolver(state: {
   sessionEntryMock: SessionEntry | undefined;
@@ -12,11 +13,12 @@ export function createTestSessionResolver(state: {
       updatedAt: Date.now(),
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
+    const sessionKey = state.resolvedSessionKeyMock ?? "agent:main:main";
     return {
       sessionId: "session-1",
-      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
+      sessionKey,
       sessionEntry,
-      sessionAgentId: "default",
+      sessionAgentId: resolveAgentIdFromSessionKey(sessionKey, "default"),
       storePath: state.storePathMock,
       isNewSession: false,
       persistedThinking:
@@ -59,11 +61,14 @@ export function createTestAgentScope(
   },
   native: Pick<
     typeof import("./agent-scope.js"),
-    "resolveAgentModelFallbacksOverride" | "resolveSubagentSpawnModelFallbacksOverride"
+    | "resolveAgentModelFallbacksOverride"
+    | "resolveSubagentSpawnModelFallbacksOverride"
+    | "resolveModelFallbackAvailability"
   >,
 ) {
   return {
     resolveAgentModelFallbacksOverride: native.resolveAgentModelFallbacksOverride,
+    resolveModelFallbackAvailability: native.resolveModelFallbackAvailability,
     resolveSubagentSpawnModelFallbacksOverride: native.resolveSubagentSpawnModelFallbacksOverride,
     clearAutoFallbackPrimaryProbeSelection: vi.fn(),
     entryMatchesAutoFallbackPrimaryProbe: () => true,

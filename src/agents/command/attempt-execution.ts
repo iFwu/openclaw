@@ -55,6 +55,7 @@ import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/ru
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import { AgentHarnessPreflightError } from "../harness/errors.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -78,6 +79,7 @@ import {
 } from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import { createChannelQuestionPromptDelivery } from "../tools/question-prompt-send.js";
 import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js";
 import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
@@ -121,6 +123,7 @@ export function runAgentAttempt(params: {
   body: string;
   transcriptBody?: string;
   isFallbackRetry: boolean;
+  modelContinuation?: RunEmbeddedAgentInternalParams["modelContinuation"];
   preserveCliSessionBinding?: boolean;
   classifyResult?: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
@@ -507,6 +510,11 @@ export function runAgentAttempt(params: {
       bootstrapPromptWarningSignature,
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
+    if (params.modelContinuation?.checkpoint) {
+      throw new AgentHarnessPreflightError(
+        "A CLI runtime cannot continue the settled embedded transcript.",
+      );
+    }
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withLocalSessionPlacementTurnSettlement(
       {
@@ -857,8 +865,20 @@ export function runAgentAttempt(params: {
     );
   }
 
+  const questionDelivery =
+    params.opts.deliver === true
+      ? createChannelQuestionPromptDelivery({
+          cfg: params.cfg,
+          channel: params.opts.replyChannel ?? params.messageChannel,
+          to: params.opts.replyTo ?? params.opts.to,
+          accountId:
+            params.opts.replyAccountId ?? params.runContext.accountId ?? params.opts.accountId,
+          threadId: params.opts.threadId,
+        })
+      : undefined;
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
+    ...(params.opts.suppressPromptPersistence === true ? { promptIsModelOnly: true } : {}),
     sandboxSessionKey: params.sessionKey,
     ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
@@ -918,11 +938,20 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     onAgentEvent: params.onAgentEvent,
+    // Continuations have no inbound dispatcher; only blocking questions use this route.
+    onToolResult: questionDelivery
+      ? async (payload) => {
+          if (payload.channelData?.askUser) {
+            await questionDelivery.send(payload, { signal: params.opts.abortSignal });
+          }
+        }
+      : undefined,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     onRetryWait: params.deferredLifecycle?.beginRetryWait,
     assistantErrorTranscript: params.assistantErrorTranscript,
+    modelContinuation: params.modelContinuation,
     authProfileFailurePolicy: params.authProfileFailurePolicy,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onCompactionAccounting: params.onCompactionAccounting,

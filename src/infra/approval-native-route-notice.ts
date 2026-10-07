@@ -54,7 +54,7 @@ export function resolveApprovalDeliveryFailedNoticeText(params: {
       : ["allow-once", "allow-always", "deny"]
   ).join("|");
   return [
-    "Approval required. I could not deliver the native approval request.",
+    "Approval required. Native approval delivery was not confirmed.",
     `Reply with: /approve ${commandId} ${decisions}`,
     "If the short code is ambiguous, use the full id in /approve.",
   ].join("\n");

@@ -23,6 +23,8 @@ export class TelegramPollingLivenessTracker {
   #stallDiagLoggedMonotonicAt = 0;
   #lastStallCheckMonotonicAt: number;
   #retryAfterUntilMonotonicAt: number | null = null;
+  #awaitingSpoolUpdateId: number | null = null;
+  #awaitingSpoolSinceMonotonicAt: number | null = null;
 
   constructor(private readonly options: TelegramPollingLivenessTrackerOptions = {}) {
     const monotonicNow = this.#monotonicNow();
@@ -65,6 +67,20 @@ export class TelegramPollingLivenessTracker {
 
   noteGetUpdatesActivity() {
     this.#lastGetUpdatesActivityMonotonicAt = this.#monotonicNow();
+    this.#awaitingSpoolUpdateId = null;
+    this.#awaitingSpoolSinceMonotonicAt = null;
+  }
+
+  /**
+   * The worker delivered an update and now waits for the parent's spool ACK. Transport is
+   * proven live at this point; a stall from here on is spool admission, not getUpdates.
+   */
+  noteUpdateAwaitingSpool(updateId: number | null) {
+    if (this.#awaitingSpoolUpdateId !== null) {
+      return;
+    }
+    this.#awaitingSpoolUpdateId = updateId;
+    this.#awaitingSpoolSinceMonotonicAt = this.#monotonicNow();
   }
 
   detectStall(params: { thresholdMs: number }): TelegramPollingStall | null {
@@ -98,9 +114,11 @@ export class TelegramPollingLivenessTracker {
     this.#stallDiagLoggedMonotonicAt = monotonicNow;
 
     const elapsedLabel =
-      this.#inFlightGetUpdates > 0
-        ? `active getUpdates stuck for ${formatDurationPrecise(elapsed)}`
-        : `no completed getUpdates for ${formatDurationPrecise(elapsed)}`;
+      this.#awaitingSpoolSinceMonotonicAt !== null
+        ? `spool admission stalled: update ${this.#awaitingSpoolUpdateId ?? "unknown"} unacknowledged for ${formatDurationPrecise(monotonicNow - this.#awaitingSpoolSinceMonotonicAt)}`
+        : this.#inFlightGetUpdates > 0
+          ? `active getUpdates stuck for ${formatDurationPrecise(elapsed)}`
+          : `no completed getUpdates for ${formatDurationPrecise(elapsed)}`;
     return {
       message: `Polling stall detected (${elapsedLabel}); forcing restart. [diag ${this.formatDiagnosticFields("error")}]`,
     };
@@ -109,7 +127,9 @@ export class TelegramPollingLivenessTracker {
   formatDiagnosticFields(errorLabel?: "error" | "lastGetUpdatesError"): string {
     const error =
       this.#lastGetUpdatesError && errorLabel ? ` ${errorLabel}=${this.#lastGetUpdatesError}` : "";
-    return `inFlight=${this.#inFlightGetUpdates} outcome=${this.#lastGetUpdatesOutcome} startedAt=${this.#lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${this.#lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${this.#lastGetUpdatesDurationMs ?? "n/a"} offset=${this.#lastGetUpdatesOffset ?? "n/a"}${error}`;
+    const awaitingSpool =
+      this.#awaitingSpoolUpdateId === null ? "" : ` awaitingSpool=${this.#awaitingSpoolUpdateId}`;
+    return `inFlight=${this.#inFlightGetUpdates} outcome=${this.#lastGetUpdatesOutcome} startedAt=${this.#lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${this.#lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${this.#lastGetUpdatesDurationMs ?? "n/a"} offset=${this.#lastGetUpdatesOffset ?? "n/a"}${awaitingSpool}${error}`;
   }
 
   #now(): number {
@@ -123,6 +143,8 @@ export class TelegramPollingLivenessTracker {
   #noteGetUpdatesCompleted(finishedAt: number): void {
     const finishedMonotonicAt = this.#monotonicNow();
     this.#retryAfterUntilMonotonicAt = null;
+    this.#awaitingSpoolUpdateId = null;
+    this.#awaitingSpoolSinceMonotonicAt = null;
     this.#lastGetUpdatesActivityMonotonicAt = finishedMonotonicAt;
     this.#lastGetUpdatesFinishedAt = finishedAt;
     this.#lastGetUpdatesDurationMs =

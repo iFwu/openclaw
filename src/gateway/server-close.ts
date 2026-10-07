@@ -590,24 +590,26 @@ async function closeGatewayResources(
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
     }
-    await disposeRuntimeWithShutdownGrace({
-      cleanupWork,
-      label: "embedding-providers",
-      dispose: params.drainRetainedOpenAiEmbeddingProviders,
-      graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
-      warnings,
-    });
+    await measureCloseStep("embedding-providers", () =>
+      disposeRuntimeWithShutdownGrace({
+        cleanupWork,
+        label: "embedding-providers",
+        dispose: params.drainRetainedOpenAiEmbeddingProviders,
+        graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
+        warnings,
+      }),
+    );
   } catch (error) {
     closeFailure = { error };
   } finally {
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
-    await cleanupWork.runWhenIdle(() => {});
-    await pluginServicesCleanup;
-    await params.finishRequestEntries?.();
-    await waitForMediaCleanupDrainsToSettle();
+    await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
+    await measureCloseStep("plugin-services-final-drain", () => pluginServicesCleanup);
+    await measureCloseStep("request-entries-final-drain", () => params.finishRequestEntries?.());
+    await measureCloseStep("media-cleanup-final-drain", waitForMediaCleanupDrainsToSettle);
     // Drain before metadata elects the final Gateway that owns model retirement.
-    await params.drainSdkWork?.();
+    await measureCloseStep("sdk-work-final-drain", () => params.drainSdkWork?.());
     const swarmOwner = getCanonicalGatewayContextResolver(params.resolveGatewayContext);
     if (swarmOwner) {
       await closeSwarmScheduler(swarmOwner).catch(recordResourceCleanupFailure);
@@ -615,34 +617,51 @@ async function closeGatewayResources(
     // A sibling Gateway retains metadata before its registry exists. Only the
     // final owner may retire shared state and process-wide plugin caches.
     try {
-      const registryClose = await params.closePluginRegistry(async (retireRegistry) => {
-        // SDK cleanup can use prepared donors; release its claims before model or registry disposal.
-        await params.closeSdkResources?.().catch(recordResourceCleanupFailure);
-        return params.pluginMetadata.close(async (retire) => {
-          await closeSwarmScheduler().catch(recordResourceCleanupFailure);
-          await closePreparedModelRuntimeSnapshots();
-          await closeSessionTranscriptReconcileWorkerPool();
-          await retire();
-          await cleanupWork.runWhenIdle(() => {});
-          // Releasing agent leases still writes shared state; keep its owner alive until then.
-          await closeOpenClawAgentDatabasesAsync();
-          await finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure);
-          if (mediaCleanupStopResult !== undefined) {
-            await closePluginStateDatabaseAsync();
-          }
-          try {
-            await drainGlobalSingletonLifecycleState(
-              restartExpectedMs === null ? "close" : "restart",
-            );
-          } finally {
-            try {
-              params.clearSecretsRuntimeSnapshot?.();
-            } catch {
-              /* ignore */
-            }
-          }
-        }, retireRegistry);
-      });
+      const registryClose = await measureCloseStep("plugin-registry", () =>
+        params.closePluginRegistry(async (retireRegistry) => {
+          // SDK cleanup can use prepared donors; release its claims before model or registry disposal.
+          await measureCloseStep("sdk-resources", () =>
+            params.closeSdkResources?.().catch(recordResourceCleanupFailure),
+          );
+          return measureCloseStep("plugin-metadata", () =>
+            params.pluginMetadata.close(async (retire) => {
+              await closeSwarmScheduler().catch(recordResourceCleanupFailure);
+              await measureCloseStep("model-runtime", closePreparedModelRuntimeSnapshots);
+              await measureCloseStep(
+                "transcript-reconcile-workers",
+                closeSessionTranscriptReconcileWorkerPool,
+              );
+              await measureCloseStep("plugin-metadata-retire", retire);
+              await measureCloseStep("cleanup-work-after-metadata", () =>
+                cleanupWork.runWhenIdle(() => {}),
+              );
+              // Releasing agent leases still writes shared state; keep its owner alive until then.
+              await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+              await finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure);
+              if (mediaCleanupStopResult !== undefined) {
+                await measureCloseStep("plugin-state-store", closePluginStateDatabaseAsync);
+              }
+              try {
+                await measureCloseStep("global-singletons", () =>
+                  drainGlobalSingletonLifecycleState(
+                    restartExpectedMs === null ? "close" : "restart",
+                    (key, phase) =>
+                      markGatewayRestartTrace(
+                        `restart.close.global-singleton.${key.description ?? "anonymous"}.${phase}`,
+                      ),
+                  ),
+                );
+              } finally {
+                try {
+                  params.clearSecretsRuntimeSnapshot?.();
+                } catch {
+                  /* ignore */
+                }
+              }
+            }, retireRegistry),
+          );
+        }),
+      );
       for (const error of registryClose.memoryErrors) {
         shutdownLog.warn(`memory-managers: ${formatErrorMessage(error)}`);
         recordShutdownWarning(warnings, "memory-managers");

@@ -102,6 +102,27 @@ function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputRecei
   return receipt;
 }
 
+/** A retained source settles only after every private canonical input confirms cancellation. */
+export function retainCancelledSessionPendingInput(receipt: SessionPendingInputReceipt): boolean {
+  const owner = receiptOwners.get(receipt);
+  if (!owner || receipt.state === "consumed") {
+    return false;
+  }
+  let retained = true;
+  const failures: unknown[] = [];
+  for (const source of owner.sources ?? [owner]) {
+    try {
+      retained = (source.retainCancelled?.() ?? false) && retained;
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Failed to retain cancelled input sources");
+  }
+  return retained;
+}
+
 /** Install only a private receipt's persistence context; this does not reopen execution authority. */
 export function withSessionPendingInputPersistence<T>(
   receipt: SessionPendingInputReceipt,
@@ -195,6 +216,7 @@ export async function stageSessionPendingInput(
     assertCurrent: () => void;
     /** Retained only after the full admission checks and custody transaction commit. */
     assertAdmittedCurrent?: () => void;
+    assertRetainedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
   },
 ): Promise<SessionPendingInputReceipt | undefined> {
@@ -223,6 +245,7 @@ export async function stageSessionPendingInput(
       let requestHash = replayRequest.requestHash;
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       let finished = false;
+      let retainedCancellation = false;
       let complete: SessionPendingInputReceipt["complete"];
       if (options.trackCompletion) {
         const completionScope = {
@@ -435,7 +458,18 @@ export async function stageSessionPendingInput(
             return;
           }
           finished = true;
-          finishSessionPendingInputOwner(owner, disposition, source, databaseOptions);
+          const confirmed = finishSessionPendingInputOwner(
+            owner,
+            disposition,
+            source,
+            databaseOptions,
+          );
+          retainedCancellation = disposition === "cancelled" && confirmed;
+        },
+        retainCancelled: () => {
+          options.assertRetainedCurrent?.();
+          owner.finish("cancelled");
+          return retainedCancellation;
         },
       };
       registerSessionPendingInputOwner(owner);
@@ -603,6 +637,7 @@ export function claimSessionPendingInputDedupeRecovery(
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
+  options?: { retainedOnly?: boolean },
 ): PersistedUserTurnMessage | undefined {
   try {
     const resolved = resolveSqliteTranscriptScope(scope);
@@ -634,11 +669,15 @@ export function readSessionSubmittedInput(
                 db
                   .selectFrom("session_pending_inputs")
                   .select((eb) => eb.fn<number>("octet_length", ["message_json"]).as("bytes"))
+                  .select("state")
                   .where("session_key", "=", resolved.sessionKey)
                   .where("session_id", "=", resolved.sessionId)
                   .where("idempotency_key", "=", idempotencyKey),
               )
             : undefined;
+          if (options?.retainedOnly && pending?.state !== "cancelled") {
+            return undefined;
+          }
           let messageJson: string | undefined;
           if (pending) {
             if (pending.bytes > MAX_PAYLOAD_BYTES) {

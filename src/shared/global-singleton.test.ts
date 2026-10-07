@@ -98,17 +98,43 @@ describe("global singleton lifecycle resets", () => {
     );
     resolveGlobalSingleton(siblingKey, () => ({}), siblingReset);
 
-    const drain = drainGlobalSingletonLifecycleState();
+    const siblingFinished = createDeferred();
+    const observe = vi.fn((key: symbol, phase: "begin" | "end") => {
+      if (key === siblingKey && phase === "end") {
+        siblingFinished.resolve();
+      }
+    });
+    const drain = drainGlobalSingletonLifecycleState("close", observe);
     try {
+      await siblingFinished.promise;
       expect(siblingReset).toHaveBeenCalledOnce();
+      expect(observe).toHaveBeenCalledWith(asyncKey, "begin");
+      expect(observe).not.toHaveBeenCalledWith(asyncKey, "end");
     } finally {
       release();
       try {
         await drain;
+        expect(observe).toHaveBeenCalledWith(asyncKey, "end");
       } finally {
         delete (globalThis as Record<PropertyKey, unknown>)[asyncKey];
         delete (globalThis as Record<PropertyKey, unknown>)[siblingKey];
       }
+    }
+  });
+
+  it("keeps resource cleanup independent of a throwing observer", async () => {
+    const key = Symbol("global-singleton:failed-observer");
+    const reset = vi.fn();
+    resolveGlobalSingleton(key, () => ({}), reset);
+    try {
+      await expect(
+        drainGlobalSingletonLifecycleState("restart", () => {
+          throw new Error("observer failed");
+        }),
+      ).resolves.toBeUndefined();
+      expect(reset).toHaveBeenCalledOnce();
+    } finally {
+      delete (globalThis as Record<PropertyKey, unknown>)[key];
     }
   });
 

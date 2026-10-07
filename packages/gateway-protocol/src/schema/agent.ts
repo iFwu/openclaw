@@ -156,7 +156,7 @@ export const SendParamsSchema = closedObject({
   /** Send silently (no notification) where supported. */
   silent: Type.Optional(Type.Boolean()),
   /** Channel-specific parse mode for formatted text. */
-  parseMode: Type.Optional(Type.Literal("HTML")),
+  parseMode: Type.Optional(Type.Union([Type.Literal("HTML"), Type.Literal("plain")])),
   /** Optional session key for mirroring delivered output back into the transcript. */
   sessionKey: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,

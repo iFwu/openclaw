@@ -40,9 +40,13 @@ const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
 ]);
 
 /** Recognize work accepted by a tool whose background task owns completion. */
-export function isAsyncStartedToolResult(result: unknown): boolean {
+export function isAsyncStartedToolResult(result: unknown, toolName: string): boolean {
   const details = readToolResultDetails(result);
-  return details?.async === true && details.status === "started";
+  return (
+    (details?.async === true && details.status === "started") ||
+    ((toolName === "exec" || toolName === "bash" || toolName === "process") &&
+      details?.status === "running")
+  );
 }
 
 /** Preserve the accepted task's identity independently of result presentation. */
@@ -51,7 +55,7 @@ export function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskId?: string;
 } {
   const details = readToolResultDetails(result);
-  if (!details) {
+  if (details?.async !== true || details.status !== "started") {
     return {};
   }
   const nestedTask = readRecord(details.task);

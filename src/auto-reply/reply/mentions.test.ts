@@ -14,8 +14,8 @@ describe("stripStructuralPrefixes", () => {
     expect(stripStructuralPrefixes("")).toBe("");
   });
 
-  it("strips sender prefix labels", () => {
-    expect(stripStructuralPrefixes("John: hello")).toBe("hello");
+  it("preserves sender prefix labels as message content", () => {
+    expect(stripStructuralPrefixes("John: hello")).toBe("John: hello");
   });
 
   it("preserves colon-delimited slash commands", () => {
@@ -26,19 +26,25 @@ describe("stripStructuralPrefixes", () => {
     );
   });
 
-  it("strips direct envelope display labels with handles", () => {
+  it("does not promote envelope display labels into commands", () => {
     expect(
       stripStructuralPrefixes("[Telegram Alice (@alice) id:123] Alice (@alice): /status"),
-    ).toBe("/status");
+    ).toBe("[Telegram Alice (@alice) id:123] Alice (@alice): /status");
   });
 
-  it("strips direct envelope display labels with non-ascii characters", () => {
-    expect(stripStructuralPrefixes("[Telegram Jörg] Jörg: /status")).toBe("/status");
-    expect(stripStructuralPrefixes("[Telegram 山田] 山田: /status")).toBe("/status");
+  it("preserves direct envelope display labels with non-ascii characters", () => {
+    expect(stripStructuralPrefixes("[Telegram Jörg] Jörg: /status")).toBe(
+      "[Telegram Jörg] Jörg: /status",
+    );
+    expect(stripStructuralPrefixes("[Telegram 山田] 山田: /status")).toBe(
+      "[Telegram 山田] 山田: /status",
+    );
   });
 
-  it("strips slash-like display labels only after an envelope", () => {
-    expect(stripStructuralPrefixes("[Telegram /reset id:123] /reset: hello")).toBe("hello");
+  it("preserves slash-like display labels after an envelope", () => {
+    expect(stripStructuralPrefixes("[Telegram /reset id:123] /reset: hello")).toBe(
+      "[Telegram /reset id:123] /reset: hello",
+    );
   });
 
   it("passes through plain text", () => {

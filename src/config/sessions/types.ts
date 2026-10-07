@@ -383,6 +383,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentControlScope?: "children" | "none";
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
+    /** Host-captured approval-only route; does not change child delivery or grant authority. */
+    inheritedApprovalOrigin?: import("../../agents/admitted-run-approval-origin.js").ApprovalOrigin;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */

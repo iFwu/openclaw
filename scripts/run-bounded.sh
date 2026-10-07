@@ -67,10 +67,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 memory_gib=auto
+reserve_gib=4
+large_memory_gib=24
+large_memory_override=false
+fit_available=false
 profile=shared-host
 if [[ "${1:-}" == --help || $# == 0 ]]; then
   printf '%s\n' \
-    'Usage: bash scripts/run-bounded.sh [--profile shared-host|dedicated-test|dedicated-heavy|dedicated-large] [--memory-gib 1..10] [--receipt path] [--] command [args...]' \
+    'Usage: bash scripts/run-bounded.sh [--profile shared-host|dedicated-test|dedicated-heavy|dedicated-large] [--memory-gib 1..10] [--reserve-gib 1..4] [--large-memory-gib 24..28] [--fit-available] [--receipt path] [--] command [args...]' \
     'Linux + systemd user manager + cgroup v2 required; never runs uncapped.' \
     'Default shared-host: min(10 GiB, available memory minus 4 GiB), rounded down; no swap.' \
     'Shared-host: one test worker/project and an exclusive host-user lock.' \
@@ -78,8 +82,12 @@ if [[ "${1:-}" == --help || $# == 0 ]]; then
     'Dedicated-test: two concurrent 6 GiB tasks, two workers/one project, unique Vitest caches.' \
     'Dedicated-heavy: one exclusive 14 GiB task in the same slice; one worker/project.' \
     'Dedicated-large: one exclusive 24 GiB task, four workers/project, Go parallelism 4.' \
-    'Dedicated-large requires openclaw-large-tests.slice: 26 GiB, no swap, CPUQuota=800%.' \
-    'All profiles require 4 GiB available headroom; --memory-gib applies only to shared-host.' \
+    'Dedicated-large requires openclaw-large-tests.slice: 26 GiB by default, no swap, CPUQuota=800%.' \
+    'All profiles retain 4 GiB headroom by default; --reserve-gib explicitly selects 1..4 GiB.' \
+    '--large-memory-gib selects 24..28 GiB only for dedicated-large; its configured slice must have task budget plus 2 GiB.' \
+    '--fit-available caps dedicated-large tasks at min(ceiling, available minus reserve), with a 14 GiB minimum; the slice still follows the ceiling.' \
+    'Use reduced reserve only on an operator-authorized disposable validation host; shared defaults are unchanged.' \
+    '--memory-gib applies only to shared-host.' \
     'Node/Go soft limits: half the budget; Go parallelism at most 2 (4 for dedicated-large), GOGC 100.' \
     'tsdown owns its child heap budget and can override the inherited Node heap; the cgroup hard cap remains.' \
     'Examples: pnpm test:bounded src/agents/model-fallback.test.ts' \
@@ -101,6 +109,18 @@ while [[ $# -gt 0 ]]; do
         receipt=""; echo '[bounded] --receipt requires a new file in a user-owned directory' >&2; exit 2;
       }
       shift 2 ;;
+    --fit-available)
+      fit_available=true
+      shift ;;
+    --reserve-gib)
+      reserve_gib=${2:-}
+      [[ "$reserve_gib" =~ ^[1-4]$ ]] || { echo '[bounded] --reserve-gib must be 1..4' >&2; exit 2; }
+      shift 2 ;;
+    --large-memory-gib)
+      large_memory_gib=${2:-}
+      [[ "$large_memory_gib" =~ ^(2[4-8])$ ]] || { echo '[bounded] --large-memory-gib must be 24..28' >&2; exit 2; }
+      large_memory_override=true
+      shift 2 ;;
     --memory-gib)
       memory_gib=${2:-}
       [[ "$memory_gib" =~ ^([1-9]|10)$ ]] || { echo '[bounded] --memory-gib must be 1..10' >&2; exit 2; }
@@ -111,6 +131,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $# -gt 0 ]] || { echo '[bounded] missing command; use --help' >&2; exit 2; }
+if [[ "$fit_available" == true && "$profile" != dedicated-large ]]; then
+  echo '[bounded] --fit-available requires --profile dedicated-large' >&2
+  exit 2
+fi
+if [[ "$large_memory_override" == true && "$profile" != dedicated-large ]]; then
+  echo '[bounded] --large-memory-gib requires --profile dedicated-large' >&2
+  exit 2
+fi
 if [[ "$profile" != shared-host && "$memory_gib" != auto ]]; then
   echo '[bounded] dedicated profiles have fixed budgets; --memory-gib applies only to shared-host' >&2
   exit 2
@@ -132,7 +160,7 @@ slice_memory=17179869184
 slice_cpus=12
 if [[ "$profile" == dedicated-large ]]; then
   slice_name=openclaw-large-tests.slice
-  slice_memory=27917287424
+  slice_memory=$(((large_memory_gib + 2) * 1073741824))
   slice_cpus=8
 fi
 if [[ "$profile" != shared-host ]]; then
@@ -153,7 +181,7 @@ if [[ "$profile" != shared-host ]]; then
   slice_args=(--slice="$slice_name")
   memory_gib=14
   [[ "$profile" != dedicated-test ]] || memory_gib=6
-  [[ "$profile" != dedicated-large ]] || memory_gib=24
+  [[ "$profile" != dedicated-large ]] || memory_gib=$large_memory_gib
 fi
 
 # One lock across worktrees; retain it and any slot through scope cleanup.
@@ -174,18 +202,27 @@ if [[ "$profile" == dedicated-test ]]; then
   (( slot_acquired )) || { echo '[bounded] both dedicated test slots are busy; retry after one exits' >&2; admission_refused=true; exit 75; }
 fi
 available_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+if [[ "$fit_available" == true ]]; then
+  fitted_gib=$((available_kib / 1048576 - reserve_gib))
+  if (( fitted_gib < 14 )); then
+    echo "[bounded] available ${available_kib} KiB cannot fit the 14 GiB large-task minimum plus ${reserve_gib} GiB reserve" >&2
+    admission_refused=true
+    exit 75
+  fi
+  (( memory_gib <= fitted_gib )) || memory_gib=$fitted_gib
+fi
 if [[ "$memory_gib" == auto ]]; then
-  memory_gib=$((available_kib / 1048576 - 4))
+  memory_gib=$((available_kib / 1048576 - reserve_gib))
   if (( memory_gib > 10 )); then
     memory_gib=10
   fi
 fi
-if (( memory_gib < 1 || available_kib < (memory_gib + 4) * 1048576 )); then
-  echo '[bounded] insufficient available memory for the task plus 4 GiB reserve; wait or narrow the workload (shared-host also accepts an explicit budget)' >&2
+if (( memory_gib < 1 || available_kib < (memory_gib + reserve_gib) * 1048576 )); then
+  echo "[bounded] insufficient available memory for the task plus ${reserve_gib} GiB reserve; wait or narrow the workload (shared-host also accepts an explicit budget)" >&2
   admission_refused=true
   exit 75
 fi
-echo "[bounded] profile $profile, available ${available_kib} KiB, selected ${memory_gib} GiB, reserve 4 GiB" >&2
+echo "[bounded] profile $profile, available ${available_kib} KiB, selected ${memory_gib} GiB, reserve ${reserve_gib} GiB" >&2
 free -h
 echo '[bounded] largest current processes (KiB RSS):' >&2
 ps -eo pid,rss,comm --sort=-rss | sed -n '1,8p'

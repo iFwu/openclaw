@@ -59,7 +59,7 @@ describe("getTelegramSequentialKey", () => {
           text: "/stop@openclaw_bot!",
         }),
       },
-      "telegram:-100:control",
+      "telegram:-100:abort",
     ],
     // Interrupt commands keep the chat-wide control lane. `/approve` in particular must
     // never queue behind the run that is blocked waiting on its own approval request.

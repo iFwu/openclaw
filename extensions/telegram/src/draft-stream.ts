@@ -111,6 +111,8 @@ export function createTelegramDraftStream(params: {
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
   replyToMode?: ReplyToMode;
+  /** Other lanes may already own the turn's first/batched reply. */
+  canUseReplyTarget?: () => boolean;
   replyQuote?: TelegramNativeQuoteCandidate;
   richMessages?: boolean;
   throttleMs?: number;
@@ -178,7 +180,7 @@ export function createTelegramDraftStream(params: {
     if (!consumesReplyTarget) {
       return initialSendMessageParams;
     }
-    if (replyTargetState.kind !== "available") {
+    if (replyTargetState.kind !== "available" || params.canUseReplyTarget?.() === false) {
       return threadParams ?? {};
     }
     replyTargetState = { kind: "pending", generation: sendGeneration };

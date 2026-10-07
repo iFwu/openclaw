@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { isNativeCompletionOwnerForRun } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import {
+  captureContinuationApprovalOrigin,
+  withContinuationApprovalOrigin,
+} from "./continuation-approval-origin.js";
+import {
   cancelSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
+  readSubagentCompletionApprovalOrigin,
 } from "./subagent-completion-tool-handoff.js";
 
 const registration = {
@@ -26,6 +31,85 @@ function consume(handoffId: string | undefined, overrides: Record<string, unknow
 }
 
 describe("subagent completion tool handoff", () => {
+  it("retains only frozen parent source on the exact redeemed object", () => {
+    const caller = {
+      sessionKey: registration.targetSessionKey,
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:-100200",
+      turnSourceAccountId: "parent-account",
+      turnSourceThreadId: "7",
+    };
+    const snapshot = captureContinuationApprovalOrigin(caller);
+    caller.turnSourceTo = "telegram:-100999";
+    const id = withContinuationApprovalOrigin(
+      snapshot,
+      () => {},
+      () => registerSubagentCompletionToolHandoff(registration),
+    );
+    const handoff = consume(id);
+    expect(handoff).toBeDefined();
+    const held = readSubagentCompletionApprovalOrigin(handoff);
+    expect(held?.snapshot.origin).toMatchObject({
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:-100200",
+      turnSourceAccountId: "parent-account",
+      turnSourceThreadId: "7",
+    });
+    expect(Object.isFrozen(held?.snapshot.origin)).toBe(true);
+    expect(
+      readSubagentCompletionApprovalOrigin(handoff ? { ...handoff } : undefined),
+    ).toBeUndefined();
+    expect(handoff).not.toHaveProperty("approvalOrigin");
+  });
+
+  it("does not borrow another target's ambient source or accept JSON origin fields", () => {
+    const snapshot = captureContinuationApprovalOrigin({
+      sessionKey: "agent:main:other",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:-100999",
+    });
+    const id = withContinuationApprovalOrigin(
+      snapshot,
+      () => {},
+      () => registerSubagentCompletionToolHandoff(registration),
+    );
+    expect(readSubagentCompletionApprovalOrigin(consume(id))).toBeUndefined();
+    const forged = { ...registration, approvalOrigin: snapshot };
+    expect(
+      readSubagentCompletionApprovalOrigin(consume(registerSubagentCompletionToolHandoff(forged))),
+    ).toBeUndefined();
+  });
+
+  it.each(["before", "after"] as const)(
+    "rejects retained source revocation %s redemption",
+    (when) => {
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("parent source revoked");
+        }
+      };
+      const snapshot = captureContinuationApprovalOrigin({
+        sessionKey: registration.targetSessionKey,
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:-100200",
+      });
+      const id = withContinuationApprovalOrigin(snapshot, assertCurrent, () =>
+        registerSubagentCompletionToolHandoff(registration),
+      );
+      if (when === "before") {
+        current = false;
+        expect(consume(id)).toBeUndefined();
+        cancelSubagentCompletionToolHandoff(id);
+      } else {
+        const held = readSubagentCompletionApprovalOrigin(consume(id));
+        expect(held).toBeDefined();
+        current = false;
+        expect(() => held?.assertCurrent()).toThrow("parent source revoked");
+      }
+    },
+  );
+
   it("keeps native source liveness private and rejects a cloned or mismatched handoff", () => {
     let current = true;
     const handoffId = registerSubagentCompletionToolHandoff({

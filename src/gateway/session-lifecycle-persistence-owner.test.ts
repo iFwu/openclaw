@@ -221,6 +221,47 @@ describe("session lifecycle persistence owner", () => {
     expect(sessionStatus).toBe("running");
   });
 
+  it.each([false, true])(
+    "retains the explicit terminal write context and its commit assertion (revoked: %s)",
+    async (revoked) => {
+      const beforeCommit = createDeferred();
+      const commitReached = createDeferred();
+      const stale = new Error("Explicit terminal write owner retired");
+      let active = true;
+      const assertCurrent = vi.fn(() => {
+        if (!active) {
+          throw stale;
+        }
+      });
+      const runObserved = vi.fn();
+      const run = <T>(write: () => T): T => {
+        runObserved();
+        return write();
+      };
+      persistLifecycle.mockImplementation(async (params: PersistenceParams) => {
+        commitReached.resolve();
+        await beforeCommit.promise;
+        params.assertCommitAllowed?.();
+      });
+      const { owner } = fixture();
+      const persistence = owner.observe({
+        ...terminal,
+        writeContext: { run, assertCurrent, track() {} },
+      });
+      await commitReached.promise;
+      active = !revoked;
+      beforeCommit.resolve();
+      if (revoked) {
+        await expect(persistence).rejects.toBe(stale);
+      } else {
+        await expect(persistence).resolves.toBeUndefined();
+      }
+      expect(runObserved).toHaveBeenCalledOnce();
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      await owner.drain();
+    },
+  );
+
   it("rejects a deferred error when its exact claim retires before commit", async () => {
     const beforeCommit = createDeferred();
     const commitReached = createDeferred();

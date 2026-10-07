@@ -308,6 +308,15 @@ export async function handleCompactCommand(
     entry: refreshedEntry,
     cfg: params.cfg,
   });
+  const lifecycle = params.opts?.turnAdoptionLifecycle;
+  if (lifecycle) {
+    await lifecycle.onAdopted();
+    failure = authorityFailure();
+    if (failure) {
+      return failure;
+    }
+    assertOwnerBeforeAcceptance();
+  }
   const replyOperation = params.opts?.replyOperation;
   replyOperation?.setPhase("preflight_compacting");
   const assertActive = () => {

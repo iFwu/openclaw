@@ -48,6 +48,28 @@ describe("TelegramPollingLivenessTracker", () => {
       "active getUpdates stuck",
     );
   });
+  it("names a spool admission stall before ACK and clears it after activity", () => {
+    let now = 0;
+    const tracker = new TelegramPollingLivenessTracker({ now: () => now, monotonicNow: () => now });
+    tracker.noteGetUpdatesStarted({ offset: 100 });
+    now = 5_000;
+    tracker.noteUpdateAwaitingSpool(101);
+    tracker.noteUpdateAwaitingSpool(102);
+    now = 150_000;
+    const stall = tracker.detectStall({ thresholdMs: 120_000 });
+    expect(stall?.message).toContain(
+      "Polling stall detected (spool admission stalled: update 101 unacknowledged for 145",
+    );
+    expect(stall?.message).toContain("awaitingSpool=101");
+    tracker.noteGetUpdatesActivity();
+    tracker.noteGetUpdatesStarted({ offset: 103 });
+    now = 300_000;
+    expect(tracker.detectStall({ thresholdMs: 120_000 })?.message).toContain(
+      "active getUpdates stuck",
+    );
+    expect(tracker.formatDiagnosticFields()).not.toContain("awaitingSpool=");
+  });
+
   it("starts a fresh stall window after a failed poll completes", () => {
     let now = 0;
     const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });

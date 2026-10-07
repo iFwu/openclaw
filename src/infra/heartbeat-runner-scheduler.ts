@@ -1,3 +1,4 @@
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -209,6 +210,14 @@ export function startHeartbeatRunner(opts: {
       targeted = false,
     ): Promise<AgentWakeOutcome> => {
       const { agentId } = agent;
+      const wakeDiagnostics = () => ({
+        source: params.source,
+        intent,
+        agentId: redactIdentifier(agentId),
+        sessionKey: targeted ? redactIdentifier(requestedSessionKey) : undefined,
+        retainedWork,
+        scheduledEveryMs,
+      });
       if (agent.intervalMs !== undefined && scheduledEveryMs !== undefined) {
         agent.intervalMs = scheduledEveryMs;
         agent.heartbeat = { ...agent.heartbeat, every: `${scheduledEveryMs}ms` };
@@ -218,6 +227,15 @@ export function startHeartbeatRunner(opts: {
         retainedWork,
       });
       if (deferral.defer) {
+        try {
+          log.debug("heartbeat: wake deferred", {
+            ...wakeDiagnostics(),
+            skipReason: deferral.reason,
+            retryAtMs: deferral.retryAtMs,
+          });
+        } catch {
+          // Diagnostics must not change cooldown or retained-work ownership.
+        }
         // Retained exec work never owns cadence unless a scheduled tick joined it.
         if (
           deferral.reason !== "not-due" &&
@@ -282,6 +300,33 @@ export function startHeartbeatRunner(opts: {
         });
         recordRunBookkeeping(agent, now);
         return { result: { status: "failed", reason: errMsg } };
+      }
+      try {
+        const skipReason = res.status === "skipped" ? res.reason : undefined;
+        const knownSkipReason =
+          skipReason !== undefined &&
+          (isRetryableHeartbeatSkipReason(skipReason) ||
+            [
+              HEARTBEAT_SKIP_NO_PENDING_EVENT,
+              "disabled",
+              "quiet-hours",
+              "no-route",
+              "alerts-disabled",
+              "agent-runner-cancelled",
+              "empty-heartbeat-file",
+              "not-due",
+              "min-spacing",
+              "flood",
+            ].includes(skipReason));
+        log.debug("heartbeat: wake settled", {
+          ...wakeDiagnostics(),
+          status: res.status,
+          ...(res.status === "skipped"
+            ? { skipReason: knownSkipReason ? skipReason : "other", retryAtMs: res.retryAtMs }
+            : {}),
+        });
+      } catch {
+        // Diagnostics must not change retry ownership or run bookkeeping.
       }
       if (res.status === "skipped" && isSessionEventWakePollDeferred()) {
         // This occurrence ended before admission; the next persisted poll owns the next turn.

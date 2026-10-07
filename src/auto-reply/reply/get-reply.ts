@@ -58,6 +58,7 @@ import {
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -102,6 +103,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import { logJevAutoNewOutcome } from "./session-auto-new.js";
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -571,6 +573,7 @@ export async function getReplyFromConfig(
             requestedSessionId: optsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: optsWithSkillFilter?.resumeRequestedSession,
             signal: optsWithSkillFilter?.abortSignal,
+            currentReplyOperation: optsWithSkillFilter?.replyOperation,
           }),
         );
   } catch (error) {
@@ -659,6 +662,57 @@ export async function getReplyFromConfig(
     storePath,
   });
 
+  const announceAutomaticNewSession = async (selection?: {
+    provider: string;
+    model: string;
+    thinkLevel?: string;
+  }) => {
+    if (!sessionState.automaticNewTriggered) {
+      return;
+    }
+    const modelDetails = selection
+      ? ` · ${selection.provider}/${selection.model}${selection.thinkLevel ? ` · think:${selection.thinkLevel}` : ""}`
+      : "";
+    const noticeIdentity = {
+      sessionKey,
+      sessionId,
+      messageId: ctx.MessageSidFull ?? ctx.MessageSid,
+    };
+    logJevAutoNewOutcome({ ...noticeIdentity, reason: "notice_requested" });
+    const onBlockReply = resolvedOpts?.onBlockReply;
+    if (onBlockReply) {
+      try {
+        assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+      } catch (error) {
+        logJevAutoNewOutcome({ ...noticeIdentity, reason: "notice_execution_fenced" });
+        throw error;
+      }
+      try {
+        const delivery = await deliverBlockReply(async () => {
+          await onBlockReply(
+            markReplyPayloadForSourceSuppressionDelivery({
+              text: `↪ 已按新话题处理，未携带上一段对话${modelDetails}`,
+              isStatusNotice: true,
+            }),
+          );
+          logJevAutoNewOutcome({ ...noticeIdentity, reason: "notice_submitted" });
+        });
+        logJevAutoNewOutcome({
+          ...noticeIdentity,
+          reason: "notice_settled",
+          deliveryOutcome: delivery.outcome,
+          pending: delivery.pending === true,
+        });
+      } catch {
+        logVerbose("Automatic new-session notice delivery failed; continuing the reply.");
+        logJevAutoNewOutcome({ ...noticeIdentity, reason: "notice_failed" });
+      }
+      assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+    } else {
+      logJevAutoNewOutcome({ ...noticeIdentity, reason: "notice_unavailable" });
+    }
+  };
+
   if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
 
@@ -715,12 +769,14 @@ export async function getReplyFromConfig(
       if (error instanceof ModelSelectionLockedError) {
         typing.cleanup();
         recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
+        await announceAutomaticNewSession();
         return { text: error.message };
       }
       if (!isSessionWorkStartInvalidatedError(error)) {
         throw error;
       }
       typing.cleanup();
+      await announceAutomaticNewSession();
       return { text: error.message };
     }
   }
@@ -870,6 +926,7 @@ export async function getReplyFromConfig(
     }),
   );
   if (directiveResult.kind === "reply") {
+    await announceAutomaticNewSession();
     logResolverTiming("completed", "directive_reply");
     return directiveResult.reply;
   }
@@ -984,6 +1041,7 @@ export async function getReplyFromConfig(
   );
   await maybeEmitMissingResetHooks();
   if (inlineActionResult.kind === "reply") {
+    await announceAutomaticNewSession();
     logResolverTiming("completed", "inline_action_reply");
     return inlineActionResult.reply;
   }
@@ -1042,6 +1100,7 @@ export async function getReplyFromConfig(
       if (error instanceof ModelSelectionLockedError) {
         recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
       }
+      await announceAutomaticNewSession();
       return { text: error.message };
     }
     if (runModelState.operatorModelOverride) {
@@ -1060,6 +1119,11 @@ export async function getReplyFromConfig(
     });
   }
   const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
+  await announceAutomaticNewSession({
+    provider: runProvider,
+    model: runModel,
+    thinkLevel: resolvedThinkLevel,
+  });
 
   let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
     ? collectStagedAttachmentPaths(finalized)

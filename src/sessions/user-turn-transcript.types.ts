@@ -176,6 +176,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
   pendingInputReplaySourceSessionKeys?: readonly string[];
   /** Exact admitted source recorders consumed by this collected transcript message. */
   pendingInputSources?: readonly UserTurnTranscriptRecorder[];
+  /** Captured storage authority for cancelling the factory-staged original input. */
+  assertRetainedInputCurrent?: () => void;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;

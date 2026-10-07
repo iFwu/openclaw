@@ -32,6 +32,40 @@ describe("telegramApprovalNativeRuntime", () => {
     ).toBe("⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.");
   });
 
+  it.each([
+    { status: "denied", decision: "deny", reason: "user", headline: "❌ 已拒绝" },
+    { status: "allowed", decision: "allow-once", reason: "user", headline: "✅ 已允许" },
+    { status: "cancelled", reason: "run-aborted", headline: "⚠️ 已取消" },
+  ] as const)("keeps a guard $status terminal card compact and identifiable", (state) => {
+    const { headline, ...resolution } = state;
+    const text = buildTelegramCanonicalApprovalTerminalText({
+      result: {
+        applied: true,
+        approval: {
+          id: "plugin:12345678-abcd",
+          ...resolution,
+          urlPath: "/approve/plugin:12345678-abcd",
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+          resolvedAtMs: 1_000,
+          presentation: {
+            kind: "plugin",
+            pluginId: "approval-guard",
+            title: "Change configuration",
+            description: "A bounded operation\n风险：中",
+            severity: "warning",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        },
+      },
+      fallbackApprovalId: "plugin:12345678-abcd",
+    });
+    expect(text).toContain(headline);
+    expect(text).toContain("ID：12345678");
+    expect(text.split("\n")).toHaveLength(3);
+    expect(text).not.toContain("12345678-abcd");
+  });
+
   it("builds the Control UI link with its configured base path and encoded approval ID", async () => {
     const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {
@@ -199,31 +233,18 @@ describe("telegramApprovalNativeRuntime", () => {
       entry: { chatId: "9", messageId: "m1" },
     });
 
-    expect(resolved).toEqual({
+    expect(resolved).toMatchObject({
       kind: "update",
       payload: {
-        text: [
-          "✅ Exec approval resolved",
-          "Canonical result: Denied",
-          "Resolved by: telegram:9",
-          "ID: req\\n1",
-          "",
-          "Command:",
-          "echo hi",
-        ].join("\n"),
+        text: expect.stringMatching(
+          /^❌ Exec Denied · echo hi\n\d{2}:\d{2} · req\\n1 · by telegram:9$/u,
+        ),
       },
     });
-    expect(expired).toEqual({
+    expect(expired).toMatchObject({
       kind: "update",
       payload: {
-        text: [
-          "⏱️ Exec approval expired",
-          "Canonical result: Expired",
-          "ID: req\\n1",
-          "",
-          "Command:",
-          "echo hi",
-        ].join("\n"),
+        text: expect.stringMatching(/^⏱️ Exec expired · echo hi\n\d{2}:\d{2} · req\\n1$/u),
       },
     });
   });

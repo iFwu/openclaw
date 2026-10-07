@@ -172,6 +172,7 @@ function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
         ? "completed"
         : "failed",
     sessionId,
+    startedAt: finished.startedAt,
     exitCode: finished.exitCode ?? undefined,
     ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
     ...(finished.exitReason
@@ -419,6 +420,7 @@ export function createProcessTool(
         textResult(text, {
           status: "running",
           sessionId: params.sessionId,
+          startedAt: sessionLocal.startedAt,
           name: deriveSessionName(sessionLocal.command),
         });
 
@@ -480,6 +482,7 @@ export function createProcessTool(
             textResult(text, {
               status: "running",
               sessionId: params.sessionId,
+              startedAt: scopedSession.startedAt,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
               ...runtime,
@@ -519,6 +522,7 @@ export function createProcessTool(
               ? {
                   status: record.exited ? "completed" : "running",
                   sessionId: params.sessionId,
+                  startedAt: record.startedAt,
                   name: deriveSessionName(record.command),
                   ...runtime,
                 }

@@ -3855,6 +3855,49 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("rejects a reclaim when another SQLite connection replaces the claim after its read", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-reclaim-successor-");
+    const { operation, host } = harness;
+    const reached = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const get = operation.get.bind(operation);
+    let reclaim: Promise<WorkboardCard> | undefined;
+    const lookup = vi.spyOn(operation, "get");
+    try {
+      const card = await host.create({
+        title: "Worker replacement",
+        status: "ready",
+        sessionKey: "agent:worker:subagent:workboard-shared",
+        runId: "old-run",
+      });
+      await host.claim(card.id, { ownerId: "worker", token: "old-claim" });
+      lookup.mockImplementationOnce(async (id) => {
+        const snapshot = await get(id);
+        reached.resolve();
+        await resume.promise;
+        return snapshot;
+      });
+      reclaim = operation.reclaim(
+        card.id,
+        { status: "blocked", reason: "Old worker stopped" },
+        null,
+      );
+      await reached.promise;
+      await host.reclaim(card.id, { status: "ready", reason: "Replace worker" }, null);
+      await host.claim(card.id, { ownerId: "worker", token: "new-claim" });
+      const successor = await host.update(card.id, { runId: "new-run" });
+      resume.resolve();
+      await expect(reclaim).rejects.toBeInstanceOf(WorkboardCardConflictError);
+      expect(await host.get(card.id)).toEqual(successor);
+      expect(await operation.get(card.id)).toEqual(successor);
+    } finally {
+      resume.resolve();
+      await reclaim?.catch(() => undefined);
+      lookup.mockRestore();
+      await harness.close();
+    }
+  });
+
   it("promotes, reassigns, and reclaims cards for operator recovery", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({

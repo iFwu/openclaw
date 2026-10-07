@@ -277,6 +277,7 @@ export const createTelegramMessageProcessor = (
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
           turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+          pendingInputSources: turnContext.pendingInputSources,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           return {

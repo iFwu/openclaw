@@ -8,13 +8,23 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -103,6 +113,83 @@ function requestOptions(
 }
 
 describe("exec approval signed agent runtime", () => {
+  it("uses a binding added after worker admission for consecutive exec approvals", async (testContext) => {
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "channel-plugin-api.ts",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+    const sessionKey = "agent:main:subagent:workboard-default-4401b5e3";
+    let binding: SessionBindingRecord | null = null;
+    const adapter = {
+      channel: "telegram",
+      accountId: "default",
+      bind: async () =>
+        (binding = {
+          bindingId: "task-topic",
+          targetSessionKey: sessionKey,
+          targetKind: "session" as const,
+          conversation: {
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "-100123:topic:42",
+          },
+          status: "active" as const,
+          boundAt: Date.now(),
+        }),
+      listBySession: (key: string) => (binding && key === sessionKey ? [binding] : []),
+      resolveByConversation: () => binding,
+    };
+    registerSessionBindingAdapter(adapter);
+    testContext.onTestFinished(() => unregisterSessionBindingAdapter({ ...adapter, adapter }));
+    const runtime = { ...identity(false), sessionKey };
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+      const request = async (decision: "allow-once" | "deny", bound: boolean) => {
+        const opts = requestOptions(runtime);
+        const { pending } = await waitForApprovalRequested(
+          opts.context,
+          "exec.approval.requested",
+          () => fixture.track(Promise.resolve(handler(opts))),
+        );
+        expect(await manager.listPendingRecords()).toHaveLength(1);
+        const record = (await manager.listPendingRecords())[0]!;
+        try {
+          expect(record.request).toMatchObject({
+            sessionKey,
+            turnSourceChannel: "telegram",
+            turnSourceTo: bound ? "-100123:topic:42" : "chat-1",
+            turnSourceAccountId: "default",
+            turnSourceThreadId: bound ? "42" : "thread-1",
+          });
+        } finally {
+          await manager.resolve(record.id, decision);
+          await pending;
+        }
+        expect(vi.mocked(opts.respond).mock.calls.at(-1)?.[1]).toMatchObject({ decision });
+      };
+      await request("deny", false);
+      await getSessionBindingService().bind({
+        targetSessionKey: sessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-100123:topic:42",
+        },
+        placement: "current",
+      });
+      await request("allow-once", true);
+      await request("deny", true);
+      expect(runtime.turnSourceTo).toBe("chat-1");
+    });
+  });
   it.for([false, true])(
     "checks live worker claims without host SQL in a registered approval (revoked: %s)",
     async (revoked, testContext) => {

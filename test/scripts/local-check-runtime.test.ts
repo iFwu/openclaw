@@ -45,6 +45,10 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_LOCAL_CHECK: "1",
+    // Model an unconfigured host, independently of the outer test runner's budget.
+    GOMAXPROCS: undefined,
+    GOGC: undefined,
+    GOMEMLIMIT: undefined,
     ...overrides,
   };
   if (!Object.hasOwn(overrides, "OPENCLAW_LOCAL_CHECK_MODE")) {

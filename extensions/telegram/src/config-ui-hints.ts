@@ -12,7 +12,14 @@ const botThreadMentionHint = {
   help: "Override mention gating in forum topics created by this bot. False allows unmentioned messages; true requires a mention even for replies to the bot. Topic settings override group settings. Omit to preserve existing behavior. Unknown or evicted topic ownership keeps the normal policy. Telegram privacy mode must allow ordinary group messages; sender and visible-reply policies still apply.",
 };
 
+const progressPersistHint = {
+  label: "Telegram Progress Retention",
+  help: "Retain the last visible progress after normal completion (default: false). Cancelled or failed turns keep visible progress regardless of this setting. Changes take effect on the next turn after config reload.",
+};
+
 export const telegramChannelConfigUiHints = {
+  "streaming.progress.persist": progressPersistHint,
+  "accounts.*.streaming.progress.persist": progressPersistHint,
   historyLimit: observedGroupHistoryHint,
   "accounts.*.historyLimit": observedGroupHistoryHint,
   dmHistoryLimit: observedDmHistoryHint,
@@ -38,6 +45,22 @@ export const telegramChannelConfigUiHints = {
   joinIntro: {
     label: "Telegram Group Join Introduction",
     help: "Send one room-aware introduction when the bot joins an allowed group or supergroup (default: true). Telegram cannot provide message history from before the bot joined.",
+  },
+  "groups.*.autoNewSession": {
+    label: "Telegram Automatic New Session",
+    help: "Use Jev to start a new context only when an inbound message is confidently independent of the current task. Disabled unless explicitly enabled for this group.",
+  },
+  "groups.*.topics.*.autoNewSession": {
+    label: "Telegram Topic Automatic New Session",
+    help: "Override Jev automatic new-session evaluation for this topic. Omit to inherit the group setting.",
+  },
+  "direct.*.autoNewSession": {
+    label: "Telegram DM Automatic New Session",
+    help: "Enable Jev evaluation for this explicit private chat only. Disabled by default; group settings do not enable DMs.",
+  },
+  "direct.*.topics.*.autoNewSession": {
+    label: "Telegram DM Topic Automatic New Session",
+    help: "Override Jev evaluation for this private-chat topic. Omit to inherit the direct-chat setting.",
   },
   ...createChannelConfigUiHints({
     channelLabel: "Telegram",

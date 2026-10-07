@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -19,58 +19,79 @@ import {
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+const { defaultRuntime } = await import("../../runtime.js");
 
 describe("executeAgentTurn: context failures", () => {
-  it("preserves the active session when embedded overflow recovery fails", async () => {
-    state.isContextOverflowErrorMock.mockReturnValue(true);
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {
-        error: {
-          message: "400 The prompt is too long: 203557, model maximum context length: 196607",
-        },
-      },
-    });
-
-    const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
-    const activeSessionStore = { "agent:main:main": activeSessionEntry };
-    const followupRun = createFollowupRun();
-    followupRun.run.agentId = "main";
-    const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "webchat",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-      replyOperation,
-      sessionKey: "agent:main:main",
-      getActiveSessionEntry: () => activeSessionEntry,
-      activeSessionStore,
-      storePath: makeTestSessionStorePath(),
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("fresh session or using a model");
-      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
-        deliverDespiteSourceReplySuppression: true,
+  it.each([false, true])(
+    "preserves the active session when overflow recovery fails (logger throws: %s)",
+    async (loggerThrows) => {
+      onTestFinished(() => {
+        vi.mocked(defaultRuntime.error).mockReset();
       });
-    }
-    expect(failMock).toHaveBeenCalledWith(
-      "run_failed",
-      expect.objectContaining({
-        message: "400 The prompt is too long: 203557, model maximum context length: 196607",
-      }),
-    );
-    expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
-    expect(updateSessionIdMock).not.toHaveBeenCalled();
-    expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
-  });
+      if (loggerThrows) {
+        vi.mocked(defaultRuntime.error).mockImplementationOnce(() => {
+          throw new Error("log sink unavailable");
+        });
+      }
+      state.isContextOverflowErrorMock.mockReturnValue(true);
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        meta: {
+          error: {
+            message: "400 The prompt is too long: 203557, model maximum context length: 196607",
+          },
+        },
+      });
+
+      const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
+      const activeSessionStore = { "agent:main:main": activeSessionEntry };
+      const followupRun = createFollowupRun();
+      followupRun.run.agentId = "main";
+      const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "webchat",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+        replyOperation,
+        sessionKey: "agent:main:main",
+        getActiveSessionEntry: () => activeSessionEntry,
+        activeSessionStore,
+        storePath: makeTestSessionStorePath(),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain(
+          "kept this conversation mapped to the current session",
+        );
+        expect(result.payload.text).toContain("fresh session or using a model");
+        expectRecordFields(
+          requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"),
+          {
+            deliverDespiteSourceReplySuppression: true,
+          },
+        );
+      }
+      expect(failMock).toHaveBeenCalledWith(
+        "run_failed",
+        expect.objectContaining({
+          message: "400 The prompt is too long: 203557, model maximum context length: 196607",
+        }),
+      );
+      expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
+      expect(updateSessionIdMock).not.toHaveBeenCalled();
+      expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+      expect(defaultRuntime.error).toHaveBeenCalledOnce();
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        "Context overflow recovery did not complete. Preserving existing session mapping for agent:main:main.",
+      );
+    },
+  );
 
   it("preserves the active session when compaction failure is thrown before reply", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);

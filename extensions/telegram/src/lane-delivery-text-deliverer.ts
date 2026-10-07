@@ -514,8 +514,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     }
     const preservesPreviewReplyTarget =
       payload.replyToId === undefined || payload.replyToId === originalReplyToId;
+    const canFinalizeVisiblePreview =
+      finalizePreview &&
+      !payload.isError &&
+      lane.hasStreamedMessage &&
+      !lane.finalized &&
+      typeof lane.stream?.messageId() === "number" &&
+      (payload.replyToId === undefined ||
+        payload.replyToId === String(lane.stream.currentMessageSnapshot()?.replyToMessageId));
     const streamed =
-      preservesPreviewReplyTarget && allowStream && !reply.hasMedia
+      preservesPreviewReplyTarget && (allowStream || canFinalizeVisiblePreview) && !reply.hasMedia
         ? await streamText(
             laneName,
             lane,

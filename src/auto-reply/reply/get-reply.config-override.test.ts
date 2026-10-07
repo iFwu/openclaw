@@ -31,6 +31,7 @@ type CaptureSessionDiffBaseline =
 const mocks = vi.hoisted(() => ({
   captureSessionDiffBaseline: vi.fn<CaptureSessionDiffBaseline>(),
   resolveReplyDirectives: vi.fn(),
+  handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
 }));
 vi.mock("../../sessions/session-diff.js", async (importOriginal) => ({
@@ -123,6 +124,9 @@ describe("getReplyFromConfig configOverride", () => {
     await loadGetReplyRuntimeForTest();
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
+    mocks.handleInlineActions
+      .mockReset()
+      .mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     mocks.initSessionState.mockReset();
     mocks.captureSessionDiffBaseline.mockReset();
     vi.mocked(loadConfigMock).mockReset();
@@ -277,6 +281,100 @@ describe("getReplyFromConfig configOverride", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       sessionDiffBaselineCapture: { status: "unavailable" },
     });
+  });
+
+  it("publishes the committed Jev generation before sending a single resolved-model notice", async () => {
+    const sessionKey = "agent:main:telegram:jev-notice";
+    const storePath = path.join(tempDirs.make("openclaw-jev-notice-"), "sessions.json");
+    const entry: InternalSessionEntry = {
+      sessionId: "jev-notice-session",
+      lifecycleRevision: "jev-new-revision",
+      updatedAt: Date.now(),
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    mocks.initSessionState.mockResolvedValueOnce({
+      ...createGetReplySessionState({
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath,
+        sessionStore: { [sessionKey]: entry },
+      }),
+      automaticNewTriggered: true,
+    });
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "an independent task",
+        abortKey: sessionKey,
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "message",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    mocks.handleInlineActions.mockResolvedValueOnce({
+      kind: "continue",
+      directives: {},
+      cleanedBody: "an independent task",
+    });
+    const sequence: string[] = [];
+    const onSessionPrepared = vi.fn(() => {
+      sequence.push("prepared");
+    });
+    const onBlockReply = vi.fn(async () => {
+      sequence.push("notice");
+    });
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async () => {
+      sequence.push("model");
+      return { text: "done" };
+    });
+    await getReplyFromConfig(
+      buildGetReplyCtx({ SessionKey: sessionKey }),
+      {
+        onSessionPrepared,
+        onBlockReply,
+      } as InternalGetReplyOptions,
+      {},
+    );
+    expect(onSessionPrepared).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: "jev-new-revision",
+        storePath,
+      }),
+    );
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const run = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(run).toMatchObject({
+      provider: "openai",
+      model: "gpt-4o-mini",
+      resolvedThinkLevel: "off",
+    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isStatusNotice: true,
+        text: "↪ 已按新话题处理，未携带上一段对话 · openai/gpt-4o-mini · think:off",
+      }),
+    );
+    expect(sequence).toEqual(["prepared", "notice", "model"]);
+  });
+
+  it("emits the plain Jev notice on an early reply without invoking the model", async () => {
+    const state = await mocks.initSessionState();
+    mocks.initSessionState.mockResolvedValueOnce({ ...state, automaticNewTriggered: true });
+    const onBlockReply = vi.fn(async () => {});
+    await getReplyFromConfig(buildGetReplyCtx(), { onBlockReply }, {});
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "↪ 已按新话题处理，未携带上一段对话",
+        isStatusNotice: true,
+      }),
+    );
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
 
   it("uses complete configOverride without reloading config", async () => {

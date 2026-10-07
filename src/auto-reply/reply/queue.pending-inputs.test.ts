@@ -30,6 +30,7 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { prepareSessionFollowupCleanup } from "./queue/cleanup.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { createTypingController } from "./typing.js";
@@ -96,6 +97,114 @@ describe("followup queue durable input consumption", () => {
     }
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
+
+  it("settles an exact Stop source only after its canonical input is retained as cancelled", async () => {
+    const { run } = await createStagedRun("retained-stop");
+    const adopted = vi.fn(async () => {
+      expect(listSessionPendingInputs(scope()).items).toMatchObject([
+        { state: "cancelled", runId: "retained-stop" },
+      ]);
+    });
+    const abandoned = vi.fn();
+    const settled = vi.fn();
+    run.turnAdoptionLifecycle = { onAdopted: adopted, onAbandoned: abandoned, onSettled: settled };
+    expect(enqueueFollowupRun(sessionKey, run, { mode: "followup", debounceMs: 0 })).toBe(true);
+    const cancel = prepareSessionFollowupCleanup({
+      keys: [sessionKey],
+      ...scope(),
+      assertCurrent: () => {},
+    });
+    expect(cancel()).toBe(1);
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(adopted).toHaveBeenCalledOnce();
+    expect(abandoned).not.toHaveBeenCalled();
+    expect(listSessionPendingInputs(scope()).items[0]?.message.content).toBe(
+      "retained-stop approved",
+    );
+    expect(executeAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it("retains the remaining detached inputs after one steer notification throws", async () => {
+    const first = await createStagedRun("throwing-stop");
+    const second = await createStagedRun("next-stop");
+    const settled = vi.fn();
+    const adopted = vi.fn();
+    first.run.steerPending = {
+      phase: "waiting",
+      predecessor: Promise.resolve(true),
+      settle: () => {
+        throw new Error("steer notification failed");
+      },
+    };
+    second.run.turnAdoptionLifecycle = { onAdopted: adopted, onSettled: settled };
+    for (const { run } of [first, second]) {
+      expect(enqueueFollowupRun(sessionKey, run, { mode: "followup", debounceMs: 0 })).toBe(true);
+    }
+    const cancel = prepareSessionFollowupCleanup({
+      keys: [sessionKey],
+      ...scope(),
+      assertCurrent: () => {},
+    });
+    expect(cancel()).toBe(2);
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(adopted).toHaveBeenCalledOnce();
+    expect(listSessionPendingInputs(scope()).items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runId: "next-stop", state: "cancelled" })]),
+    );
+  });
+
+  it("keeps an unstaged Stop source retryable instead of inventing a retained receipt", async () => {
+    const run = createQueueTestRun({ prompt: "unstaged source" });
+    run.run = { ...run.run, agentId: "main", sessionKey, sessionId };
+    const adopted = vi.fn();
+    const abandoned = vi.fn();
+    run.turnAdoptionLifecycle = { onAdopted: adopted, onAbandoned: abandoned };
+    expect(enqueueFollowupRun(sessionKey, run, { mode: "followup", debounceMs: 0 })).toBe(true);
+    const cancel = prepareSessionFollowupCleanup({
+      keys: [sessionKey],
+      ...scope(),
+      assertCurrent: () => {},
+    });
+    expect(cancel()).toBe(1);
+    expect(abandoned).toHaveBeenCalledOnce();
+    expect(adopted).not.toHaveBeenCalled();
+    expect(listSessionPendingInputs(scope()).items).toEqual([]);
+  });
+
+  it("does not promote an already interrupted input into confirmed retained cancellation", async () => {
+    const { run } = await createStagedRun("interrupted-stop");
+    run.userTurnTranscriptRecorder?.finishPendingInput?.("interrupted");
+    const adopted = vi.fn();
+    const abandoned = vi.fn();
+    run.turnAdoptionLifecycle = { onAdopted: adopted, onAbandoned: abandoned };
+    expect(enqueueFollowupRun(sessionKey, run, { mode: "followup", debounceMs: 0 })).toBe(true);
+    expect(
+      prepareSessionFollowupCleanup({ keys: [sessionKey], ...scope(), assertCurrent: () => {} })(),
+    ).toBe(1);
+    expect(adopted).not.toHaveBeenCalled();
+    expect(abandoned).toHaveBeenCalledOnce();
+    expect(listSessionPendingInputs(scope()).items).toMatchObject([{ state: "interrupted" }]);
+  });
+
+  it("does not trust a copied recorder's projected pending receipt", async () => {
+    const { run } = await createStagedRun("copied-stop");
+    const recorder = run.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("staged recorder missing");
+    }
+    const finish = vi.fn();
+    run.userTurnTranscriptRecorder = { ...recorder, finishPendingInput: finish };
+    const adopted = vi.fn();
+    const abandoned = vi.fn();
+    run.turnAdoptionLifecycle = { onAdopted: adopted, onAbandoned: abandoned };
+    expect(enqueueFollowupRun(sessionKey, run, { mode: "followup", debounceMs: 0 })).toBe(true);
+    expect(
+      prepareSessionFollowupCleanup({ keys: [sessionKey], ...scope(), assertCurrent: () => {} })(),
+    ).toBe(1);
+    expect(finish).not.toHaveBeenCalled();
+    expect(adopted).not.toHaveBeenCalled();
+    expect(abandoned).toHaveBeenCalledOnce();
+  });
 
   it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
     const first = await createStagedRun("first");

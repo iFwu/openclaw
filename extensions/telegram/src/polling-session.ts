@@ -428,6 +428,7 @@ export class TelegramPollingSession {
       }
       if (message.type === "update") {
         const updateIdHint = resolveTelegramUpdateId(message.update) ?? "unknown";
+        liveness.noteUpdateAwaitingSpool(resolveTelegramUpdateId(message.update));
         this.opts.log(
           `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
         );

@@ -24,6 +24,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUtcTimestamp, formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
+import { deliverGuardTerminal } from "./approval-terminal-delivery.js";
 import {
   compactGuardPreview,
   formatGuardApprovalId,
@@ -54,6 +55,8 @@ type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgent
 type PendingMessage = {
   chatId: string;
   messageId: string;
+  threadId?: number;
+  directMessagesTopicId?: number;
 };
 type TelegramPendingDelivery = {
   text: string;
@@ -61,6 +64,7 @@ type TelegramPendingDelivery = {
 };
 type TelegramFinalDelivery = {
   text: string;
+  localExpiry?: true;
 };
 
 type TelegramExecApprovalHandlerDeps = {
@@ -170,8 +174,8 @@ function buildPendingPayload(params: {
             .join(" "),
         ),
         seconds > 0
-          ? `⏳ 截止：${deadline}（${expiresIn}内有效） · ${view.actions.some((action) => action.decision === "allow-always") ? (view.description?.split("\n").find((line) => line.startsWith("限时放行：")) ?? "可限时放行") : "仅本次"} · /guard show`
-          : `⏱️ 此卡已到期 · 截止：${deadline} · /guard show`,
+          ? `⏳ 截止：${deadline}（${expiresIn}内有效） · ${view.actions.some((action) => action.decision === "allow-always") ? (view.description?.split("\n").find((line) => line.startsWith("限时放行：")) ?? "可限时放行") : "仅本次"} · Control UI 查看详情`
+          : `⏱️ 此卡已到期 · 截止：${deadline} · Control UI 查看详情`,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -259,7 +263,12 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     }),
     buildExpiredResult: ({ view }) => ({
       kind: "update",
-      payload: { text: buildTelegramNativeExpiredApprovalText(view) },
+      payload: {
+        text: buildTelegramNativeExpiredApprovalText(view),
+        ...(view.approvalKind === "plugin" && view.pluginId === "approval-guard"
+          ? { localExpiry: true as const }
+          : {}),
+      },
     }),
   },
   transport: {
@@ -340,6 +349,8 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       return {
         chatId: result.chatId,
         messageId: result.messageId,
+        threadId: preparedTarget.messageThreadId,
+        directMessagesTopicId: preparedTarget.directMessagesTopicId,
       };
     },
     updateEntry: async ({ cfg, accountId, context, entry, payload, request, approvalKind }) => {
@@ -348,6 +359,36 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         return;
       }
       const editMessage = resolved.context.deps?.editMessage ?? editMessageTelegram;
+      if (
+        approvalKind === "plugin" &&
+        "pluginId" in request.request &&
+        request.request.pluginId === "approval-guard" &&
+        !payload.localExpiry
+      ) {
+        const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
+        await deliverGuardTerminal({
+          key: `${resolved.accountId}:${entry.chatId}:${entry.messageId}`,
+          edit: () =>
+            editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
+              cfg,
+              token: resolved.context.token,
+              accountId: resolved.accountId,
+              textMode: "html",
+              buttons: [],
+            }),
+          fallback: () =>
+            sendMessage(entry.chatId, payload.text, {
+              cfg,
+              token: resolved.context.token,
+              accountId: resolved.accountId,
+              ...(entry.threadId != null ? { messageThreadId: entry.threadId } : {}),
+              ...(entry.directMessagesTopicId != null
+                ? { directMessagesTopicId: entry.directMessagesTopicId }
+                : {}),
+            }),
+        });
+        return;
+      }
       let editError: unknown;
       try {
         await editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {

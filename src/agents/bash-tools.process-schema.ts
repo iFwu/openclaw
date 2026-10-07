@@ -4,6 +4,7 @@ import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 
 const sessionProperties = {
   sessionId: Type.String(),
+  startedAt: Type.Optional(Type.Number()),
   name: Type.Optional(Type.String()),
 };
 const inputProperties = {

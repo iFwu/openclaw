@@ -51,6 +51,7 @@ function expectRetryContinuesFromTranscript(): void {
 function makeReplayUnsafeMidTurnOverflow(params?: {
   activeCount?: number;
   asyncStarted?: boolean;
+  asyncSettled?: boolean;
   resultRecorded?: boolean;
   codeModeEngaged?: boolean;
   codeModeSuspended?: boolean;
@@ -78,6 +79,9 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
         toolCallId: "call-exec",
         replaySafe: false,
         asyncStarted: params?.asyncStarted ?? false,
+        ...(params?.asyncSettled
+          ? { asyncExec: { sessionId: "process-one", startedAt: 1, settled: true as const } }
+          : {}),
         ...(params?.codeModeSuspended ? { codeModeSuspended: true } : {}),
       },
     ],
@@ -278,6 +282,35 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       clearEmbeddedSessionPromptStates([session.runParams.sessionId, successorId]);
     }
   });
+
+  it.each([
+    ["foreground exec", {}],
+    ["completed background exec", { asyncStarted: true, asyncSettled: true }],
+  ])(
+    "compacts settled replay-unsafe %s and continues from its recorded result",
+    async (_label, params) => {
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(params))
+        .mockResolvedValueOnce(session.makeAttemptResult());
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted after settled exec",
+          firstKeptEntryId: "entry-settled-exec",
+          tokensBefore: 201_000,
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        runId: "run-midturn-settled-unsafe",
+      });
+
+      expect(mockedCompactDirect).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expectRetryContinuesFromTranscript();
+      expect(result.meta.error).toBeUndefined();
+    },
+  );
 
   it("compacts while a code-mode exec still waits on nested tool work", async () => {
     // exec returned status "waiting" (result persisted) but its nested call keeps

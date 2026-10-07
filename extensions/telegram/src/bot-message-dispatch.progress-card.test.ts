@@ -1,4 +1,7 @@
-import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildChannelProgressDraftLine,
+  createChannelProgressDraftCompositor,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { expect, it, vi } from "vitest";
 import {
   createBot,
@@ -101,14 +104,80 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
     },
   );
 
+  it("characterizes the original two-commentary/two-exit-1 card at native capacity", async () => {
+    const progress = createChannelProgressDraftCompositor({
+      preparedItems: true,
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true, toolProgress: true, maxLines: 4, label: false },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "overflow-fixture",
+      commentaryItalics: false,
+      commentaryLinePrefix: "💬 ",
+    });
+    try {
+      await progress.pushItemEvent({
+        kind: "preamble",
+        itemId: "jev",
+        phase: "end",
+        progressText: "Checking Jev.",
+      });
+      await progress.pushItemEvent({
+        kind: "preamble",
+        itemId: "upgrade",
+        phase: "end",
+        progressText: "Checking the upgrade.",
+      });
+      for (let index = 0; index < 2; index++) {
+        await progress.pushItemEvent({
+          kind: "command",
+          itemId: `exit-${index}`,
+          name: "exec",
+          status: "failed",
+          meta: "exit 1",
+        });
+      }
+      const preview = renderTelegramProgressDraftPreview(progress.getSnapshot(), {
+        richMessages: false,
+        toolProgress: true,
+        maxLines: 4,
+        maxLineChars: 300,
+      });
+      expect(preview.text).toContain("Checking Jev.");
+      expect(preview.text).toContain("Checking the upgrade.");
+      expect(progress.getSnapshot().lines).toHaveLength(4);
+      // More failures still roll older commentary out: shared capacity is a separate owner gap.
+      await progress.pushItemEvent({
+        kind: "command",
+        itemId: "exit-2",
+        name: "exec",
+        status: "failed",
+        meta: "exit 1",
+      });
+      expect(
+        progress
+          .getSnapshot()
+          .lines.some((line) => typeof line !== "string" && line.id === "commentary:jev"),
+      ).toBe(false);
+    } finally {
+      progress.cancel();
+    }
+  });
+
   // The real compositor, renderer and transport expose short sends, stopped
   // streams and lifecycle resets at Telegram's stubbed network boundary.
   it.each([
-    { mode: "progress", finalDelivery: "dispatcher" },
-    { mode: "progress", finalDelivery: "message-tool" },
+    { mode: "progress", finalDelivery: "dispatcher", persist: false },
+    { mode: "progress", finalDelivery: "message-tool", persist: false },
+    { mode: "progress", finalDelivery: "dispatcher", persist: true },
+    { mode: "progress", finalDelivery: "message-tool", persist: true },
   ] as const)(
-    "keeps cards and accepted answers across tool, final and queued transitions ($mode, $finalDelivery)",
-    async ({ mode, finalDelivery }) => {
+    "keeps cards and accepted answers across tool, final and queued transitions ($mode, $finalDelivery, persist $persist)",
+    async ({ mode, finalDelivery, persist }) => {
       vi.useFakeTimers();
       try {
         let queuedReplyOptions: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
@@ -249,7 +318,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
               await replyOptions?.onObservedReplyDelivery?.();
               await vi.advanceTimersByTimeAsync(4_000);
               // NO_REPLY never enters the final dispatcher; retire before turn settlement.
-              expect.soft([...visible.values()]).toEqual(["Done"]);
+              if (persist) {
+                expect([...visible.values()]).toContain("Done");
+                expect([...visible.values()].some((text) => text.includes("Exec"))).toBe(true);
+              } else {
+                expect.soft([...visible.values()]).toEqual(["Checking the result", "Done"]);
+              }
             } else {
               await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
             }
@@ -300,15 +374,22 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           telegramCfg: {
             streaming: {
               mode,
-              progress: { toolProgress: true },
+              progress: { toolProgress: true, persist },
               preview: { toolProgress: true },
             },
           },
         });
         await vi.runOnlyPendingTimersAsync();
-        expect([...visible.values()]).toEqual(["Done"]);
+        expect([...visible.values()]).toContain("Done");
+        if (persist) {
+          expect([...visible.values()].some((text) => text.includes("Exec"))).toBe(true);
+        } else {
+          expect([...visible.values()]).toEqual(["Checking the result", "Done"]);
+        }
         if (finalDelivery === "dispatcher") {
-          const finalMessageId = [...visible.keys()][0];
+          const finalMessageId = [...visible.entries()].find(([, text]) => text === "Done")?.[0];
+          const settledMessages = [...visible.entries()];
+          const settledIds = new Set(visible.keys());
           await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
           await emitToolStart(queuedReplyOptions, {
             name: "exec",
@@ -318,12 +399,16 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           await vi.advanceTimersByTimeAsync(1500);
           await draft?.flush();
           expect(visible.get(finalMessageId ?? -1)).toBe("Done");
-          expect([...visible.entries()].filter(([id]) => id !== finalMessageId)).toEqual([
-            [expect.any(Number), expect.stringContaining("Exec")],
-          ]);
+          expect([...visible.entries()].filter(([id]) => settledIds.has(id))).toEqual(
+            settledMessages,
+          );
+          const followupMessages = [...visible.entries()].filter(([id]) => !settledIds.has(id));
+          expect(followupMessages).toEqual([[expect.any(Number), expect.stringContaining("Exec")]]);
           await queuedReplyOptions?.onQueuedFollowupSettled?.();
           await vi.runOnlyPendingTimersAsync();
-          expect([...visible.entries()]).toEqual([[finalMessageId, "Done"]]);
+          expect([...visible.entries()]).toEqual(
+            persist ? [...settledMessages, ...followupMessages] : settledMessages,
+          );
         }
       } finally {
         vi.useRealTimers();

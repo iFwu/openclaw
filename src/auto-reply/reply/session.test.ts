@@ -71,6 +71,7 @@ import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from ".
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import { testing as sessionAutoNewTesting } from "./session-auto-new.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
@@ -405,12 +406,288 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
+  sessionAutoNewTesting.setDependencies();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
+  it("applies an identity-bound Jev decision as a non-destructive new boundary", async () => {
+    const storePath = await makeStorePath("openclaw-jev-auto-new-");
+    const sessionKey = "agent:main:telegram:group:-1001234567890";
+    const sessionId = "jev-existing-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        lifecycleRevision: "jev-revision-1",
+        updatedAt: Date.now(),
+      },
+    });
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { message: { role: "user", content: "finish the notification task" } },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { message: { role: "assistant", content: "notification task complete" } },
+    );
+    const diagnostics = { info: vi.fn(), warn: vi.fn() };
+    sessionAutoNewTesting.setDependencies({
+      logger: diagnostics,
+      apiKey: () => "test-key",
+      evaluate: async () => "new",
+      hasPendingApproval: async () => false,
+      hasPendingChildWork: async () => false,
+      hasPendingQuestion: async () => false,
+      readRecentConversation: async () => [
+        { role: "user", text: "finish the notification task" },
+        { role: "assistant", text: "notification task complete" },
+      ],
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        AutoNewSession: "jev",
+        MessageSid: "inbound-jev-test",
+        Body: "draft today's daily report",
+        RawBody: "draft today's daily report",
+        CommandBody: "draft today's daily report",
+        BodyForCommands: "draft today's daily report",
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "telegram" },
+        InboundAccessAuthorized: true,
+        From: "telegram:user:42",
+        To: "telegram:-1001234567890",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+    });
+
+    expect(result).toMatchObject({
+      isNewSession: true,
+      resetTriggered: false,
+      sessionId,
+      previousSessionEntry: { sessionId, lifecycleRevision: "jev-revision-1" },
+      automaticNewTriggered: true,
+    });
+    expect(result.sessionEntry.lifecycleRevision).not.toBe("jev-revision-1");
+    expect(diagnostics.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey,
+        sessionId,
+        messageId: "inbound-jev-test",
+        reason: "reset_boundary_committed",
+      }),
+    );
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
+        expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
+        expect.objectContaining({ type: "reset", reason: "new" }),
+      ]),
+    );
+  });
+
+  it("abandons a Jev candidate when a pending decision appears before lifecycle commit", async () => {
+    const storePath = await makeStorePath("openclaw-jev-pending-race-");
+    const sessionKey = "agent:main:telegram:group:-1001234567891";
+    const sessionId = "jev-pending-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        lifecycleRevision: "jev-pending-revision",
+        updatedAt: Date.now(),
+      },
+    });
+    let pendingChecks = 0;
+    const diagnostics = { info: vi.fn(), warn: vi.fn() };
+    sessionAutoNewTesting.setDependencies({
+      logger: diagnostics,
+      apiKey: () => "test-key",
+      evaluate: async () => "new",
+      hasPendingApproval: async () => false,
+      hasPendingChildWork: async () => false,
+      hasPendingQuestion: async () => ++pendingChecks > 1,
+      readRecentConversation: async () => [
+        { role: "user", text: "choose a report format" },
+        { role: "assistant", text: "Which format should I use?" },
+      ],
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        AutoNewSession: "jev",
+        MessageSid: "inbound-jev-test",
+        Body: "use markdown",
+        RawBody: "use markdown",
+        CommandBody: "use markdown",
+        BodyForCommands: "use markdown",
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "telegram" },
+        InboundAccessAuthorized: true,
+        From: "telegram:user:42",
+        To: "telegram:-1001234567891",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+    });
+
+    expect(pendingChecks).toBeGreaterThanOrEqual(2);
+    expect(diagnostics.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ reason: "revalidation_failed", messageId: "inbound-jev-test" }),
+    );
+    expect(
+      diagnostics.info.mock.calls.some(([, meta]) => meta?.reason === "reset_boundary_committed"),
+    ).toBe(false);
+    expect(result).toMatchObject({
+      automaticNewTriggered: false,
+      isNewSession: false,
+      resetTriggered: false,
+      sessionId,
+    });
+    expect(result.sessionEntry.lifecycleRevision).toBe("jev-pending-revision");
+  });
+
+  it("allows the admitted dispatch owner to reach Jev rollover", async () => {
+    const storePath = await makeStorePath("openclaw-jev-admitted-owner-");
+    const sessionKey = "agent:main:telegram:group:-1001234567892";
+    const sessionId = "jev-admitted-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        lifecycleRevision: "jev-admitted-revision",
+        updatedAt: Date.now(),
+      },
+    });
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { message: { role: "user", content: "finish the old task" } },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { message: { role: "assistant", content: "old task complete" } },
+    );
+    sessionAutoNewTesting.setDependencies({
+      apiKey: () => "test-key",
+      evaluate: async () => "new",
+      hasPendingApproval: async () => false,
+      hasPendingChildWork: async () => false,
+      hasPendingQuestion: async () => false,
+      readRecentConversation: async () => [
+        { role: "user", text: "finish the old task" },
+        { role: "assistant", text: "old task complete" },
+      ],
+    });
+    const admission = await admitReplyTurn({
+      sessionKey,
+      sessionId,
+      agentId: "main",
+      kind: "visible",
+      resetTriggered: false,
+      storePath,
+      waitForActive: false,
+    });
+    expect(admission.status).toBe("owned");
+    if (admission.status !== "owned") {
+      throw new Error("expected the dispatch turn to be admitted");
+    }
+
+    try {
+      const result = await runWithReplyOperationLifecycleAdmission(admission.operation, () =>
+        initSessionState({
+          ctx: {
+            AutoNewSession: "jev",
+            Body: "start an independent report",
+            RawBody: "start an independent report",
+            CommandBody: "start an independent report",
+            InboundEventKind: "user_request",
+            InputProvenance: { kind: "external_user", sourceChannel: "telegram" },
+            InboundAccessAuthorized: true,
+            ChatType: "group",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+          },
+          cfg: { session: { store: storePath } } as OpenClawConfig,
+          currentReplyOperation: admission.operation,
+        }),
+      );
+      expect(result.isNewSession).toBe(true);
+      expect(result.previousSessionEntry?.sessionId).toBe(sessionId);
+    } finally {
+      admission.operation.complete();
+    }
+  });
+
+  it("discards a Jev result evaluated against a replaced lifecycle revision", async () => {
+    const storePath = await makeStorePath("openclaw-jev-stale-result-");
+    const sessionKey = "agent:main:telegram:group:-1001234567893";
+    const sessionId = "jev-stale-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId, lifecycleRevision: "before-evaluate", updatedAt: Date.now() },
+    });
+    sessionAutoNewTesting.setDependencies({
+      apiKey: () => "synthetic-jev-key",
+      hasPendingApproval: async () => false,
+      hasPendingQuestion: async () => false,
+      hasPendingChildWork: async () => false,
+      readRecentConversation: async () => [
+        { role: "user", text: "old task" },
+        { role: "assistant", text: "done" },
+      ],
+      evaluate: async () => {
+        await writeSessionStoreFast(storePath, {
+          [sessionKey]: {
+            sessionId,
+            lifecycleRevision: "external-replacement",
+            updatedAt: Date.now(),
+          },
+        });
+        return "new";
+      },
+    });
+    const result = await initSessionState({
+      cfg: { session: { store: storePath } },
+      ctx: {
+        AutoNewSession: "jev",
+        InboundEventKind: "user_request",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        Body: "independent task",
+        RawBody: "independent task",
+        CommandBody: "independent task",
+        InboundAccessAuthorized: true,
+        InputProvenance: { kind: "external_user", sourceChannel: "telegram" },
+      },
+    });
+    expect(result).toMatchObject({
+      automaticNewTriggered: false,
+      isNewSession: false,
+      sessionId,
+      sessionEntry: { lifecycleRevision: "external-replacement" },
+    });
+    expect(
+      await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "reset" })]));
+  });
+
   it("registers per-group ambient visibility when direct messages use isolated sessions", async () => {
     const stateDir = await makeCaseDir("openclaw-per-group-main-watch-");
     const storePath = path.join(stateDir, "sessions.json");
@@ -1452,12 +1729,13 @@ describe("initSessionState RawBody", () => {
     },
   );
 
-  it("anchors a reset payload after an explicit channel envelope and sender prefix", async () => {
+  it("uses raw command text separately from the display envelope", async () => {
     const storePath = await makeStorePath("openclaw-structural-reset-message-");
     const result = await initSessionState({
       ctx: {
         BodyForCommands: "/NEW: keep [Q3]\nline 2",
-        RawBody: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        Body: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        RawBody: "/NEW: keep [Q3]\nline 2",
         ChatType: "direct",
         SenderName: "İpek",
         SessionKey: "agent:main:telegram:dm:s1",
@@ -1475,7 +1753,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionCtx.agentText).toBe("keep [Q3]\nline 2");
   });
 
-  it("does not search past an anchored reset-like payload", async () => {
+  it("does not execute reset commands inside pasted display envelopes", async () => {
     const storePath = await makeStorePath("openclaw-reset-like-sender-message-");
     const result = await initSessionState({
       ctx: {
@@ -1493,8 +1771,28 @@ describe("initSessionState RawBody", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.bodyStripped).toBe("/NEW keep [Q3]\nline 2");
-    expect(result.sessionCtx.agentText).toBe("/NEW keep [Q3]\nline 2");
+    expect(result.resetTriggered).toBe(false);
+    expect(result.bodyStripped).toBeUndefined();
+  });
+
+  it.each([
+    "Test BK: /new",
+    "[2026/9/5 18:21] Test BK: /new\n[2026/9/5 18:25] Assistant: Previous attempt failed",
+  ])("keeps pasted reset history from the current sender as message text", async (body) => {
+    const storePath = await makeStorePath("openclaw-pasted-sender-reset-");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: body,
+        SenderName: "Test BK",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:pasted-sender",
+      },
+      cfg: { session: { store: storePath, resetTriggers: ["/new"] } } as OpenClawConfig,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.bodyStripped).toBeUndefined();
+    expect(result.sessionCtx.agentText).toBe(body);
   });
 
   it("keeps quoted markers and reset text in history out of reset parsing", async () => {
@@ -1541,7 +1839,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionCtx.agentText).toBe(payload);
   });
 
-  it("supports a bounded Body-only legacy envelope without searching flat history", async () => {
+  it("keeps Body-only display envelopes and flat history non-executable", async () => {
     const storePath = await makeStorePath("openclaw-body-only-reset-");
     const cfg = {
       session: { store: storePath, resetTriggers: ["/new"] },
@@ -1556,8 +1854,9 @@ describe("initSessionState RawBody", () => {
       },
       cfg,
     });
-    expect(legacy.resetTriggered).toBe(true);
-    expect(legacy.bodyStripped).toBe("keep [Q3]\nline 2");
+    expect(legacy.resetTriggered).toBe(false);
+    expect(legacy.bodyStripped).toBeUndefined();
+    expect(legacy.sessionCtx.agentText).toBe("[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2");
 
     const flatHistory = await initSessionState({
       ctx: {

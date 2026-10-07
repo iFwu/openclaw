@@ -554,7 +554,11 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(withoutSpawn).not.toContain("sessions_spawn");
-    expect(prompt).toContain("Large work: `sessions_spawn`; follow the accepted completion mode.");
+    expect(prompt).toContain("Stay in the current session by default.");
+    expect(prompt).toContain("Size or latency alone is insufficient.");
+    expect(prompt).toContain(
+      "As an assigned implementer, keep core work, integration, and verification; do not pass the whole assignment to a child.",
+    );
   });
 
   it("only mentions sessions_yield wait guidance when the tool is available", () => {
@@ -2047,9 +2051,7 @@ describe("system prompt runtime cache boundary", () => {
 
       expect(next.prefix).toBe(first.prefix);
       expect(first.prefix).toContain("## Care");
-      expect(first.prefix).toContain(
-        "Large work: `sessions_spawn`; follow the accepted completion mode.",
-      );
+      expect(first.prefix).toContain("Stay in the current session by default.");
       expect(first.prefix).not.toContain("## Proactive Sub-Agent Orchestration");
       expect(first.suffix).not.toContain("Ultra active");
       expect(next.suffix).toContain("## Proactive Sub-Agent Orchestration");

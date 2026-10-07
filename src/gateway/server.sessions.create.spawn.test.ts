@@ -168,6 +168,10 @@ test.each([false, true])(
               kind: "agentRuntime",
               agentId: "main",
               sessionKey: parentSessionKey,
+              turnSourceChannel: "telegram",
+              turnSourceTo: "-100100",
+              turnSourceAccountId: "requester-bot",
+              turnSourceThreadId: "77",
               sessionSpawnContext: {
                 completionOwnerSessionKey: "agent:main:discord:direct:bob",
                 inheritedPermissionMode: "full",
@@ -190,6 +194,12 @@ test.each([false, true])(
       createdActor: required ? actor : { type: "agent", id: "main" },
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      inheritedApprovalOrigin: {
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100100",
+        turnSourceAccountId: "requester-bot",
+        turnSourceThreadId: "77",
+      },
       permissionMode: "full",
       inheritedToolAllow: ["read", "sessions_spawn"],
       inheritedToolDeny: ["exec"],
@@ -199,6 +209,12 @@ test.each([false, true])(
     expect(child).toMatchObject({
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      inheritedApprovalOrigin: {
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100100",
+        turnSourceAccountId: "requester-bot",
+        turnSourceThreadId: "77",
+      },
       permissionMode: "full",
       inheritedToolPolicyVersion: 1,
       createdActor: required ? actor : { type: "agent", id: "main" },

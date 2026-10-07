@@ -10,6 +10,7 @@ type AdmissionOwner = {
   message: () => PersistedUserTurnMessage | undefined;
   blocked: () => boolean;
   sentToProvider: () => boolean;
+  retainCancelled: () => boolean;
   refresh: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
@@ -24,6 +25,13 @@ export function registerUserTurnTranscriptAdmissionOwner(
   owner: AdmissionOwner,
 ): void {
   admissionOwners.set(recorder, owner);
+}
+
+/** A copied SDK recorder never inherits the factory's native input custody. */
+export function retainCancelledUserTurnInput(
+  recorder: UserTurnTranscriptRecorder | undefined,
+): boolean {
+  return recorder ? (admissionOwners.get(recorder)?.retainCancelled() ?? false) : false;
 }
 
 export function getUserTurnTranscriptAdmissionOwner(

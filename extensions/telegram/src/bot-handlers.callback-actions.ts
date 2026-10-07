@@ -102,7 +102,11 @@ export function createTelegramCallbackMessageActions(params: {
     }
   };
 
+  const approvalProjection: { approvalMessageKey?: string } = {
+    approvalMessageKey: `${callbackMessage.chat.id}:${callbackMessage.message_id}`,
+  };
   return {
+    ...approvalProjection,
     editCallbackMessage,
     clearCallbackButtons,
     editCallbackButtons,

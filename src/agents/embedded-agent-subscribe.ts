@@ -425,6 +425,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     answerSegments: state.answerSegments,
     getCurrentAttemptAssistant,
     hasSuccessfulModelResponse,
+    getAssistantMessageStartIndex: (): number | undefined => state.assistantMessageStartIndex,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,

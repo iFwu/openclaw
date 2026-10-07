@@ -14,6 +14,7 @@ import {
 } from "../../agents/harness/gateway-question.test-support.js";
 import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createInboundDebouncer } from "../inbound-debounce.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
@@ -138,6 +139,123 @@ describe("question response custody through reply adoption", () => {
       }
     });
   });
+
+  it.each(["accepted", "rejected"] as const)(
+    "preserves message order after deferred ingress when the first steer is %s",
+    async (outcome) => {
+      const key = `agent:main:deferred-steer-order-${outcome}`;
+      const first = createQueueTestRun({ prompt: "first instruction", messageId: "first" });
+      await withQuestionCreator(key, first, async (operation, fingerprint) => {
+        const firstEntered = createDeferred();
+        const firstOutcome = createDeferred();
+        const adopted: string[] = [];
+        const deferred: string[] = [];
+        const followup = vi.fn(async (_run: FollowupRun) => {});
+        const second: FollowupRun = { ...first, prompt: "continue", messageId: "second" };
+        let injectionAvailable = true;
+        const queueMessage = vi.fn(async (message: string) => {
+          if (message === first.prompt) {
+            firstEntered.resolve();
+            await firstOutcome.promise;
+          }
+        });
+        operation.attachBackend({
+          kind: "embedded",
+          runId: "accepted-backing-work",
+          toolAuthorityFingerprint: fingerprint,
+          cancel: vi.fn(),
+          messageInjectionV2: { version: 2, isAvailable: () => injectionAvailable, queueMessage },
+        });
+        operation.setPhase("running");
+        const debouncer = createInboundDebouncer<FollowupRun>({
+          debounceMs: 0,
+          serializeImmediate: true,
+          buildKey: () => key,
+          onFlush: (runs, createFlush) =>
+            createFlush({
+              dispatch: async (lifecycle) => {
+                for (const run of runs) {
+                  run.turnAdoptionLifecycle = {
+                    onAdopted: async () => {
+                      adopted.push(run.prompt);
+                    },
+                    onDeferred: () => {
+                      deferred.push(run.prompt);
+                      lifecycle.onDeferred();
+                    },
+                  };
+                  const typing = createMockTypingController();
+                  await runActiveReplySteer({
+                    followupRun: run,
+                    opts: undefined,
+                    providedReplyOperation: operation,
+                    queueKey: key,
+                    releaseAdmissionTicket: () => {},
+                    replyOperationRunState: undefined,
+                    resolvedQueue: { mode: "steer", debounceMs: 0 },
+                    restartRecoverySourceTurnId: run.messageId,
+                    runFollowup: followup,
+                    sessionCtx: {},
+                    sessionKey: key,
+                    touchActiveSessionEntry: async () => {},
+                    typing,
+                    typingSignals: createTypingSignaler({
+                      typing,
+                      mode: "never",
+                      isHeartbeat: false,
+                    }),
+                    toolAuthorityFingerprint: fingerprint,
+                  });
+                }
+              },
+            }),
+        });
+        try {
+          await withTestTimeout(
+            debouncer.enqueue(first),
+            1_000,
+            "first deferred ingress stayed locked",
+          );
+          await firstEntered.promise;
+          await withTestTimeout(
+            debouncer.enqueue(second),
+            1_000,
+            "later input could not enter ingress",
+          );
+          expect(deferred).toEqual([first.prompt, second.prompt]);
+          expect(queueMessage.mock.calls.map(([message]) => message)).toEqual([first.prompt]);
+          expect(adopted).toEqual([]);
+          if (outcome === "accepted") {
+            firstOutcome.resolve();
+          } else {
+            // Rejection closes this target; native queues may try newer input only on a live target.
+            injectionAvailable = false;
+            operation.complete();
+            firstOutcome.reject(new Error("backend stopped accepting this steer"));
+          }
+          await debouncer.drain();
+          expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(
+            outcome === "accepted" ? [first.prompt, second.prompt] : [first.prompt],
+          );
+          expect(adopted).toEqual(outcome === "accepted" ? [first.prompt, second.prompt] : []);
+          if (outcome === "accepted") {
+            expect(followup).not.toHaveBeenCalled();
+          } else {
+            await vi.waitFor(() =>
+              expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([
+                first.prompt,
+                second.prompt,
+              ]),
+            );
+          }
+        } finally {
+          firstOutcome.resolve();
+          await debouncer.drain();
+          clearSessionQueues([key]);
+        }
+      });
+    },
+  );
 
   it("cancels a waiting steer without waiting for its predecessor's acceptance", async () => {
     const key = "agent:main:waiting-steer-abort";

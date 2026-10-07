@@ -226,6 +226,22 @@ attempt, and execution history.
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
 
+### Approvals in bound task topics
+
+When a dispatched Workboard worker has one active, unexpired Telegram conversation
+binding, the Gateway captures that binding as the origin of each new exec or
+plugin approval. Binding before dispatch and binding an already-running worker
+both work; the approval does not rely on the dispatching conversation or mutable
+session reply metadata. The channel still owns topic parsing and its configured
+approval delivery policy. With Telegram `execApprovals.target: "channel"`, a valid
+bound topic is the only native card destination, without an additional approver DM.
+
+Unbound workers and ambiguous or expired bindings keep their existing approval
+route and fallback behavior. Ordinary visible children keep the approval origin
+captured at spawn. A binding change affects only new requests, not an approval
+already awaiting a decision. Approval rules, reviewer authorization, and decision
+semantics are unchanged.
+
 Workspace paths follow the caller's existing filesystem authority:
 
 - Gateway clients with `operator.write` can use configured agent workspaces.

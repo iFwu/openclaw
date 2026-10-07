@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  buildPluginApprovalResolvedMessage,
+  buildPluginApprovalExpiredMessage,
+} from "../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import {
   buildChannelApprovalResolvedText,
@@ -110,5 +114,31 @@ describe("approval terminal presentation", () => {
         view: systemAgentView({ applicationStatus: "applied" }),
       }),
     ).toBe("❌ OpenClaw change denied. No change was made.");
+  });
+});
+
+describe("guard companion receipts", () => {
+  it("keeps a denied guard receipt Chinese, short and truthful", () => {
+    const request = {
+      pluginId: "approval-guard",
+      title: "Change config",
+      description: "operation",
+    };
+    expect(
+      buildPluginApprovalResolvedMessage({
+        id: "plugin:12345678-abcd",
+        decision: "deny",
+        ts: 1,
+        request,
+      }),
+    ).toBe("❌ 已拒绝 · 12345678");
+    expect(
+      buildPluginApprovalExpiredMessage({
+        id: "plugin:12345678-abcd",
+        request,
+        createdAtMs: 0,
+        expiresAtMs: 1,
+      }),
+    ).toBe("⏱️ 此卡已到期 · 12345678");
   });
 });

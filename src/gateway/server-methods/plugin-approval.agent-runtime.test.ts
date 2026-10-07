@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import {
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -77,6 +87,111 @@ afterEach(() => {
 });
 
 describe("plugin approval signed agent runtime", () => {
+  it("routes two later worker approvals to a newly bound task topic, then restores the unbound route", async (testContext) => {
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "channel-plugin-api.ts",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+    const sessionKey = "agent:main:subagent:workboard-default-4401b5e3";
+    let binding: SessionBindingRecord | null = null;
+    const adapter = {
+      channel: "telegram",
+      accountId: "default",
+      bind: async () =>
+        (binding = {
+          bindingId: "task-topic",
+          targetSessionKey: sessionKey,
+          targetKind: "session" as const,
+          conversation: {
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "-100123:topic:42",
+          },
+          status: "active" as const,
+          boundAt: Date.now(),
+        }),
+      listBySession: (key: string) => (binding && key === sessionKey ? [binding] : []),
+      resolveByConversation: () => binding,
+      unbind: async () => {
+        const removed = binding ? [binding] : [];
+        binding = null;
+        return removed;
+      },
+    };
+    registerSessionBindingAdapter(adapter);
+    testContext.onTestFinished(() => unregisterSessionBindingAdapter({ ...adapter, adapter }));
+    const runtime = {
+      ...identityWithoutExecution(),
+      sessionKey,
+      approvalOwnerPluginId: "approval-guard",
+    };
+    const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(
+      testContext,
+      {
+        approvalKind: "plugin",
+        validateAgentRuntimeDelegatedAuthority: () => true,
+      },
+    );
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = requestHandler(manager);
+      const request = async (decision: "allow-once" | "deny", bound: boolean) => {
+        const opts = requestOptions({
+          identity: runtime,
+          request: {
+            title: "Sensitive action",
+            description: "D",
+            twoPhase: true,
+            sessionKey: "agent:main:subagent:workboard-unrelated",
+            turnSourceChannel: "telegram",
+            turnSourceTo: "-999:topic:99",
+            turnSourceAccountId: "forged",
+            turnSourceThreadId: 99,
+          },
+        });
+        const { pending } = await waitForApprovalRequested(
+          opts.context,
+          "plugin.approval.requested",
+          () => fixture.track(Promise.resolve(handler(opts))),
+        );
+        expect(await manager.listPendingRecords()).toHaveLength(1);
+        const record = (await manager.listPendingRecords())[0]!;
+        try {
+          expect(record.request).toMatchObject({
+            sessionKey,
+            turnSourceChannel: bound ? "telegram" : null,
+            turnSourceTo: bound ? "-100123:topic:42" : null,
+            turnSourceAccountId: bound ? "default" : null,
+            turnSourceThreadId: bound ? "42" : null,
+          });
+        } finally {
+          await manager.resolve(record.id, decision);
+          await pending;
+        }
+        expect(vi.mocked(opts.respond).mock.calls.at(-1)?.[1]).toMatchObject({ decision });
+      };
+      await request("deny", false);
+      const service = getSessionBindingService();
+      await service.bind({
+        targetSessionKey: sessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-100123:topic:42",
+        },
+        placement: "current",
+      });
+      await request("allow-once", true);
+      await request("deny", true);
+      await service.unbind({ targetSessionKey: sessionKey, scope: adapter, reason: "test" });
+      await request("deny", false);
+      expect(runtime).not.toHaveProperty("turnSourceChannel");
+    });
+  });
   it("rejects closed authority before creating a plugin approval", async (testContext) => {
     const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",

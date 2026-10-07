@@ -1,3 +1,4 @@
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { prepareReplyConversation } from "../auto-reply/reply/prompt-session-context.js";
@@ -104,6 +105,29 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       SessionKey: runSessionKey,
       AgentId: agentId,
     } satisfies MsgContext;
+    try {
+      // Queue identities are diagnostic; event text and free-form wake reasons are not.
+      heartbeatLog.info("heartbeat: executing wake", {
+        source: wake.wakeSource,
+        intent: opts.intent,
+        agentId: redactIdentifier(agentId),
+        sessionKey: redactIdentifier(runSessionKey),
+        turnSource: heartbeatContext.InternalTurnSource,
+        pendingEventCount: wake.preflight.pendingEventEntries.length,
+        inspectedEventCount: prepared.inspectedSystemEventsToConsume.length,
+        inspectedEventIds: prepared.inspectedSystemEventsToConsume
+          .slice(0, 20)
+          .map((event) => redactIdentifier(event.id)),
+        scheduledTaskCount: wake.scheduledTasks.length,
+        scheduledJobIds: wake.scheduledTasks
+          .slice(0, 20)
+          .map((task) => redactIdentifier(task.jobId)),
+        hasExecCompletion: prepared.hasExecCompletion,
+        hasCronEvents: prepared.hasCronEvents,
+      });
+    } catch {
+      // Diagnostics must not turn an admitted wake into a failed run.
+    }
     await dispatchInboundMessageWithRoutedChannelDispatcher({
       cfg,
       ctx: heartbeatContext,

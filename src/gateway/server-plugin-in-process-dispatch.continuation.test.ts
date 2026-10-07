@@ -169,6 +169,12 @@ describe("typed in-process agent continuation authorization", () => {
             ...(scopedUnknown ? { client: unknownClient } : {}),
           },
           async () => {
+            // Prepare the resident Gateway graph outside the request deadline.
+            await Promise.all([
+              import("./agent-turn/agent-request-preflight.js"),
+              import("./agent-turn/agent-turn-service.js"),
+              import("./agent-turn/principal.js"),
+            ]);
             const dispatch = () =>
               callAgentToolGatewayRequest({
                 method: "agent",

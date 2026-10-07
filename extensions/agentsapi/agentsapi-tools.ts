@@ -432,7 +432,7 @@ export function buildAgentsApiToolSurface(
               executedArgs = execution.executedArguments;
               const { rawResult: raw, rawIsError } = execution;
               const tool = entry.tool;
-              asyncStarted = !rawIsError && isAsyncStartedToolResult(raw);
+              asyncStarted = !rawIsError && isAsyncStartedToolResult(raw, call.name);
               asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(raw) : {};
               const acceptedSpawn =
                 call.name === "sessions_spawn" && !rawIsError

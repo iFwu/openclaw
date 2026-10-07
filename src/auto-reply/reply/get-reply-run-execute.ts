@@ -347,6 +347,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
           input: userTurnInput,
+          pendingInputSources: opts?.pendingInputSources,
           target: () => ({
             sessionId: preparedSessionState.sessionId,
             sessionKey: sessionKey ?? preparedSessionState.sessionId,

@@ -213,8 +213,10 @@ describe("prepared reply fallback ownership", () => {
           ...resolveModelFallbackOptions(run),
           manifestPlugins: metadata.plugins,
         });
+        // Manual selection keeps the authored subagent ladder; a non-global agent
+        // selection cannot inherit the unrelated global primary's fallback tail.
         expect(candidates.map((candidate) => candidate.provider)).toEqual(
-          source === "user" || locked ? ["selected"] : ["selected", "fallback"],
+          locked || scope === "agent" ? ["selected"] : ["selected", "fallback"],
         );
         const nested = await acquireAgentRunPreparedModelRuntime(
           {

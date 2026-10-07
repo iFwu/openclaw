@@ -91,7 +91,7 @@ export function buildSubagentSpawnEnvelope(params: {
   if (canSpawn) {
     lines.push(
       "## Sub-Agent Spawning",
-      "May delegate descendants for parallel/complex work. Decide local vs child ownership.",
+      "Delegate only narrower, independent subtasks when their benefit outweighs handoff costs. Keep the core work, integration, and verification yourself. Do not pass the whole assignment to a child; complexity or duration alone is not a reason to delegate.",
       "Brief child: objective, output, inputs/files, write scope, verification, blocking status; stable handle needs `taskName`, UI title `label`.",
       params.completionMode === "collector"
         ? "Descendants must also be collectors. Explicitly collect all required results before your final reply."

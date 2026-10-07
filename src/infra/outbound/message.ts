@@ -147,7 +147,7 @@ type MessageSendParams = {
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
-  parseMode?: "HTML";
+  parseMode?: "HTML" | "plain";
 };
 
 export type MessageSendResult = {

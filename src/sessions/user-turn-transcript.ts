@@ -6,6 +6,7 @@ import {
   bindSessionPendingInputSources,
   persistSessionTranscriptTurn,
   stageSessionPendingInput,
+  retainCancelledSessionPendingInput,
   withSessionPendingInputPersistence,
   publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
@@ -548,8 +549,8 @@ export function createUserTurnTranscriptRecorder(
       staging ??= (async () => {
         const candidate = await resolveMessageForPersistence();
         const target = await resolveUserTurnTranscriptTarget(params.target);
-        if (!candidate || !target || persisted || runtimePersisted) {
-          return false;
+        if (!candidate || !target || persisted || runtimePersisted || pendingInput) {
+          return pendingInput?.state === "queued" && !persisted && !runtimePersisted;
         }
         const config = target.config as SessionTranscriptTurnPersistOptions["config"];
         const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(target, config);
@@ -557,6 +558,7 @@ export function createUserTurnTranscriptRecorder(
           { ...target, ...runtimeTarget },
           {
             ...options,
+            assertRetainedCurrent: params.assertRetainedInputCurrent,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
@@ -727,6 +729,8 @@ export function createUserTurnTranscriptRecorder(
     message: () => admittedMessage,
     blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
     sentToProvider: () => sentToProvider,
+    retainCancelled: () =>
+      pendingInput ? retainCancelledSessionPendingInput(pendingInput) : false,
     refresh: refreshAdmission,
   });
   return recorder;

@@ -46,6 +46,7 @@ function createResultFixture(params?: {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    asyncExec?: { sessionId: string; startedAt: number; settled?: true };
   }>;
 }) {
   const state: Parameters<typeof completeEmbeddedAttemptResult>[0]["state"] = {
@@ -662,25 +663,30 @@ describe("attempt result projection", () => {
   });
 
   it("filters invalid tool metadata and preserves terminal flags", () => {
-    expect(
-      completeResult({
-        toolMetas: [
-          { toolName: "", replaySafe: true },
-          { toolName: "read", isError: false },
-          {
-            toolName: "exec",
-            toolCallId: "tool-current",
-            meta: "done",
-            replaySafe: true,
-            isError: true,
-            terminate: true,
-            asyncStarted: true,
-            asyncTaskRunId: "run-1",
-            asyncTaskId: "task-1",
-          },
-        ],
-      }).toolMetas,
-    ).toEqual([
+    const asyncExec: NonNullable<EmbeddedRunAttemptResult["toolMetas"][number]["asyncExec"]> = {
+      sessionId: "process-one",
+      startedAt: 1,
+      settled: true,
+    };
+    const result = completeResult({
+      toolMetas: [
+        { toolName: "", replaySafe: true },
+        { toolName: "read", isError: false },
+        {
+          toolName: "exec",
+          toolCallId: "tool-current",
+          meta: "done",
+          replaySafe: true,
+          isError: true,
+          terminate: true,
+          asyncStarted: true,
+          asyncTaskRunId: "run-1",
+          asyncTaskId: "task-1",
+          asyncExec,
+        },
+      ],
+    });
+    expect(result.toolMetas).toEqual([
       {
         toolName: "read",
         meta: undefined,
@@ -697,8 +703,16 @@ describe("attempt result projection", () => {
         asyncStarted: true,
         asyncTaskRunId: "run-1",
         asyncTaskId: "task-1",
+        asyncExec: { sessionId: "process-one", startedAt: 1, settled: true },
       },
     ]);
+    delete asyncExec.settled;
+    asyncExec.startedAt = 2;
+    expect(result.toolMetas[1]?.asyncExec).toEqual({
+      sessionId: "process-one",
+      startedAt: 1,
+      settled: true,
+    });
   });
 
   it("projects successful nested tool names from settled attempt state", () => {

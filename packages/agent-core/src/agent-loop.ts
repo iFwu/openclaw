@@ -47,7 +47,6 @@ export type { AgentEventSink } from "./agent-stream-response.js";
 
 const TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE =
   "OpenClaw stopped this run because tool-loop recovery encountered another critical loop. No blocked tool action was executed.";
-const STEERING_TOOL_SKIP_MESSAGE = "Skipped to process an incoming message.";
 const TOOL_ADMISSION_FAILURE_MESSAGE = "Tool execution was blocked before launch.";
 const TOOL_ADMISSION_FAILURE_DETAILS = {
   status: "blocked",
@@ -239,16 +238,6 @@ async function runLoop(
         return newMessages;
       }
 
-      let streamedSteering: AgentMessage[] = [];
-      const streamedConfig: AgentLoopConfig = {
-        ...config,
-        getSteeringMessages: async () => {
-          if (streamedSteering.length === 0) {
-            streamedSteering = await getSteeringAtCheckpoint(config);
-          }
-          return streamedSteering;
-        },
-      };
       const streamed = await streamAgentResponse(
         state.context,
         config,
@@ -259,7 +248,7 @@ async function runLoop(
           const batch = await executeToolCalls(
             state.context,
             assistantMessage,
-            streamedConfig,
+            config,
             executionSignal,
             toolEmit,
             toolLoopRecoveryState.criticalToolLoopSeen,
@@ -292,7 +281,7 @@ async function runLoop(
           ? await executeToolCalls(
               state.context,
               message,
-              streamedSteering.length > 0 ? streamedConfig : config,
+              config,
               signal,
               emit,
               toolLoopRecoveryState.criticalToolLoopSeen,
@@ -305,7 +294,6 @@ async function runLoop(
       const executedToolBatch: ExecutedToolCallBatch | undefined = batches.length
         ? {
             messages: batches.flatMap((batch) => batch.messages),
-            steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],
             terminate: batches.every((batch) => batch.terminate),
             terminateRun: batches.some((batch) => batch.terminateRun),
             intervention: batches.find((batch) => batch.intervention)?.intervention,
@@ -320,7 +308,6 @@ async function runLoop(
           message.endTurn === false &&
           !executedToolBatch?.terminate) ||
         (executedToolBatch !== undefined && !executedToolBatch.terminate);
-      pendingMessages = executedToolBatch?.steeringMessages ?? [];
       if (executedToolBatch?.intervention) {
         toolLoopRecoveryState.criticalToolLoopSeen = true;
       }
@@ -397,6 +384,13 @@ async function runLoop(
         return newMessages;
       }
 
+      // Ordinary steering joins the next model request after this response's tools settle.
+      // It outranks normal finalization without recalling admitted tool calls.
+      const steering = getSteeringAtCheckpoint(config);
+      pendingMessages = Array.isArray(steering) ? steering : await steering;
+      if (await stopIfAborted()) {
+        return newMessages;
+      }
       if (pendingMessages.length === 0) {
         if (
           !nextTurnSnapshot?.stop &&
@@ -410,9 +404,6 @@ async function runLoop(
           await emit({ type: "agent_end", messages: newMessages });
           return newMessages;
         }
-
-        const steering = getSteeringAtCheckpoint(config);
-        pendingMessages = Array.isArray(steering) ? steering : await steering;
       }
       if (await stopIfAborted()) {
         return newMessages;
@@ -558,20 +549,10 @@ async function executeToolCallGroups(
 ): Promise<ExecutedToolCallBatch> {
   const finalizedCalls: FinalizedToolCallOutcome[] = [];
   const messages: ToolResultMessage[] = [];
-  let steeringMessages: AgentMessage[] = [];
   let cursor = 0;
   let fatal: ExecutedToolCallBatch["fatal"];
 
   while (cursor < toolCalls.length) {
-    if (sequential && !batch.signal?.aborted) {
-      const steering = getSteeringAtCheckpoint(batch.config);
-      steeringMessages = Array.isArray(steering) ? steering : await steering;
-    }
-    if (steeringMessages.length > 0) {
-      batch.lifecycle?.releaseSkippedCalls(validatedToolCallIds(batch, toolCalls.slice(cursor)));
-      break;
-    }
-
     const entries: FinalizedToolCallEntry[] = [];
     try {
       // Sequential groups commit before preparing the next call. Parallel groups
@@ -592,10 +573,6 @@ async function executeToolCallGroups(
       }
 
       const hasReady = entries.some((entry) => "kind" in entry);
-      if (!batch.signal?.aborted && (!sequential || hasReady)) {
-        const steering = getSteeringAtCheckpoint(batch.config);
-        steeringMessages = Array.isArray(steering) ? steering : await steering;
-      }
       const ordered: Array<FinalizedToolCallOutcome | undefined> = entries.map((entry) =>
         "kind" in entry ? undefined : entry,
       );
@@ -622,7 +599,7 @@ async function executeToolCallGroups(
       };
 
       const launched =
-        steeringMessages.length > 0 || (sequential && !hasReady)
+        sequential && !hasReady
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle);
       // Streamed batches serialize admission until source execution begins.
@@ -634,25 +611,15 @@ async function executeToolCallGroups(
         await settle(index, entry, outcome);
       }
       fatal = launched?.rejected ? { error: launched.rejected.error } : undefined;
-      const skippedIndex =
-        steeringMessages.length > 0 ? 0 : (launched?.rejected?.index ?? entries.length);
-      if (sequential && steeringMessages.length > 0) {
-        for (const entry of entries) {
-          if ("kind" in entry) {
-            entry.execution.dispose();
-          }
-        }
-      }
-      if (steeringMessages.length > 0 || fatal) {
+      const skippedIndex = launched?.rejected?.index ?? entries.length;
+      if (fatal) {
         const skippedIds = [
           ...entries
             .slice(skippedIndex)
             .flatMap((entry) => ("kind" in entry ? [entry.toolCall.id] : [])),
           ...validatedToolCallIds(batch, toolCalls.slice(cursor)),
         ];
-        if (sequential || fatal || skippedIds.length > 0) {
-          batch.lifecycle?.releaseSkippedCalls(skippedIds);
-        }
+        batch.lifecycle?.releaseSkippedCalls(skippedIds);
       }
       for (let index = skippedIndex; index < entries.length; index++) {
         const entry = entries[index];
@@ -660,12 +627,12 @@ async function executeToolCallGroups(
           continue;
         }
         // A sequential admission failure retains preparation until its synthetic
-        // transcript commits; parallel and steering skips release before outcome hooks.
+        // transcript commits; parallel failures release before outcome hooks.
         if (!sequential) {
           entry.execution.dispose();
         }
         ordered[index] = await completeUnstartedToolCall(batch, entry.toolCall, {
-          reason: fatal ? "admission" : "steering",
+          reason: "admission",
           args: entry.execution.args,
           startEmitted: true,
         });
@@ -691,21 +658,12 @@ async function executeToolCallGroups(
         }
       }
     }
-    if (steeringMessages.length > 0 || fatal || batch.signal?.aborted) {
+    if (fatal || batch.signal?.aborted) {
       break;
     }
   }
 
-  // Steering accepted during the last sequential call must outrank the stop hook,
-  // even when there is no unstarted tail. Parallel batches retain their single poll.
-  if (sequential && !fatal && !batch.signal?.aborted && steeringMessages.length === 0) {
-    const steering = getSteeringAtCheckpoint(batch.config);
-    steeringMessages = Array.isArray(steering) ? steering : await steering;
-    if (steeringMessages.length > 0) {
-      batch.lifecycle?.releaseSkippedCalls([]);
-    }
-  }
-  const skippedReason = fatal ? "admission" : steeringMessages.length > 0 ? "steering" : undefined;
+  const skippedReason = fatal ? "admission" : undefined;
   for (; cursor < toolCalls.length; cursor++) {
     const toolCall = toolCalls[cursor];
     if (!toolCall) {
@@ -718,7 +676,6 @@ async function executeToolCallGroups(
 
   return {
     messages,
-    steeringMessages,
     terminate: shouldTerminateToolBatch(finalizedCalls),
     terminateRun: false,
     ...(fatal ? { fatal } : {}),
@@ -1374,7 +1331,6 @@ async function completeToolLoopInterventionBatch(
   }
   return {
     messages,
-    steeringMessages: [],
     // A later critical loop always forces termination. During first recovery,
     // honor the outcome hooks: if every finalized outcome says terminate, the
     // batch ends without another provider turn.
@@ -1389,7 +1345,7 @@ async function completeUnstartedToolCall(
   toolCall: AgentToolCall,
   options: {
     args?: unknown;
-    reason?: "admission" | "steering";
+    reason?: "admission";
     startEmitted?: boolean;
   } = {},
 ): Promise<FinalizedToolCallOutcome> {
@@ -1406,16 +1362,8 @@ async function completeUnstartedToolCall(
     {
       toolCall,
       result: createErrorToolResult(
-        options.reason === "admission"
-          ? TOOL_ADMISSION_FAILURE_MESSAGE
-          : options.reason === "steering"
-            ? STEERING_TOOL_SKIP_MESSAGE
-            : "Operation aborted",
-        options.reason === "admission"
-          ? TOOL_ADMISSION_FAILURE_DETAILS
-          : options.reason === "steering"
-            ? { status: "skipped", deniedReason: "steering" }
-            : undefined,
+        options.reason === "admission" ? TOOL_ADMISSION_FAILURE_MESSAGE : "Operation aborted",
+        options.reason === "admission" ? TOOL_ADMISSION_FAILURE_DETAILS : undefined,
       ),
       isError: true,
       executionStarted: false,

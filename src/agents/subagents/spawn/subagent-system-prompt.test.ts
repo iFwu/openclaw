@@ -53,7 +53,13 @@ describe("subagent spawn envelope", () => {
     ({ childDepth, maxSpawnDepth, parent, spawning }) => {
       const { systemPrompt } = buildEnvelope({ childDepth, maxSpawnDepth });
       expect(systemPrompt).toContain(`spawned by ${parent}`);
-      expect(systemPrompt.includes("May delegate descendants")).toBe(spawning);
+      expect(systemPrompt.includes("Delegate only narrower")).toBe(spawning);
+      if (spawning) {
+        expect(systemPrompt).toContain(
+          "Keep the core work, integration, and verification yourself.",
+        );
+        expect(systemPrompt).toContain("Do not pass the whole assignment to a child");
+      }
       if (childDepth === 2) {
         expect(systemPrompt).toContain("Leaf worker: cannot spawn");
       }
@@ -77,7 +83,7 @@ describe("subagent spawn envelope", () => {
     const envelope = buildEnvelope();
 
     expect(envelope.message).toContain("depth 1/5");
-    expect(envelope.systemPrompt).toContain("May delegate descendants");
+    expect(envelope.systemPrompt).toContain("Delegate only narrower");
   });
 
   it.each([false, true])(

@@ -14,7 +14,7 @@ const DEBOUNCE_MS = 4321;
 
 function expectStopAcknowledged(threadId: number) {
   // The real shared dispatcher handles /stop before calling the model resolver.
-  expect(apiCalls).toHaveBeenCalledWith(
+  expect(apiCalls, JSON.stringify(harness.dispatchTrace)).toHaveBeenCalledWith(
     "sendMessage",
     expect.objectContaining({ text: "⚙️ Agent was aborted.", message_thread_id: threadId }),
   );

@@ -188,11 +188,25 @@ export function buildPluginApprovalRequestMessage(
 }
 
 export function buildPluginApprovalResolvedMessage(resolved: PluginApprovalResolved): string {
-  const base = `✅ Plugin approval ${approvalDecisionLabel(resolved.decision)}.`;
+  const icon = resolved.decision === "deny" ? "❌" : "✅";
+  if (resolved.request?.pluginId === "approval-guard") {
+    const label =
+      resolved.decision === "deny"
+        ? "已拒绝"
+        : resolved.decision === "allow-always"
+          ? "已限时放行"
+          : "已允许";
+    return `${icon} ${label} · ${resolved.id.replace(/^plugin:/, "").slice(0, 8)}`;
+  }
+  const base = `${icon} Plugin approval ${approvalDecisionLabel(resolved.decision)}.`;
   const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
-  return `${base}${by} ID: ${resolved.id}`;
+  return `${base}${by} (${resolved.id.replace(/^plugin:/, "").slice(0, 8)})`;
 }
 
 export function buildPluginApprovalExpiredMessage(request: PluginApprovalRequest): string {
-  return `⏱️ Plugin approval expired. ID: ${request.id}`;
+  if (request.request.pluginId === "approval-guard") {
+    // This companion follows a local delivery timer, not canonical execution facts.
+    return `⏱️ 此卡已到期 · ${request.id.replace(/^plugin:/, "").slice(0, 8)}`;
+  }
+  return `⏱️ Plugin approval expired (${request.id.replace(/^plugin:/, "").slice(0, 8)})`;
 }

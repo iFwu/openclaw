@@ -70,6 +70,10 @@ export function resolveSessionCreateSpawnContext(params: {
     }
     return { spawnToolPolicy };
   }
+  if (spawnToolPolicy && params.creation.approvalOrigin) {
+    requester.assertCurrent();
+    Object.assign(spawnToolPolicy, { approvalOrigin: { ...params.creation.approvalOrigin } });
+  }
   // Permission policy belongs to the live caller even for a different target
   // agent. Model inheritance and active transcript forks still require the same agent.
   const preparedPermissionSelection = params.creation.inheritedPermissionMode

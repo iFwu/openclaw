@@ -25,6 +25,28 @@ thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback
 policy. OpenClaw does not retry them with thinking disabled.
 
+## Continuing after settled tools
+
+After the embedded runtime finishes a tool batch, a silent or reasoning-only rate
+limit or provider server error can continue on the next configured model. The
+runner waits for the owned transcript to settle, checks the exact tool calls and
+results, and continues the same logical run from that transcript. It does not
+resubmit the original user request or automatically replay completed actions.
+
+The continuation keeps normal tools available. The model can inspect state and
+perform remaining work; it is instructed to preserve completed work and report
+tool failures honestly. This does not guarantee exactly-once actions chosen by
+the model. The separate text-only finalizer for a successful tool batch keeps its
+existing behavior.
+
+Cross-model continuation stops for partial output in the failed assistant,
+unsettled or asynchronous work, pending approval, yielding, native-runtime
+continuation, cancellation, or an expired run. The checkpoint must still match
+the same run and session, and cannot move to a CLI or transport-owning plugin
+runtime. A checkpoint cannot override newer live delivery-custody restrictions.
+If same-model recovery crosses effects that cannot be proven settled, later
+model-only retries cannot re-enable cross-model fallback for that run.
+
 ## Runtime flow
 
 <Steps>

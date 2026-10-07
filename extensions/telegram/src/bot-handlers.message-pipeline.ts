@@ -1,17 +1,25 @@
 import type { Message } from "grammy/types";
 import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/session-store-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import {
+  prepareTelegramInputSource,
+  readTelegramInputSource,
+} from "./bot-handlers.input-source.js";
+import {
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
   type TelegramPromptContextMessageSelection,
+  type TelegramSessionState,
+  type ResolveTelegramSessionStateParams,
 } from "./bot-handlers.message-context.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -32,6 +40,7 @@ import {
   describeReplyTarget,
   resolveTelegramMessageThreadSpec,
   resolveTelegramPrimaryMedia,
+  getTelegramTextParts,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
@@ -47,6 +56,7 @@ import {
   resolveTelegramInboundMediaUri,
   resolveTelegramPromptMediaPath,
 } from "./prompt-media-path.js";
+import { isTelegramControlLaneText } from "./sequential-key.js";
 
 const HOUR_MS = 60 * 60_000;
 
@@ -124,6 +134,62 @@ export function createTelegramMessagePipeline({
     telegramDeps,
   });
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
+  const prepareMessageInputSource = async (params: {
+    msg: Message;
+    cfg: OpenClawConfig;
+    state: TelegramSessionState;
+    route: ResolveTelegramSessionStateParams;
+    claims: ChannelReplayClaimHandle[];
+  }) => {
+    if (isTelegramControlLaneText({ rawText: getTelegramTextParts(params.msg).text })) {
+      return undefined;
+    }
+    const lifecycle = getTelegramSpooledReplayLifecycle();
+    if (!lifecycle) {
+      return undefined;
+    }
+    lifecycle.abortSignal?.throwIfAborted();
+    if (!params.state.sessionEntry?.sessionId) {
+      await recordSessionMetaFromInbound({
+        storePath: params.state.storePath,
+        sessionKey: params.state.sessionKey,
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          AccountId: accountId,
+          ChatType: params.route.isGroup ? "group" : "direct",
+          From: String(params.msg.chat.id),
+          To: String(params.msg.chat.id),
+          MessageThreadId: params.route.threadSpec.id,
+          Timestamp: params.msg.date * 1000,
+        },
+      });
+      const current = await resolveTelegramSessionState(params.route);
+      if (
+        current.agentId !== params.state.agentId ||
+        current.sessionKey !== params.state.sessionKey ||
+        current.storePath !== params.state.storePath
+      ) {
+        throw new Error("Telegram input route changed before initial source capture");
+      }
+      params.state = current;
+    }
+    lifecycle.abortSignal?.throwIfAborted();
+    return await prepareTelegramInputSource({
+      msg: params.msg,
+      cfg: params.cfg,
+      accountId,
+      state: params.state,
+      resolveState: () => resolveTelegramSessionState(params.route),
+      assertOwnerCurrent: () => lifecycle.abortSignal?.throwIfAborted(),
+      onRetained: async () => {
+        lifecycle.onAdoptionFinalizing?.();
+        await commitDispatchDedupeClaims(params.claims, { requirePersistent: true });
+        await lifecycle.onAdopted();
+      },
+    });
+  };
+
   const {
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
@@ -332,6 +398,13 @@ export function createTelegramMessagePipeline({
     spooledReplayParticipants?: readonly TelegramSpooledReplayDeferredParticipant[];
     spooledReplayAbortSignal?: AbortSignal;
   }): Promise<TelegramMessageProcessingResult> => {
+    const inputSource = readTelegramInputSource(params.msg);
+    if ((await inputSource?.resolveDisposition()) === "retained") {
+      settleSpooledReplayParticipants(params.spooledReplayParticipants ?? [], {
+        kind: "completed",
+      });
+      return { kind: "completed" };
+    }
     let dispatchDedupeCommitted = false;
     let spooledReplayFinalResult: TelegramMessageProcessingResult | undefined;
     let spooledReplayFinalization: Promise<TelegramMessageProcessingResult> | undefined;
@@ -533,6 +606,9 @@ export function createTelegramMessagePipeline({
             await commitDispatchDedupeClaims(params.dispatchDedupeClaims ?? []);
             dispatchDedupeCommitted = true;
           },
+          pendingInputSources: (params.options?.bufferedMessages ?? [params.msg]).flatMap(
+            (msg) => readTelegramInputSource(msg)?.recorder ?? [],
+          ),
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
           finalizeSpooledReplayResult,
@@ -577,6 +653,9 @@ export function createTelegramMessagePipeline({
     claimMessageDispatchDedupe,
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
+    ...({ prepareMessageInputSource } as {
+      prepareMessageInputSource?: typeof prepareMessageInputSource;
+    }),
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
     resolveCachedMessageThreadSpec,

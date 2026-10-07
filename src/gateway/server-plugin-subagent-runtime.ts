@@ -102,9 +102,9 @@ function resolveFallbackModelOverridePolicy(params: {
   if (policy.models.size === 0) {
     return undefined;
   }
-  if (!params.model?.trim() || (!params.provider && !params.model.includes("/"))) {
+  if (!params.model?.trim()) {
     throw new Error(
-      "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
+      "fallback provider/model overrides that use an allowlist require a non-empty model selection.",
     );
   }
   return policy;
@@ -161,7 +161,7 @@ export function createGatewaySubagentRuntime(
     let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
     let allowSyntheticModelOverride = false;
     let policy: PluginSubagentOverridePolicy | undefined;
-    if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
+    if (overrideRequested && !allowOverride) {
       policy = resolveFallbackModelOverridePolicy({
         policies: overridePolicies,
         pluginId: scope?.pluginId,

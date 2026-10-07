@@ -90,6 +90,62 @@ async function setupStop() {
 }
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it.each(["accepted", "adoption-failed", "replaced"] as const)(
+    "transfers ingress custody before cancellation and revalidates target: %s",
+    async (outcome) => {
+      const state = await setupStop();
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "session-a",
+        resetTriggered: false,
+      });
+      const events: string[] = [];
+      operation.attachBackend({
+        kind: "embedded",
+        isStreaming: () => true,
+        cancel: () => {
+          events.push("cancel");
+        },
+      });
+      const onAdopted = async () => {
+        events.push("adopt");
+        expect(operation.abortSignal.aborted).toBe(false);
+        if (outcome === "adoption-failed") {
+          throw new Error("ingress adoption failed");
+        }
+        if (outcome === "replaced") {
+          await replaceSessionEntry(
+            { storePath: state.storePath, sessionKey },
+            { sessionId: "session-b", updatedAt: Date.now() },
+          );
+        }
+      };
+      state.params.opts = { ...state.params.opts, turnAdoptionLifecycle: { onAdopted } };
+      try {
+        const work =
+          pathKind === "fast"
+            ? tryFastAbortFromMessage({ ...state, onAdopted })
+            : handleStopCommand(state.params, true);
+        if (outcome === "accepted") {
+          await work;
+          expect(events).toEqual(["adopt", "cancel"]);
+          expect(operation.abortSignal.aborted).toBe(true);
+        } else {
+          await expect(work).rejects.toThrow(
+            outcome === "adoption-failed" ? "adoption failed" : "changed",
+          );
+          expect(operation.abortSignal.aborted).toBe(false);
+          expect(events).toEqual(["adopt"]);
+          expect(
+            loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,
+          ).not.toBe(true);
+        }
+      } finally {
+        operation.complete();
+      }
+    },
+  );
+
   it("retires an idle MCP runtime on explicit Stop", async () => {
     const state = await setupStop();
     const { getOrCreateSessionMcpRuntime } =
