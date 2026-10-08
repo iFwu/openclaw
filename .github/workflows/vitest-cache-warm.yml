@@ -167,7 +167,7 @@ jobs:
         if: ${{ matrix.platform == 'linux' }}
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: pnpm build full
 
       - name: Save build-all cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.build-all-cache-key != '' }}

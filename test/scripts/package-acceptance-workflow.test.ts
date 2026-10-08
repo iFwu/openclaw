@@ -13128,7 +13128,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       const jobs = readWorkflow(workflowPath).jobs ?? {};
       for (const [jobName, job] of Object.entries(jobs)) {
         for (const step of job.steps ?? []) {
-          if (step.run === "pnpm build") {
+          if (step.run === "pnpm build" || step.run === "pnpm build full") {
             expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
               NODE_OPTIONS: "--max-old-space-size=8192",
             });
@@ -16220,6 +16220,7 @@ esac
   it("provisions the trusted parser before packing a frozen npm candidate", () => {
     const job = workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "prepare_openclaw_npm");
     const steps = job.steps ?? [];
+    expect(workflowStep(job, "Build").run).toBe("pnpm build full");
     const materialize = workflowStep(job, "Materialize trusted package preparation runtime");
     const provision = workflowStep(job, "Provision trusted package preparation runtime");
     const pack = workflowStep(job, "Pack and seal publishable npm package set");
@@ -16251,6 +16252,7 @@ esac
   it("classifies fast pretag Control UI output as a release artifact", () => {
     const script = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
 
+    expect(script).toContain("pnpm build full\n");
     expect(script).toContain("OPENCLAW_CONTROL_UI_RELEASE_BUILD=1 pnpm ui:build");
   });
 

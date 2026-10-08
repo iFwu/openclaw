@@ -1091,7 +1091,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           JSON.stringify({
             name: "openclaw",
             version: "2026.9.1",
-            ...(hasHelper ? { bundleDependencies: ["fixture-runtime"] } : {}),
+            ...(hasHelper
+              ? {
+                  bundleDependencies: ["fixture-runtime"],
+                  scripts: { "build:full": "node scripts/build-all.mts full" },
+                }
+              : {}),
           }),
         );
         if (hasHelper) {
@@ -1127,6 +1132,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
             candidateTgz,
             candidateVersion: "2026.9.1",
           });
+          expect(
+            commands.mock.calls
+              .filter(([, args]) => args[0] === "build" || args[0] === "build:full")
+              .map(([, args]) => args),
+          ).toEqual([[hasHelper ? "build:full" : "build"]]);
           expect(JSON.parse(readFileSync(inventoryPath, "utf8"))).toEqual([
             hasHelper ? "dist/from-source-helper.js" : "dist/from-historical-pack.js",
           ]);

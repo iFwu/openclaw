@@ -464,6 +464,17 @@ export async function buildPackageArtifacts(
     "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
     DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
   );
+  const packageJson: unknown = JSON.parse(
+    await fs.readFile(path.join(sourceDir, "package.json"), "utf8"),
+  );
+  const scripts = isRecord(packageJson) && isRecord(packageJson.scripts) ? packageJson.scripts : {};
+  // Current sources default to CI artifacts; frozen refs may expose only the older full build.
+  const buildScript = ["build:full", "build:package", "build"].find(
+    (name) => typeof scripts[name] === "string" && scripts[name].trim().length > 0,
+  );
+  if (!buildScript) {
+    throw new Error("source package.json does not expose a full package build entrypoint");
+  }
   const distDir = path.join(sourceDir, "dist");
   assertRealOutputRoot(distDir);
   console.error("==> Cleaning OpenClaw package artifacts");
@@ -471,7 +482,7 @@ export async function buildPackageArtifacts(
 
   // Frozen sources own their build entrypoint and may predate clean:dist.
   console.error("==> Building OpenClaw package artifacts");
-  await runImpl("pnpm", ["run", "build"], sourceDir, { env: buildEnv, timeoutMs });
+  await runImpl("pnpm", ["run", buildScript], sourceDir, { env: buildEnv, timeoutMs });
 }
 
 async function runCapture(command: string, args: string[], cwd: string, options: RunOptions = {}) {

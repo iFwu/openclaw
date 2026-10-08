@@ -6012,7 +6012,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2e["continue-on-error"]).toBeUndefined();
     const producerSteps = producer.steps as WorkflowStep[];
     expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
-      "full) pnpm build",
+      "full) pnpm build full ;;",
     );
     expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
       "ciArtifacts) pnpm build:ci-artifacts",
@@ -6068,6 +6068,7 @@ server.listen(0, "127.0.0.1", () => {
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
     const workflow = parse(readFileSync(".github/workflows/node-runtime-compat.yml", "utf8"));
     const steps = workflow.jobs.compat.steps as WorkflowStep[];
+    expect(steps.some((step) => step.run?.includes("pnpm build full\n"))).toBe(true);
     const setupStep = steps.find((step) => step.name === "Setup Node environment");
     const resolveStep = steps.find(
       (step) => step.name === "Resolve trusted declaration cache artifact",
@@ -6565,6 +6566,7 @@ server.listen(0, "127.0.0.1", () => {
       warmerSteps.find((step) => step.name === "Warm build cache"),
       "cache warm build",
     );
+    expect(buildStep.run).toBe("pnpm build full");
     const boundaryRestoreStep = expectDefined(
       warmerSteps.find((step) => step.name === "Restore native SDK boundary cache"),
       "native SDK boundary cache restore",

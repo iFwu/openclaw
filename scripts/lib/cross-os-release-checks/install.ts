@@ -59,12 +59,16 @@ export async function prepareCandidate(params: {
   });
 
   logPhase("prepare", "pnpm-build");
-  await runCommand(pnpmCommand(), ["build"], {
-    cwd: params.sourceDir,
-    env: buildEnv,
-    logPath: join(params.logsDir, "pnpm-build.log"),
-    timeoutMs: 45 * 60 * 1000,
-  });
+  await runCommand(
+    pnpmCommand(),
+    [packageJsonHasScript(packageJson, "build:full") ? "build:full" : "build"],
+    {
+      cwd: params.sourceDir,
+      env: buildEnv,
+      logPath: join(params.logsDir, "pnpm-build.log"),
+      timeoutMs: 45 * 60 * 1000,
+    },
+  );
 
   if (hasUiBuildScript) {
     // pnpm build does not regenerate dist/control-ui, and checked-in bundles can

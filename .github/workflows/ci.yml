@@ -3641,7 +3641,7 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
           # Only build-artifacts owns SDK declarations.
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
-        run: pnpm build
+        run: pnpm build full
 
       - name: Prove desktop resize over node and SSH
         if: matrix.run_desktop
@@ -4404,7 +4404,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
-          pnpm build
+          pnpm build full
           pnpm ui:build
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1

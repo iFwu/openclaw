@@ -304,6 +304,8 @@ function buildAllUsage() {
     "Usage: node --import tsx scripts/build-all.mts [profile]",
     "",
     "Builds OpenClaw artifacts for the selected profile.",
+    "Defaults to ciArtifacts (runtime, Plugin SDK declarations, and Control UI).",
+    "Use full for complete declarations or package for release artifacts.",
     "",
     "Profiles:",
     ...Object.keys(BUILD_ALL_PROFILES).map((profile) => `  ${profile}`),
@@ -316,7 +318,7 @@ function buildAllUsage() {
 export function parseBuildAllArgs(argv: string[]) {
   const args = {
     help: false,
-    profile: "full",
+    profile: "ciArtifacts",
   };
   let sawProfile = false;
   for (const arg of argv) {
@@ -349,7 +351,7 @@ export function resolveBuildAllSteps(
   // Its uncached graph cannot seed the declaration-only caches used by full builds.
   const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
   const labels =
-    profile === "full" && runtimeOnly
+    (profile === "full" || profile === "ciArtifacts") && runtimeOnly
       ? FULL_RUNTIME_ONLY_STEPS
       : profile === "package" && runtimeOnly
         ? ["clean:dist", ...FULL_RUNTIME_ONLY_STEPS]

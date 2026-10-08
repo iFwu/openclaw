@@ -7,8 +7,7 @@ import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import { sleep as delay } from "../../lib/sleep.mjs";
 import { createPrepublishPluginRegistryArtifact } from "../../prepublish-plugin-registry-artifact.mjs";
 import { readPositiveIntEnv } from "./env-limits.ts";
-import { exists, readJson } from "./filesystem.ts";
-import { die, repoRoot, run, say, sh } from "./host-command.ts";
+import { die, repoRoot, run, say } from "./host-command.ts";
 import type { PackageArtifact } from "./types.ts";
 
 export async function extractPackageJsonFromTgz<T>(tgzPath: string, entry: string): Promise<T> {
@@ -80,48 +79,13 @@ function npmViewVersion(spec: string): string {
   return run("npm", ["view", spec, "version"], { quiet: true }).stdout.trim();
 }
 
-async function ensureCurrentBuildUnlocked(input: {
-  requireControlUi?: boolean;
-  checkDirty?: boolean;
-}): Promise<void> {
-  const head = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
-  const buildInfoPath = path.join(repoRoot, "dist/build-info.json");
-  let buildCommit = "";
-  if (await exists(buildInfoPath)) {
-    buildCommit = (await readJson<{ commit?: string }>(buildInfoPath)).commit ?? "";
-  }
-  const dirty =
-    input.checkDirty !== false &&
-    run(
-      "git",
-      [
-        "status",
-        "--porcelain",
-        "--",
-        "src",
-        "ui",
-        "packages",
-        "extensions",
-        "package.json",
-        "pnpm-lock.yaml",
-        "tsconfig*.json",
-      ],
-      { quiet: true },
-    ).stdout.trim() !== "";
-  const controlReady =
-    !input.requireControlUi ||
-    ((await exists(path.join(repoRoot, "dist/control-ui/index.html"))) &&
-      sh("compgen -G 'dist/control-ui/assets/*' >/dev/null", { check: false, quiet: true })
-        .status === 0);
-  if (buildCommit === head && !dirty && controlReady) {
-    return;
-  }
-  say("Build dist for current head");
-  run("pnpm", ["build"]);
-  if (input.requireControlUi) {
-    say("Build Control UI for current head");
-    run("pnpm", ["ui:build"]);
-  }
+function buildCurrentPackageUnlocked(): void {
+  // CI artifacts share the full build's HEAD and runtime stamps. Let the canonical
+  // full-build owner reuse its caches instead of treating those stamps as package proof.
+  say("Build full package artifacts for current head");
+  run("pnpm", ["build:full"], {
+    env: { ...process.env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+  });
   const drift = run(
     "git",
     ["status", "--porcelain", "--", ":(glob)extensions/*/src/host/**/.bundle.hash"],
@@ -164,10 +128,7 @@ export async function packOpenClaw(input: {
   }
 
   return await withPackageLock(path.join(tmpdir(), "openclaw-parallels-build.lock"), async () => {
-    await ensureCurrentBuildUnlocked({
-      checkDirty: true,
-      requireControlUi: input.requireControlUi,
-    });
+    buildCurrentPackageUnlocked();
     const shortHead = run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
     const tgzPath = path.join(input.destination, `openclaw-main-${shortHead}.tgz`);
     // The canonical helper inventories the package, bundles private workspace runtime code,

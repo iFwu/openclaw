@@ -325,7 +325,9 @@ describe("resolveBuildAllStep", () => {
 
 describe("resolveBuildAllSteps", () => {
   it("parses build-all CLI args before any build work", () => {
-    expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "full" });
+    expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "ciArtifacts" });
+    expect(parseBuildAllArgs(["full"])).toEqual({ help: false, profile: "full" });
+    expect(parseBuildAllArgs(["qaRuntime"])).toEqual({ help: false, profile: "qaRuntime" });
     expect(parseBuildAllArgs(["cliStartup"])).toEqual({ help: false, profile: "cliStartup" });
     expect(parseBuildAllArgs(["cliStartup", "--help"])).toEqual({
       help: true,
@@ -333,6 +335,7 @@ describe("resolveBuildAllSteps", () => {
     });
     expect(() => parseBuildAllArgs(["cliStartup", "--bogus"])).toThrow("unknown argument: --bogus");
     expect(() => parseBuildAllArgs(["wat"])).toThrow("Unknown build profile: wat");
+    expect(() => parseBuildAllArgs(["ciArtifacts", "full"])).toThrow("unexpected argument: full");
   });
 
   it("prints CLI help without starting build steps", () => {
@@ -954,31 +957,34 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("uses the full runtime artifact surface without declaration work when DTS is disabled", () => {
-    const steps = resolveBuildAllSteps("full", {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
-    });
-    const labels = steps.map((step) => step.label);
+  it.each(["full", "ciArtifacts"])(
+    "uses the %s runtime artifact surface without declaration work when DTS is disabled",
+    (profile) => {
+      const steps = resolveBuildAllSteps(profile, {
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      });
+      const labels = steps.map((step) => step.label);
 
-    expect(labels).toEqual([
-      "plugins:assets:build",
-      "tsdown",
-      "external-plugins:local-dist",
-      "check-cli-bootstrap-imports",
-      "plugins:assets:copy",
-      "runtime-postbuild",
-      "build-stamp",
-      "runtime-postbuild-stamp",
-      "ui:build",
-      "write-build-info",
-      "write-cli-startup-metadata",
-    ]);
-    expect(steps.find((step) => step.label === "tsdown")?.cache).toBeUndefined();
-    expect(labels).not.toContain("write-plugin-sdk-entry-dts");
-    expect(labels).not.toContain("check-plugin-sdk-exports");
-  });
+      expect(labels).toEqual([
+        "plugins:assets:build",
+        "tsdown",
+        "external-plugins:local-dist",
+        "check-cli-bootstrap-imports",
+        "plugins:assets:copy",
+        "runtime-postbuild",
+        "build-stamp",
+        "runtime-postbuild-stamp",
+        "ui:build",
+        "write-build-info",
+        "write-cli-startup-metadata",
+      ]);
+      expect(steps.find((step) => step.label === "tsdown")?.cache).toBeUndefined();
+      expect(labels).not.toContain("write-plugin-sdk-entry-dts");
+      expect(labels).not.toContain("check-plugin-sdk-exports");
+    },
+  );
 
-  describe.each(["full", "package"])("%s runner build environment", (profile) => {
+  describe.each(["full", "package", "ciArtifacts"])("%s runner build environment", (profile) => {
     it.each([undefined, "1"])("isolates update build children with marker %s", async (marker) => {
       const env = {
         OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
@@ -1055,16 +1061,20 @@ describe("resolveBuildAllSteps", () => {
           }).map((step) => step.label),
         );
         expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
-        expect(labels.includes("write-unified-entry-dts")).toBe(!runtimeOnly);
+        expect(labels.includes("write-unified-entry-dts")).toBe(
+          !runtimeOnly && profile !== "ciArtifacts",
+        );
         expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
         expect(labels.includes("clean:dist")).toBe(profile === "package");
         const compilers = invocations.filter((call) =>
           call.args.includes("scripts/tsdown-build.mts"),
         );
-        expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
+        expect(compilers).toHaveLength(runtimeOnly || profile === "ciArtifacts" ? 1 : 3);
         for (const compiler of compilers) {
           expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(
-            compiler.args.includes(TSDOWN_UNIFIED_CONFIG_GROUP) ? "1" : skipDts,
+            compiler.args.includes(TSDOWN_UNIFIED_CONFIG_GROUP) || profile === "ciArtifacts"
+              ? "1"
+              : skipDts,
           );
         }
         expect(env).toEqual(originalEnv);

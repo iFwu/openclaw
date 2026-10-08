@@ -180,7 +180,7 @@ function ensurePreparedArtifacts(): void {
   }
 
   console.error(
-    "prepack: requires an existing build and Control UI bundle. Run `pnpm build && pnpm ui:build` before packing or publishing.",
+    "prepack: requires an existing build and Control UI bundle. Run `pnpm build:package` before packing or publishing.",
   );
   process.exit(1);
 }

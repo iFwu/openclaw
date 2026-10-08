@@ -326,7 +326,7 @@ jobs:
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
         env:
           OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
-        run: pnpm build
+        run: pnpm build full
 
       - name: Ensure Control UI release artifact
         if: steps.dist_build_cache.outputs.cache-hit != 'true'

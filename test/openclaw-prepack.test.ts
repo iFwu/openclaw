@@ -177,6 +177,7 @@ function createPrepackLifecycleFixture() {
     files: ["dist", "docs/docs_map.md", "CHANGELOG.md", ".openclaw-lifecycle-pending"],
     devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
     scripts: {
+      build: "node -e \"throw new Error('default build is CI-only')\"",
       "build:package": "node rebuild.mjs",
       "update:compat:check": "node check-update-compat.mjs",
       prepack: "node lifecycle.mjs prepack",

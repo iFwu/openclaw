@@ -17,6 +17,8 @@ const git = (cwd: string, ...args: string[]) =>
 
 it.skipIf(process.platform === "win32").for([
   { mode: "default", restart: undefined, code: 0, owns: true },
+  { mode: "full-profile", restart: undefined, code: 0, owns: true },
+  { mode: "ci-profile", restart: undefined, code: 0, owns: true },
   { mode: "custom", restart: "  custom-restart  ", code: 0, owns: true },
   { mode: "manual", restart: "", code: 1, owns: false },
   { mode: "whitespace", restart: " \t", code: 1, owns: false },
@@ -112,7 +114,9 @@ it.skipIf(process.platform === "win32").for([
         `if [ "$1" = --version ]; then echo 12.4.2; exit 0; fi
 if [ "$1" = install ]; then exit 0; fi
 export npm_execpath="$LEGACY_FIXTURE_BIN/pnpm.cjs"
-exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --import "$LEGACY_FIXTURE_LOADER" "$LEGACY_FIXTURE_SOURCE/scripts/build-all.mts" "$LEGACY_FIXTURE_PROFILE"`,
+args=()
+if [ -n "$LEGACY_FIXTURE_PROFILE" ]; then args+=("$LEGACY_FIXTURE_PROFILE"); fi
+exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --import "$LEGACY_FIXTURE_LOADER" "$LEGACY_FIXTURE_SOURCE/scripts/build-all.mts" "\${args[@]}"`,
       );
       for (const name of ["openclaw", "custom-restart"]) {
         shim(name, 'echo restart >> "$LEGACY_FIXTURE_ROOT/events"');
@@ -138,7 +142,14 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
             LEGACY_FIXTURE_BIN: bin,
             LEGACY_FIXTURE_NODE: process.execPath,
             LEGACY_FIXTURE_MODE: mode,
-            LEGACY_FIXTURE_PROFILE: mode === "explicit-profile" ? "qaRuntime" : "full",
+            LEGACY_FIXTURE_PROFILE:
+              mode === "explicit-profile"
+                ? "qaRuntime"
+                : mode === "full-profile"
+                  ? "full"
+                  : mode === "ci-profile"
+                    ? "ciArtifacts"
+                    : "",
             ...(restart === undefined ? {} : { OPENCLAW_UPDATE_RESTART_CMD: restart }),
           },
         }),

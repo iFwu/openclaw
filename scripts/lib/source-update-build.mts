@@ -36,7 +36,11 @@ export async function runLegacySourceUpdateBuild(
 ): Promise<number | undefined> {
   const env = { ...process.env };
   const restartCommand = env.OPENCLAW_UPDATE_RESTART_CMD ?? "openclaw gateway restart";
-  if (profile !== "full" || env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" || !restartCommand.trim()) {
+  if (
+    (profile !== "full" && profile !== "ciArtifacts") ||
+    env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" ||
+    !restartCommand.trim()
+  ) {
     return undefined;
   }
   const root = fs.realpathSync(process.cwd());

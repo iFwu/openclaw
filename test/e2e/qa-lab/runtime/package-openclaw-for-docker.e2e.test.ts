@@ -599,6 +599,10 @@ describe("package-openclaw-for-docker", () => {
 
   it("builds explicit plugin selections through the canonical build environment", async () => {
     const { sourceDir } = createSelectedPluginPackageFixture();
+    const manifestPath = path.join(sourceDir, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    packageJson.scripts = { "build:full": "full build fixture" };
+    fs.writeFileSync(manifestPath, JSON.stringify(packageJson));
     const runImpl = vi.fn(
       async (
         _command: string,
@@ -943,95 +947,108 @@ describe("package-openclaw-for-docker", () => {
     );
   });
 
-  it("uses the source package build entrypoint with declaration generation", async () => {
-    const sourceDir = tempDirs.make("openclaw-package-build-source-");
-    const calls: Array<{
-      command: string;
-      args: string[];
-      cwd: string;
-      noPnpm: string | undefined;
-      packageExtensions: string | undefined;
-      dockerBuildExtensions: string | undefined;
-      internalDockerBuildPluginIds: string | undefined;
-      privateQa: string | undefined;
-      skipDts: string | undefined;
-      timeoutMs: number | undefined;
-    }> = [];
-    const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
-    const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
-    const previousPackageExtensions = process.env.OPENCLAW_EXTENSIONS;
-    const previousDockerBuildExtensions = process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS;
-    const previousInternalPluginIds = process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
-    const previousPrivateQa = process.env.OPENCLAW_BUILD_PRIVATE_QA;
-    process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
-    process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
-    process.env.OPENCLAW_EXTENSIONS = "clickclack";
-    process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS = "slack";
-    process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV] = "msteams";
-    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+  it.each(["build:full", "build:package", "build"])(
+    "uses the source %s entrypoint with declaration generation",
+    async (buildScript) => {
+      const sourceDir = tempDirs.make("openclaw-package-build-source-");
+      fs.writeFileSync(
+        path.join(sourceDir, "package.json"),
+        JSON.stringify({
+          scripts: {
+            build: "legacy full build fixture",
+            ...(buildScript !== "build" ? { "build:package": "package build fixture" } : {}),
+            ...(buildScript === "build:full" ? { "build:full": "full build fixture" } : {}),
+          },
+        }),
+      );
+      const calls: Array<{
+        command: string;
+        args: string[];
+        cwd: string;
+        noPnpm: string | undefined;
+        packageExtensions: string | undefined;
+        dockerBuildExtensions: string | undefined;
+        internalDockerBuildPluginIds: string | undefined;
+        privateQa: string | undefined;
+        skipDts: string | undefined;
+        timeoutMs: number | undefined;
+      }> = [];
+      const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
+      const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+      const previousPackageExtensions = process.env.OPENCLAW_EXTENSIONS;
+      const previousDockerBuildExtensions = process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS;
+      const previousInternalPluginIds = process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+      const previousPrivateQa = process.env.OPENCLAW_BUILD_PRIVATE_QA;
+      process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
+      process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+      process.env.OPENCLAW_EXTENSIONS = "clickclack";
+      process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS = "slack";
+      process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV] = "msteams";
+      process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
 
-    try {
-      await buildPackageArtifacts(sourceDir, {
-        runImpl: async (
-          command: string,
-          args: string[],
-          cwd: string,
-          options: { env?: NodeJS.ProcessEnv; timeoutMs?: number },
-        ) => {
-          calls.push({
-            command,
-            args,
-            cwd,
-            noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
-            packageExtensions: options.env?.OPENCLAW_EXTENSIONS,
-            dockerBuildExtensions: options.env?.OPENCLAW_DOCKER_BUILD_EXTENSIONS,
-            internalDockerBuildPluginIds: options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV],
-            privateQa: options.env?.OPENCLAW_BUILD_PRIVATE_QA,
-            skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
-            timeoutMs: options.timeoutMs,
-          });
-        },
-      });
-    } finally {
-      if (previousTimeout === undefined) {
-        delete process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
-      } else {
-        process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = previousTimeout;
-      }
-      if (previousSkipDts === undefined) {
-        delete process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
-      } else {
-        process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
-      }
-      for (const [envName, previousValue] of [
-        ["OPENCLAW_EXTENSIONS", previousPackageExtensions],
-        ["OPENCLAW_DOCKER_BUILD_EXTENSIONS", previousDockerBuildExtensions],
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, previousInternalPluginIds],
-        ["OPENCLAW_BUILD_PRIVATE_QA", previousPrivateQa],
-      ] as const) {
-        if (previousValue === undefined) {
-          delete process.env[envName];
+      try {
+        await buildPackageArtifacts(sourceDir, {
+          runImpl: async (
+            command: string,
+            args: string[],
+            cwd: string,
+            options: { env?: NodeJS.ProcessEnv; timeoutMs?: number },
+          ) => {
+            calls.push({
+              command,
+              args,
+              cwd,
+              noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
+              packageExtensions: options.env?.OPENCLAW_EXTENSIONS,
+              dockerBuildExtensions: options.env?.OPENCLAW_DOCKER_BUILD_EXTENSIONS,
+              internalDockerBuildPluginIds: options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV],
+              privateQa: options.env?.OPENCLAW_BUILD_PRIVATE_QA,
+              skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
+              timeoutMs: options.timeoutMs,
+            });
+          },
+        });
+      } finally {
+        if (previousTimeout === undefined) {
+          delete process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
         } else {
-          process.env[envName] = previousValue;
+          process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = previousTimeout;
+        }
+        if (previousSkipDts === undefined) {
+          delete process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+        } else {
+          process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
+        }
+        for (const [envName, previousValue] of [
+          ["OPENCLAW_EXTENSIONS", previousPackageExtensions],
+          ["OPENCLAW_DOCKER_BUILD_EXTENSIONS", previousDockerBuildExtensions],
+          [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, previousInternalPluginIds],
+          ["OPENCLAW_BUILD_PRIVATE_QA", previousPrivateQa],
+        ] as const) {
+          if (previousValue === undefined) {
+            delete process.env[envName];
+          } else {
+            process.env[envName] = previousValue;
+          }
         }
       }
-    }
 
-    expect(calls).toEqual([
-      {
-        command: "pnpm",
-        args: ["run", "build"],
-        cwd: sourceDir,
-        dockerBuildExtensions: undefined,
-        internalDockerBuildPluginIds: undefined,
-        noPnpm: "1",
-        packageExtensions: undefined,
-        privateQa: undefined,
-        skipDts: "0",
-        timeoutMs: 1234,
-      },
-    ]);
-  });
+      expect(calls).toEqual([
+        {
+          command: "pnpm",
+          args: ["run", buildScript],
+          cwd: sourceDir,
+          dockerBuildExtensions: undefined,
+          internalDockerBuildPluginIds: undefined,
+          noPnpm: "1",
+          packageExtensions: undefined,
+          privateQa: undefined,
+          skipDts: "0",
+          timeoutMs: 1234,
+        },
+      ]);
+    },
+  );
 
   it("keeps root package exclusions in parity with reused private QA build inventory", async () => {
     const sourceDir = createPackageSourceFixture("openclaw-package-qa-exclusions-source-");

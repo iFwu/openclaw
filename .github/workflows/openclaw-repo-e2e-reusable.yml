@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$BUILD_PROFILE" in
-            full) pnpm build ;;
+            full) pnpm build full ;;
             ciArtifacts) pnpm build:ci-artifacts ;;
             *) echo "Unsupported repo E2E build profile: $BUILD_PROFILE" >&2; exit 1 ;;
           esac

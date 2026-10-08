@@ -179,6 +179,24 @@ describe("package scripts", () => {
     );
   });
 
+  it.each([
+    { script: "build", args: [], profile: "ciArtifacts" },
+    { script: "build", args: ["full"], profile: "full" },
+    { script: "build", args: ["qaRuntime"], profile: "qaRuntime" },
+    { script: "build:ci-artifacts", args: [], profile: "ciArtifacts" },
+    { script: "build:full", args: [], profile: "full" },
+  ])("selects $profile through $script with $args", ({ script, args, profile }) => {
+    const tokens = tokenizeCommand(expectDefined(readPackageJson().scripts[script], script));
+    const entryIndex = tokens.indexOf("scripts/build-all.mts");
+    expect(entryIndex).toBeGreaterThanOrEqual(0);
+    const selected = parseBuildAllArgs([...tokens.slice(entryIndex + 1), ...args]).profile;
+    expect(selected).toBe(profile);
+    const labels = new Set(resolveBuildAllSteps(selected, {}).map((step) => step.label));
+    expect(labels.has("write-unified-entry-dts")).toBe(profile === "full");
+    expect(labels.has("write-plugin-sdk-entry-dts")).toBe(profile !== "qaRuntime");
+    expect(labels.has("check-plugin-sdk-exports")).toBe(profile !== "qaRuntime");
+  });
+
   it.each(["build:strict-smoke", "build:plugin-sdk:strict-smoke"])(
     "%s publishes canonical declarations before strict export checks",
     (scriptName) => {
