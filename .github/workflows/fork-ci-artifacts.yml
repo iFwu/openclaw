@@ -1,0 +1,167 @@
+name: Fork CI artifacts
+
+on:
+  push:
+    branches: [ifwu-fork]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NOTIFY_DRY_RUN: "1"
+  OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0"
+
+jobs:
+  build:
+    if: github.repository == 'iFwu/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.8.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Configure isolated verification state
+        run: |
+          echo "OPENCLAW_STATE_DIR=$RUNNER_TEMP/openclaw-ci-state" >> "$GITHUB_ENV"
+          echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/openclaw-ci-state/openclaw.json" >> "$GITHUB_ENV"
+      - name: Check tracked private keys
+        run: node scripts/detect-private-keys.mts
+      - name: Install frozen dependencies within the existing resource policy
+        run: bash scripts/run-bounded.sh --receipt "$RUNNER_TEMP/install-receipt.json" pnpm install --frozen-lockfile
+      - name: Build and verify CI artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          export FORK_CI_OUTPUT="$RUNNER_TEMP/fork-ci-output"
+          mkdir -p "$FORK_CI_OUTPUT"
+          bash scripts/run-bounded.sh --receipt "$FORK_CI_OUTPUT/build-receipt.json" bash -euo pipefail -c '
+            group=$(awk -F: '\''$1 == "0" {print $3}'\'' /proc/self/cgroup)
+            trap '\''cat "/sys/fs/cgroup$group/memory.peak" > "$FORK_CI_OUTPUT/memory-peak-bytes.txt"; cat "/sys/fs/cgroup$group/memory.swap.peak" > "$FORK_CI_OUTPUT/swap-peak-bytes.txt"; cat "/sys/fs/cgroup$group/memory.events" > "$FORK_CI_OUTPUT/memory-events.txt"'\'' EXIT
+            /usr/bin/time -v pnpm build
+            node scripts/check-package-dist-imports.mjs
+            node openclaw.mjs --version
+          '
+          node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { listGeneratedExtensionAssetSources } from './scripts/lib/static-extension-assets.mts';
+          const output = process.env.FORK_CI_OUTPUT;
+          const declaredAssets = listGeneratedExtensionAssetSources();
+          const missingAssets = declaredAssets.filter((p) => !fs.existsSync(p));
+          if (missingAssets.length) {
+            throw new Error(`Missing generated extension assets: ${missingAssets.join(', ')}`);
+          }
+          const outputs = ['dist', ...(fs.existsSync('dist-runtime') ? ['dist-runtime'] : []),
+            ...fs.readdirSync('packages').map(name => `packages/${name}/dist`).filter(p => fs.existsSync(p)),
+            ...declaredAssets];
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {encoding: 'utf8'}).trim();
+          const info = JSON.parse(fs.readFileSync('dist/build-info.json', 'utf8'));
+          if (info.commit !== sha) throw new Error('Build provenance differs from checkout');
+          const archive = `${output}/ci-artifacts.tar.gz`;
+          execFileSync('tar', ['-czf', archive, '--null', '-T', '-'], {input: outputs.join('\0') + '\0'});
+          const hash = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
+          fs.writeFileSync(`${output}/manifest.json`, JSON.stringify({sha, tree, profile: 'ciArtifacts',
+            node: process.versions.node, platform: process.platform, arch: process.arch, sha256: hash, outputs, buildInfo: info}, null, 2) + '\n');
+          NODE
+      - name: Upload verified build outputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fork-ci-artifacts-${{ github.sha }}
+          path: ${{ runner.temp }}/fork-ci-output/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Report resource receipts
+        if: always()
+        shell: bash
+        run: |
+          for file in "$RUNNER_TEMP/install-receipt.json" "$RUNNER_TEMP/fork-ci-output/build-receipt.json" "$RUNNER_TEMP/fork-ci-output/memory-peak-bytes.txt" "$RUNNER_TEMP/fork-ci-output/swap-peak-bytes.txt" "$RUNNER_TEMP/fork-ci-output/memory-events.txt"; do
+            if [[ -f "$file" ]]; then echo "$(basename "$file")"; cat "$file"; fi
+          done
+          df -h .
+
+  verify-download:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.8.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Configure isolated verification state
+        run: |
+          echo "OPENCLAW_STATE_DIR=$RUNNER_TEMP/openclaw-ci-state" >> "$GITHUB_ENV"
+          echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/openclaw-ci-state/openclaw.json" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fork-ci-artifacts-${{ github.sha }}
+          path: ${{ runner.temp }}/fork-ci-download
+      - name: Verify downloaded identity and restore outputs
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          const root = `${process.env.RUNNER_TEMP}/fork-ci-download`;
+          const manifest = JSON.parse(fs.readFileSync(`${root}/manifest.json`, 'utf8'));
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {encoding: 'utf8'}).trim();
+          if (manifest.sha !== sha || manifest.tree !== tree || manifest.profile !== 'ciArtifacts' ||
+            manifest.node !== process.versions.node || manifest.platform !== process.platform || manifest.arch !== process.arch)
+            throw new Error('Artifact source/runtime identity mismatch');
+          const archive = `${root}/ci-artifacts.tar.gz`;
+          if (createHash('sha256').update(fs.readFileSync(archive)).digest('hex') !== manifest.sha256)
+            throw new Error('Artifact checksum mismatch');
+          execFileSync('tar', ['-xzf', archive]);
+          const missingOutputs = manifest.outputs.filter((p) => !fs.existsSync(p));
+          if (missingOutputs.length) {
+            throw new Error(`Restored output missing: ${missingOutputs.join(', ')}`);
+          }
+          const info = JSON.parse(fs.readFileSync('dist/build-info.json', 'utf8'));
+          if (info.commit !== sha || info.buildId !== manifest.buildInfo.buildId)
+            throw new Error('Restored build provenance mismatch');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          let runtime = 0, types = 0;
+          for (const [key, value] of Object.entries(pkg.exports)) {
+            if (!key.startsWith('./plugin-sdk/')) continue;
+            const js = typeof value === 'string' ? value : value.default ?? value.import;
+            if (typeof js !== 'string' || !fs.existsSync(js)) throw new Error(`Missing SDK runtime: ${key}`);
+            runtime++;
+            if (typeof value === 'object' && value.types) {
+              if (!fs.existsSync(value.types)) throw new Error(`Missing SDK types: ${key}`);
+              types++;
+            }
+          }
+          if (!runtime || !types || !fs.existsSync('dist/control-ui/index.html')) throw new Error('Incomplete SDK/UI artifacts');
+          console.log(JSON.stringify({sha, buildId: info.buildId, runtime, types}));
+          NODE
+      - name: Install frozen dependencies
+        run: bash scripts/run-bounded.sh --receipt "$RUNNER_TEMP/verify-install-receipt.json" pnpm install --frozen-lockfile
+      - name: Verify restored import closure and built CLI without rebuilding
+        run: |
+          bash scripts/run-bounded.sh --receipt "$RUNNER_TEMP/verify-receipt.json" bash -euo pipefail -c '
+            node scripts/check-package-dist-imports.mjs
+            node openclaw.mjs --version
+          '
