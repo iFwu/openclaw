@@ -17,6 +17,62 @@ const origins = new WeakMap<
   { origin: ApprovalOrigin; assertCurrent: () => void }
 >();
 
+/** A native user's retained right to request a decision, never to review one. */
+export type ApprovalRequesterSource = Readonly<{ assertCurrent: () => void }>;
+const requesterIssuers = new WeakSet<ApprovalRequesterSource>();
+const requesterSources = new WeakMap<AdmittedRunContext, ApprovalRequesterSource>();
+
+export function createApprovalRequesterSource(
+  assertSourceCurrent: () => void,
+): ApprovalRequesterSource {
+  assertSourceCurrent();
+  let revoked: Error | undefined;
+  const source = Object.freeze({
+    assertCurrent: () => {
+      if (revoked) {
+        throw revoked;
+      }
+      try {
+        assertSourceCurrent();
+      } catch (error) {
+        revoked = new Error("Approval requester source is no longer current", { cause: error });
+        throw revoked;
+      }
+    },
+  });
+  requesterIssuers.add(source);
+  return source;
+}
+
+export function assertApprovalRequesterSource(source: ApprovalRequesterSource): void {
+  if (!requesterIssuers.has(source)) {
+    throw new Error("Approval requester source must be issued by the host");
+  }
+  source.assertCurrent();
+}
+
+export function bindAdmittedRunApprovalRequesterSource(
+  context: AdmittedRunContext,
+  source: ApprovalRequesterSource,
+): void {
+  assertApprovalRequesterSource(source);
+  if (!getAdmittedRunDelegatedAuthority(context) || requesterSources.has(context)) {
+    throw new Error("Approval requester source requires a fresh active admission");
+  }
+  requesterSources.set(context, source);
+}
+
+export function readAdmittedRunApprovalRequesterSource(
+  context: AdmittedRunContext,
+): ApprovalRequesterSource | undefined {
+  const source = requesterSources.get(context);
+  if (!source || !getAdmittedRunDelegatedAuthority(context)) {
+    return undefined;
+  }
+  assertApprovalRequesterSource(source);
+  return source;
+}
+
 export function captureApprovalOrigin(
   origin: SessionOrigin | undefined,
 ): ApprovalOrigin | undefined {

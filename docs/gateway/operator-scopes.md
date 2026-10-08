@@ -90,6 +90,14 @@ RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
 
+Within a running Gateway, native subagent completions can retain an admitted
+channel owner's ability to request human approval. This host-owned source grants
+only the exec/plugin approval request and wait operations; it does not make the
+agent a reviewer or expand an explicit operator role. Cancellation, source
+revocation, and completion ownership still fence the request. Ordinary background
+runs, exec-completion heartbeat wakes, and completions restored after a restart do
+not acquire this capability from a delivery address or saved session metadata.
+
 `question.*` also accepts `operator.sessions.write` for ordinary questions
 bound to the caller's own admitted run and owned session. The Gateway records
 that binding from trusted run authority, never from caller-supplied session or

@@ -146,7 +146,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         });
         entry.requesterStorePath = requesterStorePath;
         entry.controllerStorePath = controllerStorePath;
-        if (completionAuthority?.operatorAuthority) {
+        if (
+          completionAuthority?.operatorAuthority ||
+          completionAuthority?.approvalOrigin?.requesterSource
+        ) {
           subagentRuns.bindCompletionAuthority(entry, completionAuthority);
           custodyTransferred = true;
         } else {

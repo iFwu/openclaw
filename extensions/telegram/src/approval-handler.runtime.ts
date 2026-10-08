@@ -158,6 +158,18 @@ function buildPendingPayload(params: {
       "allow-always": "限时放行",
       deny: "拒绝",
     };
+    const descriptionLines =
+      view.description
+        ?.split("\n")
+        .filter(
+          (line) => line.trim() && !line.startsWith("风险：") && !line.startsWith("限时放行："),
+        ) ?? [];
+    const previews = descriptionLines.filter(
+      (line) => line.startsWith("命令：") || line.startsWith("目标："),
+    );
+    const context = descriptionLines
+      .filter((line) => !previews.includes(line))
+      .map((line) => compactGuardPreview(line.replace(/^说明（仅供参考）：/u, "")));
     return {
       text: [
         [
@@ -167,12 +179,8 @@ function buildPendingPayload(params: {
         ]
           .filter(Boolean)
           .join(" · "),
-        compactGuardPreview(
-          view.description
-            ?.split("\n")
-            .filter((line) => !line.startsWith("风险：") && !line.startsWith("限时放行："))
-            .join(" "),
-        ),
+        context.length ? `说明（仅供参考）：${context.join("\n")}` : undefined,
+        ...previews.map((line) => compactGuardPreview(line)),
         seconds > 0
           ? `⏳ 截止：${deadline}（${expiresIn}内有效） · ${view.actions.some((action) => action.decision === "allow-always") ? (view.description?.split("\n").find((line) => line.startsWith("限时放行：")) ?? "可限时放行") : "仅本次"} · Control UI 查看详情`
           : `⏱️ 此卡已到期 · 截止：${deadline} · Control UI 查看详情`,

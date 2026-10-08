@@ -1,4 +1,5 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { assertApprovalRequesterSource } from "../agents/admitted-run-approval-origin.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -27,6 +28,7 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { APPROVALS_SCOPE } from "./operator-scopes.js";
 import {
   readOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
@@ -156,6 +158,9 @@ export function captureOperatorToolGatewayContinuationContext() {
       const assertCurrent = () => {
         lifetime.signal.throwIfAborted();
         captured?.authority.assertCurrent();
+        if (approvalOrigin?.requesterSource) {
+          assertApprovalRequesterSource(approvalOrigin.requesterSource);
+        }
         resolved.assertContextCurrent();
         lifetime.signal.throwIfAborted();
       };
@@ -207,6 +212,14 @@ function resolveInProcessGatewayDispatch(
   const inheritedOperatorAuthority = readOperatorToolGatewayAuthority();
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
+  const approvalRequesterSource =
+    options?.syntheticScopeMode === "minimum" &&
+    (method === "plugin.approval.request" ||
+      method === "plugin.approval.waitDecision" ||
+      method === "exec.approval.request" ||
+      method === "exec.approval.waitDecision")
+      ? caller?.approvalRequesterSource
+      : undefined;
   const operatorRunAuthority =
     caller?.operatorAuthority ??
     inheritedOperatorAuthority?.operatorRunAuthority ??
@@ -226,6 +239,9 @@ function resolveInProcessGatewayDispatch(
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = () => {
+    if (approvalRequesterSource) {
+      assertApprovalRequesterSource(approvalRequesterSource);
+    }
     assertSettleWakeCurrent?.();
     if (!isHostOwnedAgentRun || !operatorRunAuthority) {
       inheritedOperatorAuthority?.signal.throwIfAborted();
@@ -351,6 +367,18 @@ function resolveInProcessGatewayDispatch(
     allowOwnSessionScope: context.getGatewayMethodRegistry?.().getSessionAccess?.(method)
       ?.allowOwnSessionScope,
   });
+  // Native user continuations retain only the ability to ask for a decision.
+  // An explicit operator ceiling is never expanded by this channel capability.
+  const requesterOnly = Boolean(
+    approvalRequesterSource &&
+    !operatorRunAuthority &&
+    !operatorAuthority &&
+    !inheritedOperatorAuthority &&
+    operatorRoleActor?.kind === "system",
+  );
+  if (requesterOnly && !syntheticScopes?.includes(APPROVALS_SCOPE)) {
+    syntheticScopes?.push(APPROVALS_SCOPE);
+  }
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority
       ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }
@@ -371,6 +399,7 @@ function resolveInProcessGatewayDispatch(
     delegatedToolPolicyHandoffId,
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: syntheticScopes,
+    ...(requesterOnly ? { approvalRuntime: false } : {}),
   });
   const scopedStreamClient = options?.nodeInvokeStream ? scope?.client : undefined;
   const syntheticClient = projectPluginRuntimeClientExecution({
@@ -425,6 +454,9 @@ function resolveInProcessGatewayDispatch(
     bindInProcessSubagentResume(client.internal, resume);
   }
   const assertSourceCurrent = () => {
+    if (approvalRequesterSource) {
+      assertApprovalRequesterSource(approvalRequesterSource);
+    }
     operatorRunAuthority?.assertCurrent();
     if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
       throw new Error(

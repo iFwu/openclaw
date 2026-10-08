@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../logging/diagnostic-run-activity.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import { PluginApprovalResolutions } from "../plugins/hook-before-tool-call-result.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -38,6 +40,41 @@ afterEach(() => {
 });
 
 describe("plugin approval policy subject and setup guidance", () => {
+  it.each(["request", "wait"] as const)(
+    "preserves approval permission failures during %s without reporting an outage",
+    async (phase) => {
+      const onResolution = vi.fn();
+      hookRunner.runBeforeToolCall.mockResolvedValue({
+        requireApproval: {
+          title: "Approval",
+          description: "Permission classification",
+          onResolution,
+        },
+      });
+      if (phase === "wait") {
+        mockCallGateway.mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" });
+      }
+      mockCallGateway.mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "missing scope: operator.approvals",
+        }),
+      );
+      const result = await runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "unexecuted" },
+        ctx: { agentId: "main", sessionKey: "main" },
+      });
+      expect(result).toMatchObject({
+        blocked: true,
+        reason: `Plugin approval ${phase} forbidden: missing scope: operator.approvals`,
+        params: { command: "unexecuted" },
+      });
+      expect(mockCallGateway).toHaveBeenCalledTimes(phase === "request" ? 1 : 2);
+      expect(onResolution).toHaveBeenCalledExactlyOnceWith(PluginApprovalResolutions.CANCELLED);
+    },
+  );
+
   it.each(["wrapped", "adapted"] as const)(
     "binds a %s tool approval to its registered owner rather than the approval hook owner",
     async (path) => {

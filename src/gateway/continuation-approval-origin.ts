@@ -1,8 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ApprovalOrigin } from "../agents/admitted-run-approval-origin.js";
+import {
+  assertApprovalRequesterSource,
+  type ApprovalOrigin,
+  type ApprovalRequesterSource,
+} from "../agents/admitted-run-approval-origin.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type Snapshot = Readonly<{ sessionKey: string; origin: ApprovalOrigin }>;
+type Snapshot = Readonly<{
+  sessionKey: string;
+  origin: ApprovalOrigin;
+  requesterSource?: ApprovalRequesterSource;
+}>;
 type Binding = Readonly<{ snapshot: Snapshot; assertCurrent: () => void }>;
 const storage = resolveGlobalSingleton<AsyncLocalStorage<Binding | undefined>>(
   Symbol.for("openclaw.continuationApprovalOrigin"),
@@ -10,14 +18,20 @@ const storage = resolveGlobalSingleton<AsyncLocalStorage<Binding | undefined>>(
 );
 
 export function captureContinuationApprovalOrigin(
-  caller: (ApprovalOrigin & { sessionKey: string }) | undefined,
+  caller:
+    | (ApprovalOrigin & { sessionKey: string; approvalRequesterSource?: ApprovalRequesterSource })
+    | undefined,
 ): Snapshot | undefined {
   if (!caller?.sessionKey.trim()) {
     return undefined;
   }
+  if (caller.approvalRequesterSource) {
+    assertApprovalRequesterSource(caller.approvalRequesterSource);
+  }
   // Absence and local posture are facts too; delivery metadata must not fill them.
   return Object.freeze({
     sessionKey: caller.sessionKey.trim(),
+    ...(caller.approvalRequesterSource ? { requesterSource: caller.approvalRequesterSource } : {}),
     origin: Object.freeze({
       turnSourceChannel: caller.turnSourceChannel,
       turnSourceLocal: caller.turnSourceLocal,

@@ -54,6 +54,8 @@ export function createSyntheticPluginRuntimeClient(params?: {
   delegatedToolPolicyHandoffId?: string;
   sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
+  /** Restrict a native requester without minting device-less reviewer authority. */
+  approvalRuntime?: false;
 }): NonNullable<GatewayRequestOptions["client"]> {
   const pluginRuntimeOwnerId =
     typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
@@ -98,7 +100,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(params?.internalDeliverySuppressText === true
         ? { internalDeliverySuppressText: true }
         : {}),
-      ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
+      ...(params?.scopes?.includes(APPROVALS_SCOPE) && params.approvalRuntime !== false
+        ? { approvalRuntime: true }
+        : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
       ...(params?.nodeInvokeApprovalSessionKey
         ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }

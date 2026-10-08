@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readAdmittedRunApprovalRequesterSource } from "../../agents/admitted-run-approval-origin.js";
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -19,6 +21,7 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
+import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -60,6 +63,48 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it.each(["user", "audited-user", "heartbeat", "internal", "unbound-owner"] as const)(
+    "retains requester-only approval source only for a native %s admission",
+    async (kind) => {
+      const followupRun = createFollowupRun();
+      followupRun.run.senderIsOwner = true;
+      let sourceCurrent = true;
+      if (kind !== "unbound-owner") {
+        bindCommandOwnerAuthority(followupRun.run, { isCurrent: () => sourceCurrent });
+      }
+      if (kind === "internal") {
+        followupRun.run.inputProvenance = { kind: "inter_session", sourceTool: "subagent_settle" };
+      }
+      if (kind === "audited-user") {
+        followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
+        followupRun.run.inputProvenance = { kind: "external_user" };
+      }
+      let captured: ReturnType<typeof readAdmittedRunApprovalRequesterSource>;
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        const admitted = await (
+          params as EmbeddedAgentParams & {
+            preparedRunAdmission: PreparedAgentRunAdmission;
+          }
+        ).preparedRunAdmission.admit("embedded");
+        captured = readAdmittedRunApprovalRequesterSource(admitted);
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+      const params = createMinimalRunAgentTurnParams({ followupRun });
+      params.isHeartbeat = kind === "heartbeat";
+      await execution.executeAgentTurn(params);
+      if (kind === "user" || kind === "audited-user") {
+        expect(captured).toBeDefined();
+        expect(() => captured?.assertCurrent()).not.toThrow();
+        sourceCurrent = false;
+        expect(() => captured?.assertCurrent()).toThrow("no longer current");
+        sourceCurrent = true;
+        expect(() => captured?.assertCurrent()).toThrow("no longer current");
+      } else {
+        expect(captured).toBeUndefined();
+      }
+    },
+  );
+
   it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (params: RunEmbeddedAgentInternalParams) => {

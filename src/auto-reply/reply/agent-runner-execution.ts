@@ -2,7 +2,11 @@
 import crypto from "node:crypto";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { bindAdmittedRunApprovalOrigin } from "../../agents/admitted-run-approval-origin.js";
+import {
+  bindAdmittedRunApprovalOrigin,
+  bindAdmittedRunApprovalRequesterSource,
+  createApprovalRequesterSource,
+} from "../../agents/admitted-run-approval-origin.js";
 import type {
   AdmittedRunContext,
   PreparedAgentRunAdmission,
@@ -490,6 +494,13 @@ async function executeAgentTurnInternal(
   const gatewayContextResolver =
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const userApprovalSource =
+    !params.isHeartbeat &&
+    (!params.followupRun.run.inputProvenance ||
+      params.followupRun.run.inputProvenance.kind === "external_user") &&
+    params.followupRun.run.senderIsOwner === true
+      ? captureCommandOwnerAssertion(params.followupRun.run)
+      : undefined;
   const preparedRunAdmission = prepareChannelRunAdmission({
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
     runId,
@@ -504,6 +515,12 @@ async function executeAgentTurnInternal(
         ? captureCommandOwnerAssertion(params.followupRun.run)
         : undefined,
     onAdmitted: (context) => {
+      if (userApprovalSource) {
+        bindAdmittedRunApprovalRequesterSource(
+          context,
+          createApprovalRequesterSource(userApprovalSource),
+        );
+      }
       const entry =
         params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry();
       if (

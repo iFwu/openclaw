@@ -9,15 +9,29 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
+import {
+  registerSubagentCompletionToolHandoff,
+  consumeSubagentCompletionToolHandoff,
+  readSubagentCompletionApprovalOrigin,
+} from "../../../gateway/subagent-completion-tool-handoff.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
+import {
+  bindAdmittedRunApprovalRequesterSource,
+  createApprovalRequesterSource,
+} from "../../admitted-run-approval-origin.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../admitted-run-context.js";
+import { createAdmittedGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
@@ -65,6 +79,82 @@ afterEach(() => {
 });
 
 describe("registered completion source custody", () => {
+  it("retains a profileless user source through real registration and exact completion redemption", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = createContext();
+      context.resolveGatewayContext = () => context;
+      let sourceCurrent = true;
+      const source = createApprovalRequesterSource(() => {
+        if (!sourceCurrent) throw new Error("user source revoked");
+      });
+      const owner = prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef("profileless-parent"),
+        facts: {
+          runId: "profileless-parent",
+          agentId: "main",
+          ingress: { kind: "channel", boundary: "native-user", state: "present" },
+        },
+      });
+      try {
+        const admitted = await owner.admit("embedded");
+        bindGatewayContextResolver(admitted, () => context);
+        bindAdmittedRunApprovalRequesterSource(admitted, source);
+        const caller = createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-100200",
+        });
+        await withGatewayToolCallerIdentity(caller, async () => {
+          await registerSubagentRun(registration("profileless-child"));
+          await registerSubagentRun(registration("profileless-sibling"));
+        });
+        owner.close();
+        const first = subagentRuns.get("profileless-child")!;
+        const sibling = subagentRuns.get("profileless-sibling")!;
+        const batch = [first, sibling];
+        const handoffParams = {
+          sourceSessionKey: first.childSessionKey,
+          targetSessionKey: first.requesterSessionKey,
+          targetSessionId: "profileless-requester-session",
+          idempotencyKey: "profileless-completion",
+          isCurrent: () => sourceCurrent,
+        };
+        const id = subagentRuns.runWithCompletionBatchAuthority(batch, () =>
+          registerSubagentCompletionToolHandoff(handoffParams),
+        );
+        const redeem = () =>
+          consumeSubagentCompletionToolHandoff({
+            ...handoffParams,
+            handoffId: id,
+            sourceTool: "subagent_announce",
+            provider: "test",
+            model: "test",
+          });
+        const handoff = redeem();
+        expect(handoff).toBeDefined();
+        expect(readSubagentCompletionApprovalOrigin(handoff)?.snapshot.requesterSource).toBe(
+          source,
+        );
+        expect(
+          readSubagentCompletionApprovalOrigin(handoff ? { ...handoff } : undefined),
+        ).toBeUndefined();
+        expect(redeem()).toBeUndefined();
+        subagentRuns.releaseCompletionAuthority(sibling);
+        expect(() => subagentRuns.runWithCompletionBatchAuthority(batch, () => {})).toThrow(
+          "no longer active",
+        );
+        sourceCurrent = false;
+        expect(() => subagentRuns.runWithCompletionAuthority(first, () => {})).toThrow();
+        expect(() => readSubagentCompletionApprovalOrigin(handoff)?.assertCurrent()).toThrow();
+      } finally {
+        owner.close();
+      }
+    });
+  });
+
   it.each([
     "admission",
     "lifecycle",

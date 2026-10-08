@@ -439,12 +439,15 @@ async function requestPluginToolApproval(params: {
     // INVALID_REQUEST means different things before and after registration.
     const invalidRequest =
       err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
+    const forbidden = err instanceof GatewayClientRequestError && err.gatewayCode === "FORBIDDEN";
     const reason =
-      invalidRequest && gatewayApprovalPhase === "request"
-        ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
-        : invalidRequest && gatewayApprovalPhase === "wait"
-          ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
-          : "Plugin approval required (gateway unavailable)";
+      forbidden && gatewayApprovalPhase !== "none"
+        ? `Plugin approval ${gatewayApprovalPhase} forbidden: ${formatErrorMessage(err)}`
+        : invalidRequest && gatewayApprovalPhase === "request"
+          ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
+          : invalidRequest && gatewayApprovalPhase === "wait"
+            ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
+            : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,

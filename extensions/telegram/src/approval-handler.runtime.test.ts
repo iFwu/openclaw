@@ -66,6 +66,69 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(text).not.toContain("12345678-abcd");
   });
 
+  it("keeps a guard step explanation visible separately from the command preview", async () => {
+    const command = `命令：printf '%s' '${"synthetic-command-".repeat(10)}'`;
+    const description = `${command}\n说明（仅供参考）：检查候选仓库的审批显示测试\n补充：只验证候选，不部署\n风险：中\n限时放行：读操作`;
+    const detail = `${description}\n目录：/tmp/synthetic-candidate\n范围：仅本次；拒绝将结束本轮`;
+    const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: { agents: { defaults: { userTimezone: "UTC" } } },
+      accountId: "default",
+      context: { token: "synthetic-token" },
+      approvalKind: "plugin",
+      nowMs: 0,
+      request: {
+        id: "plugin:12345678-abcd",
+        createdAtMs: 0,
+        expiresAtMs: 600_000,
+        request: {
+          pluginId: "approval-guard",
+          title: "敏感读取待确认",
+          description,
+          detail,
+          sessionKey: "agent:main:subagent:synthetic-candidate",
+        },
+      },
+      view: {
+        approvalKind: "plugin",
+        phase: "pending",
+        approvalId: "plugin:12345678-abcd",
+        pluginId: "approval-guard",
+        title: "敏感读取待确认",
+        description,
+        severity: "warning",
+        metadata: [],
+        expiresAtMs: 600_000,
+        actions: (["allow-once", "deny"] as const).map((decision) => ({
+          decision,
+          label: decision,
+          style: decision === "deny" ? "danger" : "success",
+          command: `/approve plugin:12345678-abcd ${decision}`,
+          action: {
+            type: "approval",
+            approvalKind: "plugin",
+            approvalId: "plugin:12345678-abcd",
+            decision,
+          },
+        })),
+      },
+    });
+
+    expect(payload.text.split("\n")[1]).toBe("说明（仅供参考）：检查候选仓库的审批显示测试");
+    expect(payload.text).toContain("补充：只验证候选，不部署");
+    expect(payload.text.match(/仅供参考/gu)).toHaveLength(1);
+    expect(payload.text.split("\n").find((line) => line.startsWith("命令："))).toHaveLength(100);
+    expect(payload.text).toContain("ID：12345678 · 风险：中");
+    expect(payload.text).toContain("10 分钟内有效");
+    expect(payload.text).toContain("Control UI 查看详情");
+    expect(payload.text).not.toContain("目录：/tmp/synthetic-candidate");
+    expect(payload.buttons).toEqual([
+      [
+        { text: "仅本次允许", callback_data: "tga1:p:o:plugin:12345678-abcd", style: "success" },
+        { text: "拒绝", callback_data: "tga1:p:d:plugin:12345678-abcd", style: "danger" },
+      ],
+    ]);
+  });
+
   it("builds the Control UI link with its configured base path and encoded approval ID", async () => {
     const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {

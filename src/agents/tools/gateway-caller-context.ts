@@ -19,7 +19,11 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { readAdmittedRunApprovalOrigin } from "../admitted-run-approval-origin.js";
+import {
+  readAdmittedRunApprovalOrigin,
+  readAdmittedRunApprovalRequesterSource,
+  type ApprovalRequesterSource,
+} from "../admitted-run-approval-origin.js";
 import {
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
@@ -50,6 +54,7 @@ type GatewayToolCallerIdentity = {
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
   approvalAuthority?: AgentRunDelegatedAuthority;
+  approvalRequesterSource?: ApprovalRequesterSource;
   /** Original operator restriction, separate from this tool/turn's execution lifetime. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   approvalAuthorityCheck?: () => boolean | void;
@@ -181,11 +186,13 @@ export function createAdmittedGatewayToolCallerIdentity(
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   const operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const approvalOrigin = readAdmittedRunApprovalOrigin(params.admittedRunContext);
+  const approvalRequesterSource = readAdmittedRunApprovalRequesterSource(params.admittedRunContext);
   return {
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
+    ...(approvalRequesterSource ? { approvalRequesterSource } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
@@ -335,6 +342,15 @@ export async function withGatewayToolCallerIdentity<T>(
     }
   }
   const operatorAuthority = inheritedOwner?.operatorAuthority ?? identity.operatorAuthority;
+  const approvalRequesterSource =
+    inheritedOwner?.approvalRequesterSource ?? identity.approvalRequesterSource;
+  if (
+    inheritedOwner?.approvalRequesterSource &&
+    identity.approvalRequesterSource &&
+    inheritedOwner.approvalRequesterSource !== identity.approvalRequesterSource
+  ) {
+    throw new Error("Approval requester source changed within the same run");
+  }
   const approvalAuthorityCheck =
     inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;
   const signedAgentRuntimeIdentityToken =
@@ -403,6 +419,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
+      ...(approvalRequesterSource ? { approvalRequesterSource } : {}),
       ...(operatorAuthority ? { operatorAuthority } : {}),
       ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
       ...(identity.approvalOwnerPluginId?.trim()

@@ -5,6 +5,7 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   bindAdmittedRunApprovalOrigin,
+  bindAdmittedRunApprovalRequesterSource,
   captureApprovalOrigin,
 } from "../../agents/admitted-run-approval-origin.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
@@ -534,6 +535,11 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                 operationalRunInstance: prepared.operationalRunInstance,
                 operatorAuthority: prepared.operatorAuthority,
                 onAdmittedRunContext: (admittedRunContext) => {
+                  const requesterSource = completionApprovalOrigin?.snapshot.requesterSource;
+                  if (requesterSource) {
+                    completionApprovalOrigin.assertCurrent();
+                    bindAdmittedRunApprovalRequesterSource(admittedRunContext, requesterSource);
+                  }
                   if (targetApprovalOrigin) {
                     bindAdmittedRunApprovalOrigin(admittedRunContext, targetApprovalOrigin, () => {
                       assertDispatchCurrent();

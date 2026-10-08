@@ -220,11 +220,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     // Mixed waves must still prove the cancelled member's original source is live and identical.
     // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
     for (const entry of batch) {
-      const source = this.completionAuthorities.get(entry)?.authority.operatorAuthority;
-      if (this.operatorCompletionEntries.has(entry) && !source) {
+      const custody = this.completionAuthorities.get(entry);
+      const source = custody?.authority.operatorAuthority;
+      if (this.operatorCompletionEntries.has(entry) && !custody) {
         throw new Error("Subagent completion authority is no longer active");
       }
-      source?.assertCurrent();
+      custody?.authority.assertCurrent();
+      if (custody?.authority.approvalOrigin?.requesterSource !== firstOrigin?.requesterSource) {
+        throw new Error("Subagent completion batch has incompatible approval requester source");
+      }
       if (
         !isDeepStrictEqual(
           this.completionAuthorities.get(entry)?.authority.approvalOrigin,
