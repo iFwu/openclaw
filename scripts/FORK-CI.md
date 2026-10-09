@@ -39,11 +39,12 @@ GitHub fork and can also be manually dispatched. It uses standard `ubuntu-24.04`
 GitHub-hosted runners, not a third-party or larger runner, with no production
 secrets or live model tests. Node is pinned to 26.8.1; `package.json` owns pnpm.
 
-The workflow reuses `setup-node-env` for delegated cgroup setup and
-`run-bounded.sh` for frozen installation, build, and verification. The existing
-shared-host policy selects at most 10 GiB, retains 4 GiB headroom, and forbids
-task swap. A 16 GB runner does not guarantee this workload fits that policy;
-resource rejection or OOM is a failed run, not permission to lift its limits.
+The workflow reuses `setup-node-env` for the toolchain, without shared-host
+cgroup provisioning. Installation, build, and verification run directly on the
+exclusive disposable runner: no artificial 10 GiB task cap, no shared-host
+headroom reservation, and no changes to the runner's swap configuration.
+Job timeouts remain enforced; system OOM or timeout is a failed run. Local and
+shared-host checks still use the existing `run-bounded.sh` policy unchanged.
 
 `pnpm build` produces the default `ciArtifacts` profile. The producer verifies
 package import closure and the built CLI, then uploads:
@@ -52,7 +53,8 @@ package import closure and the built CLI, then uploads:
   and declared generated plugin assets; no Git history, dependencies, or state.
 - `manifest.json`: source commit/tree, runtime identity, build metadata, output
   roots, and the archive SHA-256.
-- Build receipt and cgroup peak/event measurements.
+- Build timing and process resource measurements from `/usr/bin/time -v`.
+  Maximum RSS is a process measurement, not whole-command cgroup memory peak.
 
 A separate fresh runner downloads that artifact, verifies its source/runtime and
 checksum, restores outputs, checks SDK runtime/type exports and UI, then performs

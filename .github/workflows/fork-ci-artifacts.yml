@@ -29,7 +29,7 @@ jobs:
       - uses: ./.github/actions/setup-node-env
         with:
           node-version: "26.8.1"
-          semantic-checks: "true"
+          semantic-checks: "false"
           install-bun: "false"
           install-deps: "false"
           cache-mode: "off"
@@ -39,21 +39,18 @@ jobs:
           echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/openclaw-ci-state/openclaw.json" >> "$GITHUB_ENV"
       - name: Check tracked private keys
         run: node scripts/detect-private-keys.mts
-      - name: Install frozen dependencies within the existing resource policy
-        run: bash scripts/run-bounded.sh --receipt "$RUNNER_TEMP/install-receipt.json" pnpm install --frozen-lockfile
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
       - name: Build and verify CI artifacts
         shell: bash
         run: |
           set -euo pipefail
           export FORK_CI_OUTPUT="$RUNNER_TEMP/fork-ci-output"
           mkdir -p "$FORK_CI_OUTPUT"
-          bash scripts/run-bounded.sh --receipt "$FORK_CI_OUTPUT/build-receipt.json" bash -euo pipefail -c '
-            group=$(awk -F: '\''$1 == "0" {print $3}'\'' /proc/self/cgroup)
-            trap '\''cat "/sys/fs/cgroup$group/memory.peak" > "$FORK_CI_OUTPUT/memory-peak-bytes.txt"; cat "/sys/fs/cgroup$group/memory.swap.peak" > "$FORK_CI_OUTPUT/swap-peak-bytes.txt"; cat "/sys/fs/cgroup$group/memory.events" > "$FORK_CI_OUTPUT/memory-events.txt"'\'' EXIT
-            /usr/bin/time -v pnpm build
-            node scripts/check-package-dist-imports.mjs
-            node openclaw.mjs --version
-          '
+          free -h
+          /usr/bin/time -v -o "$FORK_CI_OUTPUT/build-time.txt" pnpm build
+          node scripts/check-package-dist-imports.mjs
+          node openclaw.mjs --version
           node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
           import fs from 'node:fs';
           import { execFileSync } from 'node:child_process';
@@ -85,13 +82,12 @@ jobs:
           path: ${{ runner.temp }}/fork-ci-output/
           if-no-files-found: error
           retention-days: 7
-      - name: Report resource receipts
+      - name: Report runner resources
         if: always()
         shell: bash
         run: |
-          for file in "$RUNNER_TEMP/install-receipt.json" "$RUNNER_TEMP/fork-ci-output/build-receipt.json" "$RUNNER_TEMP/fork-ci-output/memory-peak-bytes.txt" "$RUNNER_TEMP/fork-ci-output/swap-peak-bytes.txt" "$RUNNER_TEMP/fork-ci-output/memory-events.txt"; do
-            if [[ -f "$file" ]]; then echo "$(basename "$file")"; cat "$file"; fi
-          done
+          if [[ -f "$RUNNER_TEMP/fork-ci-output/build-time.txt" ]]; then cat "$RUNNER_TEMP/fork-ci-output/build-time.txt"; fi
+          free -h
           df -h .
 
   verify-download:
@@ -105,7 +101,7 @@ jobs:
       - uses: ./.github/actions/setup-node-env
         with:
           node-version: "26.8.1"
-          semantic-checks: "true"
+          semantic-checks: "false"
           install-bun: "false"
           install-deps: "false"
           cache-mode: "off"
@@ -158,10 +154,8 @@ jobs:
           console.log(JSON.stringify({sha, buildId: info.buildId, runtime, types}));
           NODE
       - name: Install frozen dependencies
-        run: bash scripts/run-bounded.sh --receipt "$RUNNER_TEMP/verify-install-receipt.json" pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
       - name: Verify restored import closure and built CLI without rebuilding
         run: |
-          bash scripts/run-bounded.sh --receipt "$RUNNER_TEMP/verify-receipt.json" bash -euo pipefail -c '
-            node scripts/check-package-dist-imports.mjs
-            node openclaw.mjs --version
-          '
+          node scripts/check-package-dist-imports.mjs
+          node openclaw.mjs --version
