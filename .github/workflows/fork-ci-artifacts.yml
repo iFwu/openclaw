@@ -4,6 +4,12 @@ on:
   push:
     branches: [ifwu-fork]
   workflow_dispatch:
+    inputs:
+      verify_download:
+        description: Verify downloaded artifacts on a fresh runner
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -91,6 +97,7 @@ jobs:
           df -h .
 
   verify-download:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_download
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 60

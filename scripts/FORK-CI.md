@@ -56,16 +56,26 @@ package import closure and the built CLI, then uploads:
 - Build timing and process resource measurements from `/usr/bin/time -v`.
   Maximum RSS is a process measurement, not whole-command cgroup memory peak.
 
-A separate fresh runner downloads that artifact, verifies its source/runtime and
-checksum, restores outputs, checks SDK runtime/type exports and UI, then performs
-import-closure and built-CLI verification without rebuilding. Success means both
-jobs passed. Logs and artifacts are public; retain only necessary non-private
-material. Artifacts expire after seven days.
+Normal pushes run only `build`, including producer checks and artifact upload.
+The independent `verify-download` job is manual opt-in: dispatch the workflow with
+`verify_download=true` (the default is false). It uses a fresh runner to download
+the artifact, verify source/runtime identity and checksum, restore outputs, check
+SDK runtime/type exports and UI, then verify import closure and the built CLI
+without rebuilding. Use it when changing build, packaging, or restore behavior.
+
+A normal successful run requires `build` to pass; `verify-download` is intentionally
+skipped, not a verification pass. If explicitly enabled, both jobs must pass.
+Destination-side identity, checksum, dependency, and artifact checks remain
+required before deployment regardless of this option. Logs and artifacts are
+public; retain only necessary non-private material. Artifacts expire after seven
+days.
 
 Retrieve a completed run with the native GitHub CLI:
 
 ```bash
 gh run list --repo iFwu/openclaw --workflow fork-ci-artifacts.yml --branch ifwu-fork
+# Optional clean-runner verification; this dispatch also runs build.
+gh workflow run fork-ci-artifacts.yml --repo iFwu/openclaw --ref ifwu-fork -f verify_download=true
 gh run download RUN_ID --repo iFwu/openclaw --name fork-ci-artifacts-COMMIT_SHA --dir /path/to/output
 ```
 
