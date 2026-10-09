@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as profileSelectionOwner from "../../state/user-channel-identity-operations.js";
 import {
@@ -32,6 +33,7 @@ it.each([true, false])(
     client.authenticatedUserProfile = {
       profileId: reference.id,
       displayName: null,
+      avatarRevision: "",
       hasAvatar: false,
       updatedAt: 1,
     };
@@ -50,7 +52,10 @@ it.each([true, false])(
       req: { type: "req", id: "prepare-request", method: "plugin.approval.waitDecision" },
       client,
       context: createContext(),
-    } as GatewayRequestHandlerOptions;
+      params: {},
+      isWebchatConnect: () => false,
+      respond: vi.fn(),
+    } satisfies GatewayRequestHandlerOptions;
     const pending = createApprovalRequestAuthority(options);
     try {
       await parked.promise;
@@ -89,6 +94,7 @@ it.each(["other-role", "own-role", "own-role-restored", "other-merge", "own-merg
     client.authenticatedUserProfile = {
       profileId: reference.id,
       displayName: null,
+      avatarRevision: "",
       hasAvatar: false,
       updatedAt: 1,
     };
@@ -97,7 +103,7 @@ it.each(["other-role", "own-role", "own-role-restored", "other-merge", "own-merg
       aliases: new Set([reference.id, principal.id]),
       role: "approver",
     };
-    const definition = (scopes: string[]) => ({
+    const definition = (scopes: GatewayOperatorRoleDefinition["scopes"]) => ({
       agents: "*" as const,
       scopes,
       sessions: { others: "none" as const },
@@ -120,7 +126,10 @@ it.each(["other-role", "own-role", "own-role-restored", "other-merge", "own-merg
       req: { type: "req", id: "profile-request", method: "plugin.approval.waitDecision" },
       client,
       context,
-    } as GatewayRequestHandlerOptions;
+      params: {},
+      isWebchatConnect: () => false,
+      respond: vi.fn(),
+    } satisfies GatewayRequestHandlerOptions;
     using authority = await createApprovalRequestAuthority(options);
     authority.setCheckpoint({ phase: "post-decision", approvalId: "plugin:profile-fixture" });
     authority.assertCurrent();

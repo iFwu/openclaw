@@ -1218,6 +1218,150 @@ describe("dispatchReplyFromConfig", () => {
     externalLifecycleRequest.emitDestroy();
   });
 
+  it("releases an idle borrowed lifecycle lease when the queued successor is aborted", async () => {
+    const sessionKey = "agent:main:discord:channel:cancelled-successor";
+    const sessionId = "cancelled-successor-session";
+    const storePath = "/tmp/mock-sessions.json";
+    const entry = { sessionId, updatedAt: Date.now() };
+    sessionStoreMocks.currentEntry = entry;
+    const existingOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    const abort = new AbortController();
+    const { createDispatchReplyOperationCoordinator } =
+      await import("./dispatch-from-config.lifecycle.js");
+    const coordinator = createDispatchReplyOperationCoordinator({
+      allowActiveQueueResolution: true,
+      agentId: "main",
+      cfg: emptyConfig,
+      ctx: finalizeInboundContextForSdk(
+        buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          SessionKey: sessionKey,
+          Body: "cancel this queued successor",
+        }),
+      ),
+      dispatcher: createDispatcher(),
+      dispatchOperationSessionKey: sessionKey,
+      operationSessionStoreEntry: { entry, storePath },
+      replyOptions: { abortSignal: abort.signal },
+      resolveOperationExpectedSessionId: () => sessionId,
+    });
+
+    try {
+      await expect(coordinator.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
+        status: "ready",
+      });
+      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
+
+      abort.abort(new Error("queued successor cancelled"));
+
+      await vi.waitFor(() => {
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+      });
+      expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation);
+      expect(existingOperation.abortSignal.aborted).toBe(false);
+    } finally {
+      await coordinator.releasePreDispatchLifecycleAdmission();
+      existingOperation.complete();
+    }
+  });
+
+  it.each([false, true])(
+    "retains borrowed admission until cancelled plugin work settles (synchronous: %s)",
+    async (cancelSynchronously) => {
+      const sessionKey = "agent:main:discord:channel:cancelled-plugin-work";
+      const sessionId = "cancelled-plugin-work-session";
+      const storePath = "/tmp/mock-sessions.json";
+      const entry = { sessionId, updatedAt: Date.now() };
+      sessionStoreMocks.currentEntry = entry;
+      const existingOperation = createReplyOperation({
+        sessionKey,
+        sessionId,
+        resetTriggered: false,
+      });
+      const abort = new AbortController();
+      const claimEntered = createDeferred();
+      const claimRelease = createDeferred();
+      const { createDispatchReplyOperationCoordinator } =
+        await import("./dispatch-from-config.lifecycle.js");
+      const coordinator = createDispatchReplyOperationCoordinator({
+        allowActiveQueueResolution: true,
+        agentId: "main",
+        cfg: emptyConfig,
+        ctx: finalizeInboundContextForSdk(
+          buildTestCtx({
+            Provider: "discord",
+            Surface: "discord",
+            SessionKey: sessionKey,
+            Body: "hold plugin work",
+          }),
+        ),
+        dispatcher: createDispatcher(),
+        dispatchOperationSessionKey: sessionKey,
+        operationSessionStoreEntry: { entry, storePath },
+        replyOptions: { abortSignal: abort.signal },
+        resolveOperationExpectedSessionId: () => sessionId,
+      });
+      const externalLifecycleRequest = new AsyncResource("external-cancelled-plugin-work");
+      let claim: Promise<void> | undefined;
+      let mutation: Promise<void> | undefined;
+      let mutationPrepared = false;
+      let mutationRan = false;
+      try {
+        await expect(coordinator.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
+          status: "ready",
+        });
+        claim = coordinator.runWithDispatchLifecycleAdmission(async () => {
+          claimEntered.resolve();
+          if (cancelSynchronously) {
+            existingOperation.complete();
+            abort.abort(new Error("plugin work synchronously cancelled its successor"));
+          }
+          await claimRelease.promise;
+        });
+        await claimEntered.promise;
+        existingOperation.complete();
+        abort.abort(new Error("queued successor cancelled during plugin work"));
+        mutation = externalLifecycleRequest.runInAsyncScope(async () =>
+          runExclusiveSessionLifecycleMutation({
+            scope: storePath,
+            identities: [sessionKey, sessionId],
+            prepare: async () => {
+              mutationPrepared = true;
+              await interruptSessionWorkAdmissions({
+                scope: storePath,
+                identities: [sessionKey, sessionId],
+              });
+            },
+            run: async () => {
+              mutationRan = true;
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(mutationPrepared).toBe(true);
+        });
+        expect(mutationRan).toBe(false);
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
+        claimRelease.resolve();
+        await claim;
+        await mutation;
+        expect(mutationRan).toBe(true);
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+      } finally {
+        claimRelease.resolve();
+        existingOperation.complete();
+        await Promise.allSettled([claim, mutation]);
+        await coordinator.releasePreDispatchLifecycleAdmission();
+        externalLifecycleRequest.emitDestroy();
+      }
+    },
+  );
+
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
     const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",

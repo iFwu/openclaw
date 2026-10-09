@@ -134,6 +134,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
   const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
   const continueFromCurrentTranscript = (options?: { includeToolFailureInstruction?: boolean }) => {
+    // Raw runs have no transcript history from which to recover the original task.
+    if (params.modelRun === true || params.promptMode === "none") {
+      return;
+    }
     const prompt = options?.includeToolFailureInstruction
       ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
       : CONTINUATION_PROMPT;

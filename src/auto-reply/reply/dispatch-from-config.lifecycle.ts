@@ -175,6 +175,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionWorkAdmissionLease | undefined;
+  let removePreDispatchLifecycleAbortListener: (() => void) | undefined;
   let preDispatchLifecycleAbortController: AbortController | undefined;
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
@@ -212,6 +213,8 @@ export function createDispatchReplyOperationCoordinator(params: {
   const releasePreDispatchLifecycleAdmission = async (
     afterWorkBarrier?: () => PromiseLike<unknown>,
   ): Promise<void> => {
+    removePreDispatchLifecycleAbortListener?.();
+    removePreDispatchLifecycleAbortListener = undefined;
     const admission = preDispatchLifecycleAdmission;
     const preDispatchAbortController = preDispatchLifecycleAbortController;
     const dispatchAbortController = dispatchLifecycleAbortController;
@@ -247,13 +250,36 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
-  const runWithDispatchLifecycleAdmission = async <T>(run: () => Promise<T>): Promise<T> => {
-    if (dispatchReplyOperation) {
-      return await runWithReplyOperationLifecycleAdmission(dispatchReplyOperation, run);
+  const armPreDispatchLifecycleAbortRelease = () => {
+    const abortSignal =
+      params.replyOptions?.turnAdoptionLifecycle?.abortSignal ?? params.replyOptions?.abortSignal;
+    if (!abortSignal || !preDispatchLifecycleAdmission) {
+      return;
     }
-    return preDispatchLifecycleAdmission
-      ? await preDispatchLifecycleAdmission.run(run)
-      : await run();
+    removePreDispatchLifecycleAbortListener?.();
+    const onAbort = () => {
+      void releasePreDispatchLifecycleAdmission(() =>
+        waitForReplyDispatcherIdle(params.dispatcher),
+      );
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    removePreDispatchLifecycleAbortListener = () =>
+      abortSignal.removeEventListener("abort", onAbort);
+    if (abortSignal.aborted) {
+      onAbort();
+    }
+  };
+
+  const runWithDispatchLifecycleAdmission = async <T>(run: () => Promise<T>): Promise<T> => {
+    // Register work before callbacks can synchronously cancel the borrowed admission.
+    const enter = async () => await Promise.resolve().then(run);
+    const work = dispatchReplyOperation
+      ? runWithReplyOperationLifecycleAdmission(dispatchReplyOperation, enter)
+      : preDispatchLifecycleAdmission
+        ? preDispatchLifecycleAdmission.run(enter)
+        : enter();
+    trackDispatchLifecycleWork(work);
+    return await work;
   };
 
   const ensureDispatchReplyOperation = async (
@@ -451,6 +477,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         } else {
           dispatchLifecycleAbortController = lifecycleOnlyAbortController;
         }
+        armPreDispatchLifecycleAbortRelease();
         return { status: "ready" };
       }
       if (
@@ -463,6 +490,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       ) {
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;
         dispatchLifecycleAbortController = lifecycleOnlyAbortController;
+        armPreDispatchLifecycleAbortRelease();
         logVerbose(
           `dispatch-from-config: allowing Slack routed thread ${params.routeThreadId} while ${dispatchOperationSessionKey} has an active reply operation in another Slack thread`,
         );
