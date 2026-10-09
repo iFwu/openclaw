@@ -66,6 +66,7 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import {
+  resolveGatewayRequestFailure,
   runWithGatewayObservationScope,
   workAdmissionUnavailableError,
 } from "./server-request-lifecycle.js";
@@ -88,7 +89,6 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
-import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
 
@@ -534,12 +534,9 @@ export async function runWithGatewayRequestEnvelope<T>(
           )
         : invoke());
     } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        return await options.reject(error.error);
-      }
-      const staleInstall = classifyGatewayStaleInstall(error);
-      if (staleInstall) {
-        return await options.reject(staleInstall.error);
+      const failure = resolveGatewayRequestFailure(error);
+      if (failure) {
+        return await options.reject(failure);
       }
       throw error;
     } finally {

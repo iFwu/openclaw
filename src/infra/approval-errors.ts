@@ -1,6 +1,53 @@
 // Detects approval-not-found errors across gateway response shapes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+export type ApprovalAuthorityFailure =
+  | "authority_closed"
+  | "scope_forbidden"
+  | "requester_invalidated"
+  | "identity_changed"
+  | "context_changed"
+  | "config_policy_revoked"
+  | "access_revision_changed";
+
+export type ApprovalAuthorityCheckpoint = {
+  approvalId?: string;
+  phase: "authority-check" | "snapshot" | "post-decision" | "terminal-snapshot";
+};
+
+export class ApprovalRequesterAuthorityChangedError extends Error {
+  readonly details;
+
+  constructor(
+    failures: readonly ApprovalAuthorityFailure[],
+    checkpoint: ApprovalAuthorityCheckpoint,
+    accessRevision: {
+      captured: { gateway: number; profileAlias: number };
+      current: { gateway: number; profileAlias: number };
+    },
+    changedFields: readonly string[] = [],
+  ) {
+    super(`Approval requester authority changed (${failures.join(", ")})`);
+    this.name = "ApprovalRequesterAuthorityChangedError";
+    this.details = {
+      reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED" as const,
+      failures,
+      ...checkpoint,
+      accessRevision,
+      changedFields,
+    };
+  }
+}
+
+export function isApprovalRequesterAuthorityChangedError(err: unknown): boolean {
+  return (
+    err instanceof ApprovalRequesterAuthorityChangedError ||
+    (err instanceof Error &&
+      readApprovalErrorDetailsReason((err as { details?: unknown }).details) ===
+        "APPROVAL_REQUESTER_AUTHORITY_CHANGED")
+  );
+}
+
 const INVALID_REQUEST = "INVALID_REQUEST";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";

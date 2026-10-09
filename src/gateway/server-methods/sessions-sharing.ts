@@ -192,7 +192,7 @@ function publishSharingChange(params: {
   event: Omit<SessionSharingEvidenceEvent, "actorState">;
   agentId: string;
 }): void {
-  bumpGatewayAccessRevision();
+  bumpGatewayAccessRevision({ source: "session-sharing", subject: params.event.sessionKey });
   invalidateSessionSharingSnapshot(params.event.sessionKey);
   const eventOptions = {
     sessionKeys: [params.event.sessionKey],

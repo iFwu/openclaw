@@ -233,7 +233,9 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
     return;
   }
+  params.authority?.setCheckpoint({ phase: "snapshot" });
   const snapshot = await params.manager.getSnapshot(id, params.authority);
+  params.authority?.setCheckpoint({ phase: "snapshot", approvalId: snapshot?.id });
   params.authority?.assertCurrent();
   const visible = (record: ExecApprovalRecord<TPayload>) => {
     const cfg = params.getCfg?.() ?? params.cfg;
@@ -264,7 +266,9 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     return;
   }
   const recordedDecision = await decisionPromise;
+  params.authority?.setCheckpoint({ phase: "post-decision", approvalId: snapshot.id });
   params.authority?.assertCurrent();
+  params.authority?.setCheckpoint({ phase: "terminal-snapshot", approvalId: snapshot.id });
   const terminalSnapshot = (await params.manager.getSnapshot(id, params.authority)) ?? snapshot;
   params.authority?.assertCurrent();
   if (!visible(terminalSnapshot)) {

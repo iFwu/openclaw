@@ -407,7 +407,7 @@ export function emitSessionsChanged(
   }
   // Only a committed producer may certify unchanged access; unknown changes stay conservative.
   if (!catalogOnly && options.accessChanged !== false) {
-    bumpGatewayAccessRevision();
+    bumpGatewayAccessRevision({ source: "session-change", subject: payload.sessionKey });
   }
   if (!catalogOnly) {
     invalidateSessionSharingSnapshot(payload.sessionKey);

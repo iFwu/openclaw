@@ -4,12 +4,28 @@ import {
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
 } from "../../packages/gateway-protocol/src/restart-unavailable.js";
+import { ApprovalRequesterAuthorityChangedError } from "../infra/approval-errors.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { classifyGatewayStaleInstall } from "./stale-install.js";
+
+export function resolveGatewayRequestFailure(error: unknown) {
+  if (error instanceof SessionMutationAuthorizationChangedError) {
+    return error.error;
+  }
+  if (error instanceof ApprovalRequesterAuthorityChangedError) {
+    const { reason, failures, phase, approvalId } = error.details;
+    return errorShape(ErrorCodes.FORBIDDEN, error.message, {
+      details: { reason, failures, phase, ...(approvalId ? { approvalId } : {}) },
+    });
+  }
+  return classifyGatewayStaleInstall(error)?.error;
+}
 
 export function workAdmissionUnavailableError(method: string) {
   const restartDraining = isGatewayRestartDraining();

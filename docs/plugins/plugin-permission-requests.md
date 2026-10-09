@@ -298,6 +298,17 @@ for the Codex-specific behavior and fallback rules.
 approval route accepted the request. Connect an approval-capable client, use a
 channel that supports same-chat `/approve`, or configure `approvals.plugin`.
 
+**A prompt was approved, but the tool reports requester authority changed.**
+The decision can be recorded while the waiting request loses its live authority.
+The tool remains blocked; this does not mean the prompt was never delivered or
+that the Gateway disconnected. The failure includes the accepted approval ID.
+Gateway warnings identify the checkpoint (`snapshot`, `post-decision`, or
+`terminal-snapshot`) and the first failed condition, without exposing identity
+values or the command. When the access revision changed, debug logs identify the
+revision producer; session and profile subjects are hashed. Profile alias
+revisions are reported separately. These diagnostics do not relax authorization
+or automatically retry the action.
+
 **`allow-always` appears but the next call prompts again.** The generic plugin
 approval flow does not automatically persist trust for arbitrary hooks. Persist
 plugin-owned trust in your plugin after `onResolution("allow-always")`, or

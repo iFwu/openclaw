@@ -75,6 +75,43 @@ describe("plugin approval policy subject and setup guidance", () => {
     },
   );
 
+  it.each(["direct-error", "gateway-response"] as const)(
+    "reports requester authority loss after registration through %s without executing",
+    async (transport) => {
+      const details = {
+        reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED",
+        failures: ["access_revision_changed"],
+        phase: "post-decision",
+        approvalId: "plugin:accepted",
+      };
+      const message = "Approval requester authority changed (access_revision_changed)";
+      const error =
+        transport === "gateway-response"
+          ? new GatewayClientRequestError({ code: "FORBIDDEN", message, details })
+          : Object.assign(new Error(message), { details });
+      hookRunner.runBeforeToolCall.mockResolvedValue({
+        requireApproval: { title: "Approval", description: "Authority diagnostics" },
+      });
+      mockCallGateway
+        .mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" })
+        .mockRejectedValueOnce(error);
+      const execute = vi.fn();
+      const tool = { name: "bash", execute } as unknown as AnyAgentTool;
+      await expect(
+        wrapToolWithBeforeToolCallHook(tool, { agentId: "main", sessionKey: "main" }).execute(
+          "call-authority",
+          { command: "unexecuted" },
+          undefined,
+          undefined,
+        ),
+      ).rejects.toThrow(
+        "Plugin approval wait failed: Approval requester authority changed (access_revision_changed); approval id: plugin:accepted. The tool call did not run.",
+      );
+      expect(execute).not.toHaveBeenCalled();
+      expect(mockCallGateway).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each(["wrapped", "adapted"] as const)(
     "binds a %s tool approval to its registered owner rather than the approval hook owner",
     async (path) => {

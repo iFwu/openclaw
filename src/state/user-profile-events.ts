@@ -3,6 +3,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
@@ -10,6 +11,8 @@ import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-asy
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
 import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
+
+const log = createSubsystemLogger("state/profiles");
 
 type EmailBindingChange = {
   db: DatabaseSync;
@@ -329,7 +332,13 @@ export function readUserProfileAliasRevision(): number {
 
 /** Publish only after a committed merge/unmerge; cosmetic profile updates preserve access. */
 export function publishUserProfileAliasChange(): void {
+  const previous = changes.aliasRevision;
   changes.aliasRevision += 1;
+  log.debug("profile alias access revision advanced", {
+    source: "profile-alias",
+    previous,
+    current: changes.aliasRevision,
+  });
 }
 
 export function onUserProfilesChanged(listener: () => void): () => void {

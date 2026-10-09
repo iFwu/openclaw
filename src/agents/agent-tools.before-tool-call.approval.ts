@@ -6,6 +6,7 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../config/config.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { isApprovalRequesterAuthorityChangedError } from "../infra/approval-errors.js";
 import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
@@ -245,6 +246,7 @@ async function requestPluginToolApproval(params: {
       : undefined;
   };
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
+  let gatewayApprovalId: string | undefined;
   try {
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
@@ -348,6 +350,7 @@ async function requestPluginToolApproval(params: {
     );
     gatewayApprovalPhase = "none";
     const id = requestResult?.id;
+    gatewayApprovalId = id;
     if (!id) {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
       return {
@@ -440,15 +443,19 @@ async function requestPluginToolApproval(params: {
     const invalidRequest =
       err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
     const forbidden = err instanceof GatewayClientRequestError && err.gatewayCode === "FORBIDDEN";
-    const reason =
-      forbidden && gatewayApprovalPhase !== "none"
+    const reason = isApprovalRequesterAuthorityChangedError(err)
+      ? `Plugin approval ${gatewayApprovalPhase} failed: ${formatErrorMessage(err)}${gatewayApprovalId ? `; approval id: ${gatewayApprovalId}` : ""}. The tool call did not run.`
+      : forbidden && gatewayApprovalPhase !== "none"
         ? `Plugin approval ${gatewayApprovalPhase} forbidden: ${formatErrorMessage(err)}`
         : invalidRequest && gatewayApprovalPhase === "request"
           ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
           : invalidRequest && gatewayApprovalPhase === "wait"
             ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
             : "Plugin approval required (gateway unavailable)";
-    log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
+    log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`, {
+      phase: gatewayApprovalPhase,
+      ...(gatewayApprovalId ? { approvalId: gatewayApprovalId } : {}),
+    });
     return {
       blocked: true,
       kind: "failure",

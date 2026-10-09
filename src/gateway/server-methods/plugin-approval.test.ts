@@ -6,8 +6,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -781,6 +783,76 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.waitDecision", () => {
+    it("attributes an expiry snapshot's internal guard failure to the snapshot checkpoint", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = await registerApproval(manager);
+      const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
+      vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
+      const forceDeny = manager.forceDenyDetailed.bind(manager);
+      vi.spyOn(manager, "forceDenyDetailed").mockImplementationOnce(async (...args) => {
+        const result = await forceDeny(...args);
+        bumpGatewayAccessRevision();
+        return result;
+      });
+      await expect(invokeHandler(handlers, opts)).rejects.toMatchObject({
+        details: {
+          reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED",
+          failures: ["access_revision_changed"],
+          phase: "snapshot",
+        },
+      });
+      expect(opts.respond).not.toHaveBeenCalled();
+      expect(manager.getLocalSnapshot(record.id)?.terminalReason).toBe("timeout");
+    });
+
+    it.each(["gateway-revision", "profile-alias", "context-reader"] as const)(
+      "identifies %s after a recorded allow-once decision without releasing the waiter",
+      async (change) => {
+        const failure = change === "context-reader" ? "context_changed" : "access_revision_changed";
+        const handlers = createPluginApprovalHandlers(manager);
+        const record = await registerApproval(manager);
+        const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
+        const parked = createDeferred();
+        const awaitDecision = manager.awaitDecision.bind(manager);
+        const spy = vi.spyOn(manager, "awaitDecision").mockImplementation((id) => {
+          const decision = awaitDecision(id);
+          parked.resolve();
+          return decision;
+        });
+        const waiting = invokeHandler(handlers, opts);
+        const rejected = expect(waiting).rejects.toMatchObject({
+          details: {
+            reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED",
+            failures: [failure],
+            phase: "post-decision",
+            approvalId: record.id,
+          },
+        });
+        try {
+          await parked.promise;
+          if (change === "gateway-revision") {
+            bumpGatewayAccessRevision({ source: "session-change", subject: "synthetic-session" });
+          } else if (change === "profile-alias") {
+            publishUserProfileAliasChange();
+          } else {
+            opts.context.getRuntimeConfig = () => ({});
+          }
+          expect(await manager.resolve(record.id, "allow-once")).toBe(true);
+          await rejected;
+          expect(opts.respond).not.toHaveBeenCalled();
+          expect(opts.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`"failures":["${failure}"]`),
+          );
+          expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
+            expect.stringContaining(`"approvalId":"${record.id}"`),
+          );
+          expect((await manager.getSnapshot(record.id))?.decision).toBe("allow-once");
+        } finally {
+          spy.mockRestore();
+        }
+      },
+    );
+
     it("rejects missing id", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", {});

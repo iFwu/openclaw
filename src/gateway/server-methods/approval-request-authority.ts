@@ -10,8 +10,13 @@ import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-stor
 import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
 import { listConfiguredSessionStoreAgentIds } from "../../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  ApprovalRequesterAuthorityChangedError,
+  type ApprovalAuthorityCheckpoint,
+  type ApprovalAuthorityFailure,
+} from "../../infra/approval-errors.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { readGatewayAccessRevisionState } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import {
   canResolveOperatorApproval,
@@ -68,7 +73,9 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   const config = getConfig();
   const authPolicy = client?.authPolicy ?? captureGatewayAuthPolicy(config, null);
   const configPolicy = captureApprovalConfigPolicy(config);
-  const accessRevision = readGatewayAccessRevision();
+  const accessRevision = readGatewayAccessRevisionState();
+  let checkpoint: ApprovalAuthorityCheckpoint = { phase: "authority-check" };
+  let failureLogged = false;
   let configRevoked = false;
   let closed = false;
   const releaseConfig = onOperatorRolePolicyChanged((change) => {
@@ -96,27 +103,75 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
         : method === "approval.history"
           ? authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed
           : canReviewOperatorApproval(client);
-    if (
-      closed ||
-      !allowed ||
-      client?.invalidated ||
-      client?.connect.role !== role ||
-      client?.connect.device?.id !== deviceId ||
-      client?.internal?.approvalRuntime !== approvalRuntime ||
-      client?.internal?.agentRuntimeIdentity !== runtimeIdentity ||
-      currentActor?.kind !== actorKind ||
-      (currentActor?.kind === "operator" ? currentActor.profileId : undefined) !== actorProfileId ||
-      client?.authenticatedUserProfile?.profileId !== profileId ||
-      client?.authenticatedUserId !== userId ||
-      options.context.getRuntimeConfig !== readRuntimeConfig ||
-      options.context.getCommittedRuntimeConfig !== readCommittedConfig ||
-      options.context.resolveGatewayContext !== resolveGatewayContext ||
-      (resolveGatewayContext?.() ?? options.context) !== gatewayContext ||
-      configRevoked ||
-      readGatewayAccessRevision() !== accessRevision
-    ) {
-      throw new Error("Approval requester authority changed");
+    const currentRevision = readGatewayAccessRevisionState();
+    // Preserve the original rejection order and short-circuiting; diagnostics name the first failure.
+    const failure: { reason: ApprovalAuthorityFailure; field?: string } | false | undefined =
+      (closed && { reason: "authority_closed" }) ||
+      (!allowed && { reason: "scope_forbidden" }) ||
+      (client?.invalidated && { reason: "requester_invalidated" }) ||
+      (client?.connect.role !== role && { reason: "identity_changed", field: "role" }) ||
+      (client?.connect.device?.id !== deviceId && {
+        reason: "identity_changed",
+        field: "device",
+      }) ||
+      (client?.internal?.approvalRuntime !== approvalRuntime && {
+        reason: "identity_changed",
+        field: "approvalRuntime",
+      }) ||
+      (client?.internal?.agentRuntimeIdentity !== runtimeIdentity && {
+        reason: "identity_changed",
+        field: "runtimeIdentity",
+      }) ||
+      (currentActor?.kind !== actorKind && { reason: "identity_changed", field: "actorKind" }) ||
+      ((currentActor?.kind === "operator" ? currentActor.profileId : undefined) !==
+        actorProfileId && { reason: "identity_changed", field: "actorProfile" }) ||
+      (client?.authenticatedUserProfile?.profileId !== profileId && {
+        reason: "identity_changed",
+        field: "profile",
+      }) ||
+      (client?.authenticatedUserId !== userId && { reason: "identity_changed", field: "user" }) ||
+      (options.context.getRuntimeConfig !== readRuntimeConfig && {
+        reason: "context_changed",
+        field: "runtimeConfigReader",
+      }) ||
+      (options.context.getCommittedRuntimeConfig !== readCommittedConfig && {
+        reason: "context_changed",
+        field: "committedConfigReader",
+      }) ||
+      (options.context.resolveGatewayContext !== resolveGatewayContext && {
+        reason: "context_changed",
+        field: "contextResolver",
+      }) ||
+      ((resolveGatewayContext?.() ?? options.context) !== gatewayContext && {
+        reason: "context_changed",
+        field: "gatewayContext",
+      }) ||
+      (configRevoked && { reason: "config_policy_revoked" }) ||
+      (currentRevision.gateway + currentRevision.profileAlias !==
+        accessRevision.gateway + accessRevision.profileAlias && {
+        reason: "access_revision_changed",
+      });
+    if (failure) {
+      const error = new ApprovalRequesterAuthorityChangedError(
+        [failure.reason],
+        checkpoint,
+        {
+          captured: accessRevision,
+          current: currentRevision,
+        },
+        failure.field ? [failure.field] : [],
+      );
+      if (!failureLogged) {
+        failureLogged = true;
+        options.context.logGateway.warn(
+          `approval requester authority changed ${JSON.stringify({ method, ...error.details })}`,
+        );
+      }
+      throw error;
     }
+  };
+  const setCheckpoint = (at: ApprovalAuthorityCheckpoint) => {
+    checkpoint = at;
   };
   const assertCurrent = () => {
     authority.assertCurrent();
@@ -136,6 +191,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   };
   return {
     guard,
+    setCheckpoint,
     assertCurrent,
     assertCommitCurrent: guard.assertCurrent,
     isCurrent: () => {

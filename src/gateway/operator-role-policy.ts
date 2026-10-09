@@ -66,7 +66,7 @@ function readOperatorRoleAssignment(profileId: string): string | null {
 /** Drops a changed assignment so subsequent authorization reads the durable owner. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
   assignmentRevision += 1;
-  bumpGatewayAccessRevision();
+  bumpGatewayAccessRevision({ source: "operator-role", subject: profileId });
   operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
     if (reported.startsWith(`${profileId}:`)) {
