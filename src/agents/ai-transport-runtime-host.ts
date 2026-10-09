@@ -17,7 +17,7 @@ import { createAnthropicVertexStreamFnForModel } from "./anthropic-vertex-stream
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
-import { createOpenAICompletionsPayloadPolicyWrapper } from "./openai-completions-payload-policy.js";
+import { createOpenAIPayloadPolicyWrapper } from "./openai-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
   attachModelProviderLocalService,
@@ -79,7 +79,8 @@ export function configureAiTransportRuntimeHost(): void {
           },
         });
         const baseStreamFn = providerStreamFn ?? params.context.streamFn;
-        if ((params.context.sourceApi ?? params.context.model.api) !== "openai-completions") {
+        const sourceApi = params.context.sourceApi ?? params.context.model.api;
+        if (sourceApi !== "openai-completions" && sourceApi !== "openai-responses") {
           return providerStreamFn;
         }
         const { defaultParams, modelParams, agentModelParams, agentParams } =
@@ -89,7 +90,7 @@ export function configureAiTransportRuntimeHost(): void {
             modelId: params.context.modelId,
             agentId: params.context.agentId,
           });
-        return createOpenAICompletionsPayloadPolicyWrapper(baseStreamFn, [
+        return createOpenAIPayloadPolicyWrapper(baseStreamFn, [
           defaultParams,
           modelParams,
           agentModelParams,

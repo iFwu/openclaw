@@ -44,7 +44,7 @@ import {
   resolveModelExtraParamSources,
   sanitizeExtraParamsRecord,
 } from "../model-extra-params.js";
-import { createOpenAICompletionsPayloadPolicyWrapper } from "../openai-completions-payload-policy.js";
+import { createOpenAIPayloadPolicyWrapper } from "../openai-payload-policy.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
@@ -566,10 +566,10 @@ function applyPostPluginStreamWrappers(
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
-  ctx.agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
-    requireBaseStreamFn(ctx.agent.streamFn),
-    [ctx.effectiveExtraParams, ctx.override],
-  );
+  ctx.agent.streamFn = createOpenAIPayloadPolicyWrapper(requireBaseStreamFn(ctx.agent.streamFn), [
+    ctx.effectiveExtraParams,
+    ctx.override,
+  ]);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],

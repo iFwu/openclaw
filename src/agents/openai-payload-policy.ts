@@ -82,14 +82,14 @@ function createOpenAICompletionsChatTemplateKwargsWrapper(
   };
 }
 
-const FRAMEWORK_MANAGED_EXTRA_BODY_KEYS = new Set(["messages", "model", "stream"]);
+const FRAMEWORK_MANAGED_EXTRA_BODY_KEYS = new Set(["messages", "input", "model", "stream"]);
 
-function createOpenAICompletionsExtraBodyWrapper(
+function createOpenAIExtraBodyWrapper(
   underlying: StreamFn,
   extraBody: Record<string, unknown>,
 ): StreamFn {
   return (model, context, options) => {
-    if (model.api !== "openai-completions") {
+    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -107,7 +107,7 @@ function createOpenAICompletionsExtraBodyWrapper(
 }
 
 /** Apply configured payload fields before removing store from non-native completion routes. */
-export function createOpenAICompletionsPayloadPolicyWrapper(
+export function createOpenAIPayloadPolicyWrapper(
   streamFn: StreamFn,
   sources: ReadonlyArray<Record<string, unknown> | undefined>,
 ): StreamFn {
@@ -127,7 +127,7 @@ export function createOpenAICompletionsPayloadPolicyWrapper(
     "extra_body",
   );
   if (extraBody) {
-    wrappedStreamFn = createOpenAICompletionsExtraBodyWrapper(wrappedStreamFn, extraBody);
+    wrappedStreamFn = createOpenAIExtraBodyWrapper(wrappedStreamFn, extraBody);
   }
   return createOpenAICompletionsStoreCompatWrapper(wrappedStreamFn);
 }
