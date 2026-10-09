@@ -207,6 +207,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     Telegram expects a unicode emoji (for example "👀"); use `""` to disable the reaction for a channel or account.
 
+    With `messages.removeAckAfterReply: true`, dispatch completion, failure, or cancellation clears the acknowledgement after its send attempt settles, even if a network error left the send result uncertain. Cleanup retries transient network or server failures once; flood-control waits remain owned by the account limiter. Disabling cleanup retains the acknowledgement.
+
     **Scope (`messages.ackReactionScope`, default `"group-mentions"`; no Telegram-account or Telegram-channel override):**
 
     `all` (DMs + groups, including ambient room events), `direct` (DMs only), `group-all` (every group message except ambient room events, no DMs), `group-mentions` (groups when the bot is mentioned; **no DMs** — default), `off` / `none` (disabled).

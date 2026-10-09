@@ -45,6 +45,7 @@ import { enforceTelegramDmAccess } from "./dm-access.js";
 import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramNativeCommandAdmission } from "./ingress.js";
+import { clearTelegramReaction } from "./status-reaction-clear.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -556,7 +557,7 @@ export const buildTelegramMessageContext = async ({
           enabled: true,
           adapter: {
             clearReaction: async () => {
-              await reactionApi?.(chatId, msg.message_id, []);
+              await clearTelegramReaction(async () => reactionApi?.(chatId, msg.message_id, []));
             },
             setReaction: async (emoji: string) => {
               if (reactionApi) {

@@ -78,8 +78,8 @@ describeTelegramDispatch("fork ACK removal contract", () => {
       ack.resolve(sent);
       await ack.promise;
       await vi.runAllTimersAsync();
-      expect(reactionApi).toHaveBeenCalledTimes(remove && sent ? 1 : 0);
-      if (remove && sent) {
+      expect(reactionApi).toHaveBeenCalledTimes(remove ? 1 : 0);
+      if (remove) {
         expect(reactionApi).toHaveBeenLastCalledWith(123, 456, []);
       }
     },
@@ -139,6 +139,111 @@ describeTelegramDispatch("fork ACK removal contract", () => {
       }
     },
   );
+  it.each(["done", "error", "cancelled"] as const)(
+    "fork ACK clears an ambiguously applied acknowledgement after %s",
+    async (outcome) => {
+      let visibleReaction = false;
+      const reactionApi = vi.fn<NonNullable<TelegramMessageContext["reactionApi"]>>(
+        async (_chatId, _messageId, reactions) => {
+          visibleReaction = reactions.length > 0;
+          if (visibleReaction) {
+            throw new Error("Network request for 'setMessageReaction' failed!");
+          }
+          return true;
+        },
+      );
+      const context = await buildTelegramMessageContextForTest({
+        message: { chat: { id: 123, type: "private" }, message_id: 456 },
+        cfg: {
+          channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+          messages: { ackReaction: "👀", removeAckAfterReply: true },
+        },
+        ackReactionScope: "direct",
+        botApi: { setMessageReaction: reactionApi },
+      });
+      if (!context) {
+        throw new Error("Expected an admitted Telegram context");
+      }
+      expect(await context.ackReactionPromise).toBe(false);
+      expect(visibleReaction).toBe(true);
+      createTelegramDispatchStatus({ cfg: context.cfg, context }).finalizeInBackground(
+        { outcome },
+        "ambiguous acknowledgement cleanup",
+      );
+      await vi.runAllTimersAsync();
+      expect(visibleReaction).toBe(false);
+      expect(reactionApi).toHaveBeenLastCalledWith(123, 456, []);
+    },
+  );
+  it.each<{ controller: boolean; error: unknown; attempts: number; persistent?: boolean }>([
+    {
+      controller: false,
+      error: new Error("Network request for 'setMessageReaction' failed!"),
+      attempts: 2,
+    },
+    {
+      controller: true,
+      error: new Error("Network request for 'setMessageReaction' failed!"),
+      attempts: 2,
+    },
+    { controller: false, error: { error_code: 403, description: "Forbidden" }, attempts: 1 },
+    { controller: true, error: { error_code: 403, description: "Forbidden" }, attempts: 1 },
+    { controller: false, error: { error_code: 429, parameters: { retry_after: 5 } }, attempts: 1 },
+    { controller: true, error: { error_code: 429, parameters: { retry_after: 5 } }, attempts: 1 },
+    { controller: false, error: { error_code: 503 }, attempts: 2 },
+    {
+      controller: false,
+      error: new Error("Network request for 'setMessageReaction' failed!"),
+      attempts: 2,
+      persistent: true,
+    },
+  ])(
+    "fork ACK cleanup bounds retries with lifecycle=$controller and attempts=$attempts",
+    async ({ controller, error, attempts, persistent }) => {
+      let clearAttempts = 0;
+      const reactionApi = vi.fn<NonNullable<TelegramMessageContext["reactionApi"]>>(
+        async (_chatId, _messageId, reactions) => {
+          if (!reactions.length && (++clearAttempts === 1 || persistent)) {
+            throw error;
+          }
+          return true;
+        },
+      );
+      const context = await buildTelegramMessageContextForTest({
+        message: { chat: { id: 123, type: "private" }, message_id: 456 },
+        cfg: {
+          channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+          messages: {
+            ackReaction: "👀",
+            removeAckAfterReply: true,
+            statusReactions: { enabled: controller },
+          },
+        },
+        ackReactionScope: "direct",
+        botApi: { setMessageReaction: reactionApi },
+      });
+      if (!context) {
+        throw new Error("Expected an admitted Telegram context");
+      }
+      await context.ackReactionPromise;
+      createTelegramDispatchStatus({ cfg: context.cfg, context }).finalizeInBackground(
+        { outcome: "cancelled" },
+        "bounded cleanup",
+      );
+      await vi.runAllTimersAsync();
+      expect(clearAttempts).toBe(attempts);
+    },
+  );
+  it("does not clear reactions when acknowledgement was never attempted", async () => {
+    const reactionApi = vi.fn(async () => true);
+    const context = createContext({ reactionApi, ackReactionPromise: null });
+    createTelegramDispatchStatus({
+      cfg: { messages: { removeAckAfterReply: true } },
+      context,
+    }).finalizeInBackground({ outcome: "done" }, "no acknowledgement");
+    await vi.runAllTimersAsync();
+    expect(reactionApi).not.toHaveBeenCalled();
+  });
   it.each(["done", "error", "cancelled"] as const)(
     "fork ACK clears the production context adapter after %s",
     async (outcome) => {

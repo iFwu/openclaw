@@ -1,5 +1,6 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMessageContext } from "./bot-message-context.js";
+import { clearTelegramReaction } from "./status-reaction-clear.js";
 
 export function createTelegramDispatchStatus(params: {
   cfg: TelegramMessageContext["cfg"];
@@ -13,9 +14,12 @@ export function createTelegramDispatchStatus(params: {
       return;
     }
     if (!controller) {
-      // An acknowledgement send can settle after dispatch; clear only a confirmed send.
-      if (cfg.messages?.removeAckAfterReply && (await context.ackReactionPromise)) {
-        await context.reactionApi?.(context.chatId, context.msg.message_id, []);
+      if (cfg.messages?.removeAckAfterReply && context.ackReactionPromise) {
+        // A failed response cannot prove that Telegram did not apply the acknowledgement.
+        await context.ackReactionPromise;
+        await clearTelegramReaction(async () =>
+          context.reactionApi?.(context.chatId, context.msg.message_id, []),
+        );
       }
       return;
     }
