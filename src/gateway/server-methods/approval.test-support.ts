@@ -181,6 +181,6 @@ export async function handleApprovalResolve<
     respond: params.respond,
     isWebchatConnect: () => false,
   };
-  using authority = createApprovalRequestAuthority(options);
+  using authority = await createApprovalRequestAuthority(options);
   return await handleOwnedApprovalResolve({ ...params, context, authority });
 }

@@ -103,7 +103,7 @@ export function createExecApprovalHandlers(
 ): GatewayRequestHandlers {
   return {
     "exec.approval.get": async (options) => {
-      using authority = createApprovalRequestAuthority(options);
+      using authority = await createApprovalRequestAuthority(options);
       const { params, respond, client, context } = options;
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
@@ -141,7 +141,7 @@ export function createExecApprovalHandlers(
       );
     },
     "exec.approval.list": async (options) => {
-      using authority = createApprovalRequestAuthority(options);
+      using authority = await createApprovalRequestAuthority(options);
       const { respond, client, context } = options;
       const approvals = await listVisiblePendingApprovalRequests({
         authority,
@@ -469,7 +469,7 @@ export function createExecApprovalHandlers(
       });
     },
     "exec.approval.waitDecision": async (options) => {
-      using authority = createApprovalRequestAuthority(options);
+      using authority = await createApprovalRequestAuthority(options);
       const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
         authority,
@@ -540,7 +540,7 @@ export function createExecApprovalHandlers(
       respond(true, { outcome: result.outcome }, undefined);
     },
     "exec.approval.resolve": async (options) => {
-      using authority = createApprovalRequestAuthority(options);
+      using authority = await createApprovalRequestAuthority(options);
       const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,

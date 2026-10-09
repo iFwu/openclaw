@@ -791,13 +791,13 @@ describe("createPluginApprovalHandlers", () => {
       const forceDeny = manager.forceDenyDetailed.bind(manager);
       vi.spyOn(manager, "forceDenyDetailed").mockImplementationOnce(async (...args) => {
         const result = await forceDeny(...args);
-        bumpGatewayAccessRevision();
+        opts.context.getRuntimeConfig = () => ({});
         return result;
       });
       await expect(invokeHandler(handlers, opts)).rejects.toMatchObject({
         details: {
           reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED",
-          failures: ["access_revision_changed"],
+          failures: ["context_changed"],
           phase: "snapshot",
         },
       });
@@ -805,13 +805,28 @@ describe("createPluginApprovalHandlers", () => {
       expect(manager.getLocalSnapshot(record.id)?.terminalReason).toBe("timeout");
     });
 
-    it.each(["gateway-revision", "profile-alias", "context-reader"] as const)(
-      "identifies %s after a recorded allow-once decision without releasing the waiter",
+    it.each([
+      "gateway-revision",
+      "profile-alias",
+      "context-reader",
+      "requester",
+      "cancelled",
+    ] as const)(
+      "rechecks only relevant %s authority after a recorded allow-once decision",
       async (change) => {
-        const failure = change === "context-reader" ? "context_changed" : "access_revision_changed";
+        const unrelated = change === "gateway-revision" || change === "profile-alias";
+        const failure = "context_changed";
         const handlers = createPluginApprovalHandlers(manager);
         const record = await registerApproval(manager);
-        const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
+        const cancellation = new AbortController();
+        const opts = createMockOptions(
+          "plugin.approval.waitDecision",
+          { id: record.id },
+          {
+            signal: cancellation.signal,
+            client: createClient({ scopes: ["operator.approvals"] }),
+          },
+        );
         const parked = createDeferred();
         const awaitDecision = manager.awaitDecision.bind(manager);
         const spy = vi.spyOn(manager, "awaitDecision").mockImplementation((id) => {
@@ -820,32 +835,53 @@ describe("createPluginApprovalHandlers", () => {
           return decision;
         });
         const waiting = invokeHandler(handlers, opts);
-        const rejected = expect(waiting).rejects.toMatchObject({
-          details: {
-            reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED",
-            failures: [failure],
-            phase: "post-decision",
-            approvalId: record.id,
-          },
-        });
+        const rejected = unrelated
+          ? undefined
+          : change === "cancelled"
+            ? expect(waiting).rejects.toMatchObject({ name: "AbortError" })
+            : change === "requester"
+              ? expect(waiting).rejects.toThrow("Gateway requester authority changed")
+              : expect(waiting).rejects.toMatchObject({
+                  details: {
+                    reason: "APPROVAL_REQUESTER_AUTHORITY_CHANGED",
+                    failures: [failure],
+                    phase: "post-decision",
+                    approvalId: record.id,
+                  },
+                });
         try {
           await parked.promise;
           if (change === "gateway-revision") {
             bumpGatewayAccessRevision({ source: "session-change", subject: "synthetic-session" });
           } else if (change === "profile-alias") {
             publishUserProfileAliasChange();
-          } else {
+          } else if (change === "context-reader") {
             opts.context.getRuntimeConfig = () => ({});
+          } else if (change === "requester") {
+            expectDefined(opts.client, "approval requester").invalidated = true;
+          } else {
+            cancellation.abort();
           }
           expect(await manager.resolve(record.id, "allow-once")).toBe(true);
-          await rejected;
-          expect(opts.respond).not.toHaveBeenCalled();
-          expect(opts.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`"failures":["${failure}"]`),
-          );
-          expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
-            expect.stringContaining(`"approvalId":"${record.id}"`),
-          );
+          if (unrelated) {
+            await waiting;
+            expect(expectResponseOk(opts.respond)).toMatchObject({
+              id: record.id,
+              decision: "allow-once",
+            });
+            expect(opts.context.logGateway.warn).not.toHaveBeenCalled();
+          } else {
+            await rejected;
+            expect(opts.respond).not.toHaveBeenCalled();
+            if (change === "context-reader") {
+              expect(opts.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
+                expect.stringContaining(`"failures":["${failure}"]`),
+              );
+              expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
+                expect.stringContaining(`"approvalId":"${record.id}"`),
+              );
+            }
+          }
           expect((await manager.getSnapshot(record.id))?.decision).toBe("allow-once");
         } finally {
           spy.mockRestore();

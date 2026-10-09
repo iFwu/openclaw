@@ -78,6 +78,7 @@ it.each([
   const revoke = ![
     "current",
     "native",
+    "access",
     "config-equivalent",
     "config-unrelated",
     "config-other-identity",
@@ -190,7 +191,10 @@ it.each([
                 case "verdict-source":
                   break;
                 case "access":
-                  bumpGatewayAccessRevision();
+                  bumpGatewayAccessRevision({
+                    source: "session-change",
+                    subject: "agent:main:unrelated",
+                  });
                   break;
                 case "transport-reviewer":
                 case "reviewer":
@@ -295,7 +299,13 @@ it.each([
       } else {
         expect(client.connectionSignal.aborted).toBe(true);
       }
-      expect(lookup).toHaveBeenCalledOnce();
+      const revokedBeforeLookup =
+        native &&
+        ["native-refused", "native-config-role-aba", "native-config-routing-aba"].includes(
+          revocation,
+        );
+      // Identity preparation yields before the lookup; an already-revoked native request stops earlier.
+      expect(lookup).toHaveBeenCalledTimes(revokedBeforeLookup ? 0 : 1);
       if (revoke) {
         const stored = getOperatorApproval({ id: record.id, databaseOptions });
         expect({

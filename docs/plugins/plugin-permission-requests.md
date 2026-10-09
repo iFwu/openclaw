@@ -304,10 +304,15 @@ The tool remains blocked; this does not mean the prompt was never delivered or
 that the Gateway disconnected. The failure includes the accepted approval ID.
 Gateway warnings identify the checkpoint (`snapshot`, `post-decision`, or
 `terminal-snapshot`) and the first failed condition, without exposing identity
-values or the command. When the access revision changed, debug logs identify the
-revision producer; session and profile subjects are hashed. Profile alias
-revisions are reported separately. These diagnostics do not relax authorization
-or automatically retry the action.
+values or the command. Unrelated session changes and profile-alias publications
+do not revoke an approval merely by advancing a Gateway-wide access revision.
+Cancellation, device and requester revocation, changes to the requester's assigned
+role, and relevant configuration changes still invalidate the request. A role
+revoke/restore does not revive the old request. Human requesters retain their exact
+canonical-profile selection authority across the wait; identityless requests do
+not acquire a profile dependency. Access revisions remain diagnostic context,
+with hashed subjects and separately reported profile-alias revisions, not an
+approval permission decision. Failures do not automatically retry the action.
 
 **`allow-always` appears but the next call prompts again.** The generic plugin
 approval flow does not automatically persist trust for arbitrary hooks. Persist

@@ -15,6 +15,7 @@ import {
   type ApprovalAuthorityCheckpoint,
   type ApprovalAuthorityFailure,
 } from "../../infra/approval-errors.js";
+import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { readGatewayAccessRevisionState } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -52,12 +53,13 @@ function captureApprovalConfigPolicy(config: OpenClawConfig) {
 }
 
 /** Retain the original invocation; copying options loses its request-owner binding. */
-export function createApprovalRequestAuthority(options: GatewayRequestHandlerOptions) {
+export async function createApprovalRequestAuthority(options: GatewayRequestHandlerOptions) {
   const authority = readGatewayRequestMutationAuthority(options);
   const { client } = options;
   const method = options.req.method;
   const profileId = client?.authenticatedUserProfile?.profileId;
   const userId = client?.authenticatedUserId;
+  const canonicalProfileId = client?.preparedSessionProfile?.profileId;
   const role = client?.connect.role;
   const deviceId = client?.connect.device?.id;
   const approvalRuntime = client?.internal?.approvalRuntime;
@@ -76,10 +78,30 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   const accessRevision = readGatewayAccessRevisionState();
   let checkpoint: ApprovalAuthorityCheckpoint = { phase: "authority-check" };
   let failureLogged = false;
+  const profileSelectionReference =
+    (!authority.expectedProfileBinding || !canonicalProfileId) &&
+    !client?.internal?.operatorRunAuthority
+      ? profileId
+      : undefined;
+  let profileSelection: Awaited<ReturnType<typeof prepareUserProfileSelectionAuthority>>;
+  let preparingRoleAssignments = profileSelectionReference ? new Set<string>() : undefined;
   let configRevoked = false;
+  let roleRevoked = false;
   let closed = false;
   const releaseConfig = onOperatorRolePolicyChanged((change) => {
-    if (change.kind !== "config" || change.context !== gatewayContext || configRevoked) {
+    if (change.kind === "assignment") {
+      preparingRoleAssignments?.add(change.profileId);
+      if (
+        [profileId, actorProfileId, canonicalProfileId, profileSelection?.profileId].includes(
+          change.profileId,
+        )
+      ) {
+        // An assigned-role transition retires this principal's old grant, including revoke/restore.
+        roleRevoked = true;
+      }
+      return;
+    }
+    if (change.context !== gatewayContext || configRevoked) {
       return;
     }
     try {
@@ -104,10 +126,10 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
           ? authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed
           : canReviewOperatorApproval(client);
     const currentRevision = readGatewayAccessRevisionState();
-    // Preserve the original rejection order and short-circuiting; diagnostics name the first failure.
+    // Global access revisions refresh discovery; only this request's authority can revoke approval.
     const failure: { reason: ApprovalAuthorityFailure; field?: string } | false | undefined =
       (closed && { reason: "authority_closed" }) ||
-      (!allowed && { reason: "scope_forbidden" }) ||
+      ((!allowed || roleRevoked) && { reason: "scope_forbidden" }) ||
       (client?.invalidated && { reason: "requester_invalidated" }) ||
       (client?.connect.role !== role && { reason: "identity_changed", field: "role" }) ||
       (client?.connect.device?.id !== deviceId && {
@@ -130,6 +152,15 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
         field: "profile",
       }) ||
       (client?.authenticatedUserId !== userId && { reason: "identity_changed", field: "user" }) ||
+      (client?.preparedSessionProfile?.profileId !== canonicalProfileId && {
+        reason: "identity_changed",
+        field: "canonicalProfile",
+      }) ||
+      (profileSelection &&
+        !profileSelection.isCurrent() && {
+          reason: "identity_changed",
+          field: "profileSelection",
+        }) ||
       (options.context.getRuntimeConfig !== readRuntimeConfig && {
         reason: "context_changed",
         field: "runtimeConfigReader",
@@ -146,11 +177,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
         reason: "context_changed",
         field: "gatewayContext",
       }) ||
-      (configRevoked && { reason: "config_policy_revoked" }) ||
-      (currentRevision.gateway + currentRevision.profileAlias !==
-        accessRevision.gateway + accessRevision.profileAlias && {
-        reason: "access_revision_changed",
-      });
+      (configRevoked && { reason: "config_policy_revoked" });
     if (failure) {
       const error = new ApprovalRequesterAuthorityChangedError(
         [failure.reason],
@@ -175,6 +202,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   };
   const assertCurrent = () => {
     authority.assertCurrent();
+    authority.assertOperatorCurrent?.();
     authority.expectedProfileBinding?.assertCurrent();
     assertPolicyCurrent();
   };
@@ -185,10 +213,32 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
         ? assertCurrent
         : () => {
             authority.assertWorkerCurrent();
+            authority.assertOperatorCurrent?.();
             authority.expectedProfileBinding?.assertCurrent();
             assertPolicyCurrent();
           },
   };
+  try {
+    if (profileSelectionReference) {
+      assertCurrent();
+      profileSelection = await prepareUserProfileSelectionAuthority(profileSelectionReference);
+      if (profileSelection && preparingRoleAssignments?.has(profileSelection.profileId)) {
+        roleRevoked = true;
+      }
+      preparingRoleAssignments = undefined;
+      assertCurrent();
+      if (
+        !profileSelection ||
+        (canonicalProfileId && profileSelection.profileId !== canonicalProfileId)
+      ) {
+        throw new Error("Gateway requester profile changed or is unavailable");
+      }
+    }
+  } catch (error) {
+    closed = true;
+    releaseConfig();
+    throw error;
+  }
   return {
     guard,
     setCheckpoint,
@@ -209,4 +259,4 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   };
 }
 
-export type ApprovalRequestAuthority = ReturnType<typeof createApprovalRequestAuthority>;
+export type ApprovalRequestAuthority = Awaited<ReturnType<typeof createApprovalRequestAuthority>>;
