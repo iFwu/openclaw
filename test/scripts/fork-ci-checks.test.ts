@@ -30,25 +30,25 @@ beforeEach(() => {
 });
 
 describe("fork canonical check dispatch", () => {
-  it("places every selected graph exactly once without serial production/test bundles", async () => {
+  it("keeps five core stripes and amortizes shorter graphs in canonical family rows", async () => {
     const plan = await createForkCiCheckPlan(detectChangedLanes(["pnpm-lock.yaml"]), range);
     const types = plan.include.filter((row) => row.kind === "types");
     const selected = types.flatMap((row) => row.graphs);
     expect(selected.toSorted()).toEqual(TSGO_CI_GRAPHS.map(({ name }) => name).toSorted());
     expect(new Set(selected).size).toBe(selected.length);
     expect(types.filter(({ id }) => id.startsWith("types-core-tests-"))).toHaveLength(5);
-    expect(
-      types
-        .filter(({ id }) => !id.startsWith("types-core-tests-"))
-        .every((row) => row.graphs.length === 1),
-    ).toBe(true);
-    expect(types.find(({ id }) => id === "types-test-root")?.graphs).toEqual(["test-root"]);
+    expect(types.filter(({ id }) => !id.startsWith("types-core-tests-"))).toEqual([
+      { id: "prod-types", kind: "types", graphs: ["core", "ui", "extensions"] },
+      { id: "test-types", kind: "types", graphs: ["extensions-test", "scripts", "test-root"] },
+    ]);
     const lint = plan.include.filter((row) => row.kind === "lint");
     expect(lint).toHaveLength(6);
-    expect(lint.flatMap((row) => row.selection.coreStripes).toSorted()).toEqual([1, 2, 3, 4, 5]);
-    expect(lint.flatMap((row) => row.selection.extensionStripes).toSorted()).toEqual([
-      1, 2, 3, 4, 5, 6,
+    expect(lint.flatMap((row) => row.selection.coreStripes).toSorted((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5,
     ]);
+    expect(lint.flatMap((row) => row.selection.extensionStripes).toSorted((a, b) => a - b)).toEqual(
+      [1, 2, 3, 4, 5, 6],
+    );
     expect(lint.filter((row) => row.selection.central)).toHaveLength(1);
     expect(plan.include.filter((row) => row.kind === "phase").map((row) => row.phase)).toEqual([
       "guards",
@@ -68,6 +68,20 @@ describe("fork canonical check dispatch", () => {
     const shard = expectDefined(types[0], "selected core-test shard");
     expect(shard.graphs).toEqual([graph.name]);
     expect(shard.id).toBe("types-core-tests-1");
+  });
+
+  it("bundles only selected shorter graphs without introducing their unselected siblings", async () => {
+    mocks.types.mockResolvedValue({
+      mode: "changed",
+      graphs: TSGO_CI_GRAPHS.filter(({ name }) => name === "scripts"),
+    });
+    const plan = await createForkCiCheckPlan(
+      detectChangedLanes(["scripts/ci-check-plan.mts"]),
+      range,
+    );
+    expect(plan.include.filter((row) => row.kind === "types")).toEqual([
+      { id: "test-types", kind: "types", graphs: ["scripts"] },
+    ]);
   });
 
   it("keeps docs-only and truly empty ranges free of compiler and full lint rows", async () => {
@@ -95,7 +109,7 @@ describe("fork canonical check dispatch", () => {
     expect(selection.extensionStripes).toEqual([]);
   });
 
-  it("places explicit task regressions in independent rows without inventing static work", async () => {
+  it("shares setup across explicit regressions without duplicates or invented static work", async () => {
     const testFile = "test/scripts/fork-ci-checks.test.ts";
     const plan = await createForkCiCheckPlan(detectChangedLanes([]), range, [
       testFile,
@@ -103,15 +117,18 @@ describe("fork canonical check dispatch", () => {
       "test/scripts/fork-ci-artifacts.test.ts",
     ]);
     expect(plan.include).toEqual([
-      { id: "regression-1", kind: "test", testFile },
-      { id: "regression-2", kind: "test", testFile: "test/scripts/fork-ci-artifacts.test.ts" },
+      {
+        id: "regressions",
+        kind: "test",
+        testFiles: [testFile, "test/scripts/fork-ci-artifacts.test.ts"],
+      },
     ]);
     expect(mocks.types).not.toHaveBeenCalled();
     mocks.command.mockResolvedValue(7);
     expect(await runForkCiCheckTask(detectChangedLanes([]), range, plan.include[0])).toBe(7);
     expect(mocks.command).toHaveBeenCalledWith({
       bin: process.execPath,
-      args: ["scripts/run-vitest.mjs", testFile],
+      args: ["scripts/run-vitest.mjs", testFile, "test/scripts/fork-ci-artifacts.test.ts"],
       env: {
         ...process.env,
         OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
@@ -128,9 +145,9 @@ describe("fork canonical check dispatch", () => {
       ).rejects.toThrow();
       await expect(
         runForkCiCheckTask(detectChangedLanes([]), range, {
-          id: "regression-1",
+          id: "regressions",
           kind: "test",
-          testFile,
+          testFiles: [testFile],
         }),
       ).rejects.toThrow();
       expect(mocks.command).not.toHaveBeenCalled();
@@ -155,9 +172,9 @@ describe("fork canonical check dispatch", () => {
   it("runs serial canonical graphs through their existing process owner and preserves failure", async () => {
     mocks.command.mockResolvedValue(2);
     const result = await runForkCiCheckTask(detectChangedLanes(["tsconfig.json"]), range, {
-      id: "types-test-root",
+      id: "test-types",
       kind: "types",
-      graphs: ["test-root"],
+      graphs: ["extensions-test", "scripts", "test-root"],
     });
     expect(result).toBe(2);
     expect(mocks.command).toHaveBeenCalledWith(
@@ -166,7 +183,7 @@ describe("fork canonical check dispatch", () => {
         args: [
           "scripts/run-tsgo-core-test-shards.mjs",
           "--ci-graphs-json",
-          '["test-root"]',
+          '["extensions-test","scripts","test-root"]',
           "--concurrency",
           "1",
         ],
@@ -211,6 +228,7 @@ describe("fork canonical check dispatch", () => {
     { id: "types", kind: "types", graphs: ["unknown"] },
     { id: "types", kind: "types", graphs: ["core", "core"] },
     { id: "types", kind: "types", graphs: [] },
+    { id: "regressions", kind: "test", testFiles: [] },
     { id: "shell", kind: "shell", command: "true" },
     { id: "phase", kind: "phase", phase: "guards-types" },
   ])("rejects invalid or broad injected task $id/$kind before execution", async (task) => {

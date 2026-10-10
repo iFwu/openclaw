@@ -72,7 +72,7 @@ describe("fork CI terminal check gate", () => {
     ["cancelled", "skipped", "false", false],
     ["skipped", "skipped", "", false],
     ["success", "success", "", false],
-  ])("requires admitted coverage: %s/%s/%s", (plan, checks, hasChecks, passes) => {
+  ])("requires admitted coverage: %s/%s/%s", (plan, checkResult, hasChecks, passes) => {
     expect(gate.needs).toEqual(["check-plan", "checks"]);
     expect(gate.if).toContain("always()");
     const step = gate.steps[0];
@@ -81,7 +81,7 @@ describe("fork CI terminal check gate", () => {
     }
     const result = spawnSync(resolveWorkflowBash(), ["--noprofile", "--norc", "-c", step.run], {
       encoding: "utf8",
-      env: { ...process.env, PLAN_RESULT: plan, CHECK_RESULT: checks, HAS_CHECKS: hasChecks },
+      env: { ...process.env, PLAN_RESULT: plan, CHECK_RESULT: checkResult, HAS_CHECKS: hasChecks },
     });
     expect(result.status === 0).toBe(passes);
   });

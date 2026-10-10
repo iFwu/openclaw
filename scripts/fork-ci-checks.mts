@@ -33,7 +33,13 @@ const regressionTestSchema = z
   .regex(/^(?:src|extensions|packages|test|ui)\/[A-Za-z0-9_./-]+\.test\.[cm]?[jt]sx?$/u)
   .refine((file) => !file.split("/").includes(".."), "Test paths must stay in the repository");
 const taskSchema = z.discriminatedUnion("kind", [
-  z.object({ id: z.string(), kind: z.literal("test"), testFile: regressionTestSchema }).strict(),
+  z
+    .object({
+      id: z.string(),
+      kind: z.literal("test"),
+      testFiles: z.array(regressionTestSchema).min(1).max(32),
+    })
+    .strict(),
   z
     .object({ id: z.string(), kind: z.literal("phase"), phase: z.enum(["guards", "audits"]) })
     .strict(),
@@ -52,11 +58,8 @@ export async function createForkCiCheckPlan(
   regressionTests: string[] = [],
 ) {
   const tests = z.array(regressionTestSchema).max(32).parse(regressionTests);
-  const regressionRows: ForkCiTask[] = [...new Set(tests)].map((testFile, index) => ({
-    id: `regression-${index + 1}`,
-    kind: "test",
-    testFile,
-  }));
+  const regressionRows: ForkCiTask[] =
+    tests.length > 0 ? [{ id: "regressions", kind: "test", testFiles: [...new Set(tests)] }] : [];
   if (result.paths.length === 0) {
     return { include: regressionRows };
   }
@@ -89,31 +92,21 @@ export async function createForkCiCheckPlan(
       tasks.push({ id: phase, kind: "phase", phase });
     }
   }
-  const addTypes = (id: string, encoded: string | undefined, split: boolean) => {
+  const addTypes = (id: string, encoded: string | undefined) => {
     const names = z.array(z.string()).parse(JSON.parse(encoded ?? "[]"));
     if (names.length === 0) {
       return;
     }
     resolveCiTsgoGraphs(names);
-    if (split) {
-      tasks.push(
-        ...names.map((name): ForkCiTask => ({
-          id: `types-${name}`,
-          kind: "types",
-          graphs: [name],
-        })),
-      );
-    } else {
-      tasks.push({ id, kind: "types", graphs: names });
-    }
+    tasks.push({ id, kind: "types", graphs: names });
   };
   for (const row of native.core_type_matrix.include) {
-    addTypes(`types-core-tests-${row.stripe}`, row.type_graph_names_json, false);
+    addTypes(`types-core-tests-${row.stripe}`, row.type_graph_names_json);
   }
-  // Start independent production graphs separately; none waits behind the core-test stripes.
+  // Shorter graphs share canonical family rows to amortize fresh-runner setup.
   for (const row of native.check_matrix.include) {
     if (row.task === "prod-types" || row.task === "test-types") {
-      addTypes(row.check_name, row.type_graph_names_json, true);
+      addTypes(row.check_name, row.type_graph_names_json);
       if (z.array(z.string()).parse(JSON.parse(row.core_type_graph_names_json ?? "[]")).length) {
         throw new Error("Hosted core-test graphs must use their canonical stripe owners");
       }
@@ -173,7 +166,7 @@ export async function runForkCiCheckTask(
   if (task.kind === "test") {
     return await runManagedCommand({
       bin: process.execPath,
-      args: ["scripts/run-vitest.mjs", task.testFile],
+      args: ["scripts/run-vitest.mjs", ...task.testFiles],
       env: {
         ...process.env,
         OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
@@ -240,7 +233,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       if (summary) {
         appendFileSync(
           summary,
-          `\n### Check plan (${matrix.include.length} rows)\n${matrix.include.map((row) => `- ${row.id}${row.kind === "types" ? `: ${row.graphs.join(", ")}` : row.kind === "test" ? `: ${row.testFile}` : ""}`).join("\n")}\n`,
+          `\n### Check plan (${matrix.include.length} rows)\n${matrix.include.map((row) => `- ${row.id}${row.kind === "types" ? `: ${row.graphs.join(", ")}` : row.kind === "test" ? `: ${row.testFiles.join(", ")}` : ""}`).join("\n")}\n`,
         );
       }
     } else if (process.argv[2] === "run") {

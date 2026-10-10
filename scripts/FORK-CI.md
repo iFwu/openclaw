@@ -50,9 +50,10 @@ Local and shared-host checks retain the existing `run-bounded.sh` policy.
 `check-changed` plan, then materializes the existing `createCiCheckPlan` selectors:
 
 - Compiler membership and boundary validation belong to the canonical planner.
-  Selected core-test graphs retain their five stripe owners; production and
-  remaining test graphs get independent rows. `test-root` remains one row whose
-  existing runner serially executes its four memory-bounded partitions.
+  Selected core-test graphs retain their five stripe owners. Shorter graphs share
+  the canonical `prod-types` and `test-types` rows to amortize runner setup; only
+  selected graphs enter each row. Within `test-types`, the existing runner still
+  serially executes all four memory-bounded `test-root` partitions.
 - Lint uses the existing consumer closure and GitHub stripe layout: up to five
   combined core/extension rows, plus a central row for the sixth extension stripe,
   scripts, formatting, changed root tests, and other selected lint checks. A broad
@@ -96,10 +97,11 @@ Publishing a candidate is not accepting or deploying it: all required checks mus
 still pass at the final join.
 
 Manual dispatch accepts `regression_tests`, a JSON array of up to 32 explicitly
-selected, tracked repository test files. Each unique file runs through the native
-`run-vitest.mjs` entrypoint in its own row of the same eight-runner matrix; failures
-block `check-gate` just like static-check failures. The default empty array adds
-no tests. Test targets are data, never shell commands, and must exist at the exact
+selected, tracked repository test files. Unique files share one `regressions` row
+of the same eight-runner matrix and run through the native `run-vitest.mjs`
+entrypoint with one worker/project at a time, avoiding per-file runner setup.
+Failures block `check-gate` just like static-check failures. The default empty
+array adds no tests. Test targets are data, never shell commands, and must exist at the exact
 head. Use this to move task-specific regression acceptance off a contended local
 host without broadening to the complete functional suite. For example:
 
