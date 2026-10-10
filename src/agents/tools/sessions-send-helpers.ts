@@ -2,7 +2,10 @@ import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
-import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
+import {
+  resolveSessionConversationRef,
+  resolveSessionThreadInfo,
+} from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 
@@ -61,4 +64,24 @@ export function resolveSessionDeliveryTargetFromKey(
     to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
     threadId: parsed.threadId,
   };
+}
+
+/** Keep existing private-topic task contexts addressable without changing send authority. */
+export function resolveSessionsSendThreadTargetError(
+  sessionKey: string,
+  missing = false,
+): string | undefined {
+  if (!resolveSessionThreadInfo(sessionKey).threadId) {
+    return undefined;
+  }
+  const route = parseSessionDeliveryRoute(sessionKey);
+  if (
+    !missing &&
+    route?.channel === "telegram" &&
+    (route.peerKind === "direct" || route.peerKind === "dm") &&
+    route.threadId
+  ) {
+    return undefined;
+  }
+  return "sessions_send cannot target a thread session of this channel for inter-agent coordination. Keep the exact target; do not substitute its parent session.";
 }
