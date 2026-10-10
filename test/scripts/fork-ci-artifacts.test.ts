@@ -23,12 +23,17 @@ type Job = {
   "continue-on-error"?: boolean;
 };
 const workflow = parse(readFileSync(".github/workflows/fork-ci-artifacts.yml", "utf8")) as {
+  concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: { "check-plan": Job; checks: Job; "check-gate": Job; build: Job; "verify-download": Job };
 };
 const checks = workflow.jobs.checks;
 const planner = workflow.jobs["check-plan"];
 
 it("plans independently of build and dispatches canonical rows on isolated runners", () => {
+  expect(workflow.concurrency).toEqual({
+    group: "fork-ci-artifacts-${{ github.ref }}-${{ github.sha }}",
+    "cancel-in-progress": false,
+  });
   for (const job of [planner, workflow.jobs.build]) {
     expect(job.needs ?? []).toHaveLength(0);
   }

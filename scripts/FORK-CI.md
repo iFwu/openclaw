@@ -111,10 +111,16 @@ gh workflow run fork-ci-artifacts.yml --ref ifwu-fork \
   -f regression_tests='["test/scripts/fork-ci-checks.test.ts","test/scripts/fork-ci-artifacts.test.ts"]'
 ```
 
-Independent candidate branches can be dispatched at their own refs; workflow
-concurrency is per ref, not a global repository queue. GitHub account runner
-capacity still limits actual overlap. Platform-specific or genuinely local
-boundary proofs remain on their required hosts and can overlap the cloud jobs.
+Workflow concurrency is keyed by ref and immutable SHA. A corrected commit may
+start while the previous commit continues collecting results; another dispatch
+of the same ref/SHA waits instead of duplicating its runner load. Fail-fast and
+cancellation remain disabled. The eight-runner check budget applies to each run,
+not across runs, and GitHub account capacity still limits actual overlap. Keep
+repair iterations to at most two active candidate runs rather than accumulating
+full matrices. Watch completed job failures before the whole run finishes, and
+start a replacement only after an actual reviewed correction. An older run's
+successes do not replace the final candidate's required gate. Platform-specific
+or genuinely local boundary proofs remain on their required hosts.
 Keep any active validation checkout unchanged until its commands finish. Reuse
 completed evidence only when its source, configuration, toolchain, and dependency
 inputs remain valid. A new commit invalidates affected evidence, not unrelated

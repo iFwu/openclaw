@@ -22,6 +22,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
@@ -256,41 +257,55 @@ describe("opt-in CI lint full fallback", () => {
     ).toEqual(await createChangedCiLintPlan(changed, { runnerProfile: "github" }));
   });
 
-  it("executes full selections with empty files without repeating the lint umbrella", async () => {
-    const { result, selections, commands } = await fullPlan([".oxlintrc.json"]);
-    const env = { ...process.env, CI: "", GITHUB_ACTIONS: "" };
-    for (const lintSelection of selections) {
+  it.each([
+    { ci: "", pnpmBin: "pnpm" },
+    { ci: "true", pnpmBin: "corepack" },
+  ])(
+    "executes full selections with empty files through $pnpmBin without repeating the lint umbrella",
+    async ({ ci, pnpmBin }) => {
+      // Commands without their own env use ambient CI flags in createPnpmManagedCommand.
+      vi.stubEnv("CI", ci);
+      vi.stubEnv("GITHUB_ACTIONS", ci);
+      const { result, selections, commands } = await fullPlan([".oxlintrc.json"]);
+      const env = { ...process.env };
+      for (const lintSelection of selections) {
+        expect(
+          await runChangedCheck(result, { lintOnly: true, lintSelection, lintThreads: 1, env }),
+        ).toBe(0);
+      }
       expect(
-        await runChangedCheck(result, { lintOnly: true, lintSelection, lintThreads: 1, env }),
+        vi.mocked(runManagedCommand).mock.calls.map(([{ bin, args }]) => ({ bin, args })),
+      ).toEqual(
+        commands.map(({ bin, args }) => ({
+          bin: bin ?? pnpmBin,
+          args: bin || pnpmBin === "pnpm" ? args : ["pnpm", ...args],
+        })),
+      );
+      vi.mocked(runManagedCommand).mockClear();
+      const empty = detectChangedLanes([]);
+      const lintSelection = {
+        files: [],
+        fullScope: true,
+        coreStripes: [1],
+        extensionStripes: [],
+        groups: [],
+        central: false,
+      } satisfies (typeof selections)[number];
+      expect(
+        await runChangedCheck(empty, { lintOnly: true, lintSelection, lintThreads: 1, env }),
       ).toBe(0);
-    }
-    expect(vi.mocked(runManagedCommand).mock.calls.map(([command]) => command.args)).toEqual(
-      commands.map(({ args }) => args),
-    );
-    vi.mocked(runManagedCommand).mockClear();
-    const empty = detectChangedLanes([]);
-    const lintSelection = {
-      files: [],
-      fullScope: true,
-      coreStripes: [1],
-      extensionStripes: [],
-      groups: [],
-      central: false,
-    } satisfies (typeof selections)[number];
-    expect(
-      await runChangedCheck(empty, { lintOnly: true, lintSelection, lintThreads: 1, env }),
-    ).toBe(0);
-    expect(runManagedCommand).toHaveBeenCalledOnce();
-    vi.mocked(runManagedCommand).mockClear();
-    expect(await runChangedCheck(empty, { lintOnly: true })).toBe(0);
-    expect(runManagedCommand).not.toHaveBeenCalled();
-    expect(
-      createChangedCheckPlan(result, {
-        lintOnly: true,
-        lintSelection: { ...lintSelection, fullScope: false },
-      }).commands,
-    ).toEqual([]);
-  });
+      expect(runManagedCommand).toHaveBeenCalledOnce();
+      vi.mocked(runManagedCommand).mockClear();
+      expect(await runChangedCheck(empty, { lintOnly: true })).toBe(0);
+      expect(runManagedCommand).not.toHaveBeenCalled();
+      expect(
+        createChangedCheckPlan(result, {
+          lintOnly: true,
+          lintSelection: { ...lintSelection, fullScope: false },
+        }).commands,
+      ).toEqual([]);
+    },
+  );
 
   it("passes the explicit fallback option through check planning", async () => {
     const input = {

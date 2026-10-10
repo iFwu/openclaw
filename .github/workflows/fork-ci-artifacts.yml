@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: fork-ci-artifacts-${{ github.ref }}
+  group: fork-ci-artifacts-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
