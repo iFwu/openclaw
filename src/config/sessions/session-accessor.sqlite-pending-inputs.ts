@@ -28,7 +28,7 @@ import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pendin
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-message-read.js";
 import type { CapturedSessionEntryReadSource } from "./session-accessor.types.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";

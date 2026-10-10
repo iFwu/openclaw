@@ -28,13 +28,15 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import {
+  readTranscriptMessageByEventId,
+  readTranscriptMessageByScopedIdempotencyKey,
+} from "./session-accessor.sqlite-transcript-message-read.js";
+import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
 } from "./session-accessor.sqlite-transcript-parent.js";
 import {
   appendTranscriptEventInTransaction,
-  readTranscriptMessageByEventId,
-  readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
