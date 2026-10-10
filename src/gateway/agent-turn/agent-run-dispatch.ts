@@ -26,6 +26,7 @@ import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import type { UserTurnProcessingCompletion } from "../../sessions/user-turn-transcript.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -254,7 +255,7 @@ export function dispatchAgentRunFromGateway(params: {
         timeoutPhase,
         providerStarted: result?.meta?.providerStarted,
       });
-      let recordedInputCompletion: AgentRunTerminalOutcome | undefined;
+      let recordedInputCompletion: UserTurnProcessingCompletion | undefined;
       try {
         recordedInputCompletion =
           params.ingressOpts.userTurnTranscriptRecorder?.completeProcessing?.(terminalOutcome);
@@ -292,6 +293,7 @@ export function dispatchAgentRunFromGateway(params: {
           ? { providerStarted: terminalOutcome.providerStarted }
           : {}),
         result,
+        ...(recordedInputCompletion?.inputConsumed ? { inputConsumed: true } : {}),
       };
       const inputProcessingCompleted =
         recordedInputCompletion?.reason === "completed" && responseStatus === "ok";
@@ -354,11 +356,11 @@ export function dispatchAgentRunFromGateway(params: {
       const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted
-        ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
+        ? resolveGatewayAgentAbortStopReason(params.abortController.signal, cause)
         : isAbortError(cause)
           ? "aborted"
           : undefined;
-      let terminalOutcome = buildAgentRunTerminalOutcome({
+      let terminalOutcome: UserTurnProcessingCompletion = buildAgentRunTerminalOutcome({
         status: aborted || isTimeoutError(cause) ? "timeout" : "error",
         error: renderedErr,
         stopReason,
@@ -386,6 +388,7 @@ export function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         status: responseStatus,
         summary: aborted ? "aborted" : renderedErr,
+        ...(terminalOutcome.inputConsumed ? { inputConsumed: true } : {}),
         ...(aborted
           ? {
               stopReason,

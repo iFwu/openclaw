@@ -1,10 +1,30 @@
 // Completion predicates read recorded facts, not rendered placeholder wording.
 import { describe, expect, it, vi } from "vitest";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
-import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
+import {
+  resolvePrivateCompletionDeliveryResult,
+  runAnnounceAgentCall,
+} from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
+
+it.each([false, true])(
+  "requires consumption proof to close superseded private delivery (%s)",
+  (inputConsumed) => {
+    const result = resolvePrivateCompletionDeliveryResult({
+      status: "timeout",
+      stopReason: "superseded",
+      ...(inputConsumed ? { inputConsumed: true } : {}),
+    });
+    expect(result).toMatchObject({
+      delivered: false,
+      disposition: inputConsumed ? "intentional_non_delivery" : "retryable",
+    });
+    expect(result.terminal).toBe(inputConsumed ? true : undefined);
+    expect(result).not.toHaveProperty("requesterVisibleFinalDelivered");
+  },
+);
 
 it("does not dispatch a private handoff after its caller has already cancelled", async () => {
   const caller = new AbortController();

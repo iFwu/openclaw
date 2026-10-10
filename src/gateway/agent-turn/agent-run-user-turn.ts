@@ -87,6 +87,7 @@ export function reconcileAgentRunUserTurnCompletion(
           summary: completion.reason,
           ...(completion.stopReason ? { stopReason: completion.stopReason } : {}),
           ...(completion.reason === "completed" ? { inputProcessingCompleted: true } : {}),
+          ...(completion.inputConsumed ? { inputConsumed: true } : {}),
         },
         undefined,
       ],

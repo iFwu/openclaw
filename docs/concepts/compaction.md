@@ -40,6 +40,8 @@ Auto-compaction is on by default. It runs when the session nears the context lim
 
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling.
 
+A background exec process does not have to finish before mid-turn compaction. Once the tool call has returned its process handle and its result is recorded, the runtime can compact and continue without restarting the process. The continuation retains those handles and asks the agent to inspect their current state and results; refreshed runtime context shows which processes are still running. Unrecorded tool results and asynchronous work without a reconnectable exec handle keep their existing recovery restrictions.
+
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
 Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.

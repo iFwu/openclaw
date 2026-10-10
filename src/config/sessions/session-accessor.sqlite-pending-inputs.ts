@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
-import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -13,7 +12,10 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnProcessingCompletion,
+} from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -26,6 +28,7 @@ import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pendin
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import type { CapturedSessionEntryReadSource } from "./session-accessor.types.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -284,9 +287,10 @@ export function parseSessionPendingInputMessage(messageJson: string): PersistedU
   return value as PersistedUserTurnMessage;
 }
 
-export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
+export function isFinalInputCompletion(outcome: UserTurnProcessingCompletion): boolean {
   return (
     outcome.reason === "completed" ||
+    (outcome.reason === "superseded" && outcome.inputConsumed === true) ||
     (outcome.reason === "cancelled" && outcome.stopReason !== "restart")
   );
 }
@@ -312,24 +316,35 @@ export function readSessionInputCompletion(
     return undefined;
   }
   // SAFETY: only writeSessionInputCompletion writes this feature-owned table with typed terminal outcomes.
-  const outcome = JSON.parse(row.outcome_json) as AgentRunTerminalOutcome;
+  const outcome = JSON.parse(row.outcome_json) as UserTurnProcessingCompletion;
   return { ...row, outcome };
 }
 
 /** The caller holds the write transaction and has revalidated the exact live admission owner. */
 export function writeSessionInputCompletion(
   database: PendingInputDatabase,
-  scope: SessionInputCompletionScope & {
-    runId: string;
-    requestHash: string;
-    lifecycleGeneration: string;
-  },
-  outcome: AgentRunTerminalOutcome,
-): AgentRunTerminalOutcome {
+  scope: ResolvedTranscriptScope &
+    SessionInputCompletionScope & {
+      runId: string;
+      requestHash: string;
+      lifecycleGeneration: string;
+    },
+  incoming: UserTurnProcessingCompletion,
+): UserTurnProcessingCompletion {
   const retained = readSessionInputCompletion(database, scope);
   if (retained && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
+  // Only committed keyed input can discharge a superseded continuation. A
+  // replay receipt may still say queued, and callers cannot assert this fact.
+  const outcome: UserTurnProcessingCompletion = {
+    ...incoming,
+    inputConsumed:
+      incoming.reason === "superseded" &&
+      readTranscriptMessageByScopedIdempotencyKey(database, scope, scope.idempotencyKey, "scan")
+        ? true
+        : undefined,
+  };
   const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   executeSqliteQuerySync(
     database.db,

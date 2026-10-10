@@ -52,6 +52,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
   activeCount?: number;
   asyncStarted?: boolean;
   asyncSettled?: boolean;
+  asyncExecRecorded?: boolean;
   resultRecorded?: boolean;
   codeModeEngaged?: boolean;
   codeModeSuspended?: boolean;
@@ -79,8 +80,14 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
         toolCallId: "call-exec",
         replaySafe: false,
         asyncStarted: params?.asyncStarted ?? false,
-        ...(params?.asyncSettled
-          ? { asyncExec: { sessionId: "process-one", startedAt: 1, settled: true as const } }
+        ...(params?.asyncSettled || params?.asyncExecRecorded
+          ? {
+              asyncExec: {
+                sessionId: "process-one",
+                startedAt: 1,
+                ...(params?.asyncSettled ? { settled: true as const } : {}),
+              },
+            }
           : {}),
         ...(params?.codeModeSuspended ? { codeModeSuspended: true } : {}),
       },
@@ -284,8 +291,9 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   });
 
   it.each([
-    ["foreground exec", {}],
+    ["foreground exec", { asyncStarted: false }],
     ["completed background exec", { asyncStarted: true, asyncSettled: true }],
+    ["running background exec", { asyncStarted: true, asyncExecRecorded: true }],
   ])(
     "compacts settled replay-unsafe %s and continues from its recorded result",
     async (_label, params) => {
@@ -308,9 +316,69 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       expect(mockedCompactDirect).toHaveBeenCalledOnce();
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expectRetryContinuesFromTranscript();
+      if (params.asyncStarted) {
+        expect(requireAttemptCall(1).prompt).toContain("process-one");
+        expect(requireAttemptCall(1).prompt).toContain("Do not start replacement processes");
+      }
       expect(result.meta.error).toBeUndefined();
     },
   );
+
+  it("keeps background handles across a subsequent transcript retry", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({ asyncStarted: true, asyncExecRecorded: true }),
+      )
+      .mockResolvedValueOnce(
+        session.makeAttemptResult({
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            source: "mid-turn",
+            handled: true,
+            truncatedCount: 0,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(session.makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "Inspect the existing background process" }),
+    );
+
+    const result = await runEmbeddedAgent(session.runParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    for (const index of [1, 2]) {
+      expect(requireAttemptCall(index).prompt).toContain("process-one");
+      expect(requireAttemptCall(index).suppressNextUserMessagePersistence).toBe(true);
+    }
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("compacts after observing an existing background process without replaying its poll", async () => {
+    const attempt = makeReplayUnsafeMidTurnOverflow();
+    attempt.toolMetas.unshift({
+      toolName: "process",
+      toolCallId: "earlier-poll",
+      replaySafe: false,
+      asyncStarted: true,
+      asyncExec: { sessionId: "existing-watcher", startedAt: 1 },
+    });
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(attempt)
+      .mockResolvedValueOnce(session.makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "Continue observing the existing watcher" }),
+    );
+
+    const result = await runEmbeddedAgent(session.runParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(requireAttemptCall(1).prompt).toContain("existing-watcher");
+    expect(result.meta.error).toBeUndefined();
+  });
 
   it("compacts while a code-mode exec still waits on nested tool work", async () => {
     // exec returned status "waiting" (result persisted) but its nested call keeps

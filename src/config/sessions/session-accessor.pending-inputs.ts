@@ -81,8 +81,8 @@ export type SessionPendingInputReceipt = {
   message: PersistedUserTurnMessage;
   run: <T>(operation: () => T) => T;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
-  completion?: AgentRunTerminalOutcome;
-  complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;
+  completion?: ReturnType<typeof writeSessionInputCompletion>;
+  complete?: (outcome: AgentRunTerminalOutcome) => ReturnType<typeof writeSessionInputCompletion>;
 };
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 

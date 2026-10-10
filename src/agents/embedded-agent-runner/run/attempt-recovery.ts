@@ -192,13 +192,14 @@ export async function recoverEmbeddedRunAttempt(input: {
   // code-mode run registry and resumes through `wait`, exactly as across turns.
   const midTurnBatchSettled =
     settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
+  // A returned background exec is owned by the process registry, not this
+  // attempt. Its recorded handle survives transcript compaction; unknown
+  // asynchronous work still cannot be resumed through the process tool.
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
     midTurnBatchSettled &&
-    !attempt.toolMetas.some(
-      (entry) => entry.asyncStarted === true && entry.asyncExec?.settled !== true,
-    );
+    !attempt.toolMetas.some((entry) => entry.asyncStarted === true && !entry.asyncExec);
   // A provider can reject the next prompt after writes have settled. Compact
   // their recorded results under this owner without replaying the original task.
   const canRecoverSettledToolResults =
@@ -482,7 +483,12 @@ export async function recoverEmbeddedRunAttempt(input: {
       ? { message: assistantOverflowCandidate, classification: assistantOverflowClassification }
       : undefined,
     attemptCompactionCount,
-    prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
+    prepareCurrentTranscriptRetry: () =>
+      sessionPromptState.continueFromCurrentTranscript({
+        backgroundExecSessionIds: attempt.toolMetas.flatMap((entry) =>
+          entry.asyncExec ? [entry.asyncExec.sessionId] : [],
+        ),
+      }),
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
   });
   if (overflowRecovery.action === "retry") {

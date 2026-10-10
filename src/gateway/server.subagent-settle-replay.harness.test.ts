@@ -8,6 +8,7 @@ import type { AgentCommandOpts } from "../agents/command/types.js";
 import type { AgentDeliveryEvidence } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
+import { createAgentRunSupersededAbortError } from "../agents/run-termination.js";
 import * as announceDeliveryRuntime from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import { settleRequesterCompletionBatch } from "../agents/subagents/completion/subagent-completion-admission.store.js";
@@ -27,7 +28,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -137,11 +141,14 @@ describe("public yielded settle replay with real Gateway admission", () => {
     },
   });
 
-  function wake(settledEntry = child) {
+  function wake(settledEntry = child, deferBatchCommit = false) {
     const completeBatch = vi.fn<
       Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
     >(async (batch, _generation, outcome, onCommitted) => {
       expect(outcome).toBeDefined();
+      if (deferBatchCommit) {
+        return;
+      }
       await settleRequesterCompletionBatch({
         entries: batch.map((subagent) => ({ subagent })),
         outcome: outcome!,
@@ -269,6 +276,96 @@ describe("public yielded settle replay with real Gateway admission", () => {
         release.resolve();
         await terminal;
       }
+    },
+  );
+
+  it.each([false, true])(
+    "reconciles superseded private completion after newer input (consumed=%s)",
+    async (consumed) => {
+      child.completionTarget = "parent";
+      child.completionRequesterSessionId = requesterSessionId;
+      persistChild();
+      const scope = {
+        agentId: "main",
+        sessionId: requesterSessionId,
+        sessionKey: requesterSessionKey,
+        storePath: testState.sessionStorePath!,
+      };
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        if (consumed) {
+          await command.userTurnTranscriptRecorder!.persistApproved();
+        }
+        command.onExecutionStarted?.();
+        await appendTranscriptMessage(scope, {
+          cwd: process.env.OPENCLAW_STATE_DIR!,
+          message: {
+            role: "user",
+            content: "Continue the task and include the verification link.",
+            idempotencyKey: "newer-user-input",
+            timestamp: Date.now(),
+          },
+        });
+        throw createAgentRunSupersededAbortError();
+      });
+
+      // Keep the dispatching batch until the durable input receipt is replayed.
+      const completion = wake(child, consumed);
+      expect(await completion.result).toBe(false);
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      if (consumed) {
+        expect(completion.completeBatch).toHaveBeenCalledOnce();
+        expect(completion.completeBatch.mock.calls[0]?.[2]).toMatchObject({
+          delivered: false,
+          disposition: "intentional_non_delivery",
+        });
+        expect(
+          loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake,
+        ).toMatchObject({
+          status: "dispatching",
+        });
+        kernel.gatewayRequestContext.dedupe.clear();
+        await closeOpenClawAgentDatabasesAsync();
+        const dispatch = vi.spyOn(announceDeliveryRuntime, "dispatchSubagentAnnounceAgent");
+        try {
+          const replay = wake();
+          expect(await replay.result).toBe(false);
+          expect(dispatch).toHaveBeenCalledOnce();
+          expect(await dispatch.mock.results[0]!.value).toMatchObject({
+            stopReason: "superseded",
+            inputConsumed: true,
+          });
+          expect(replay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
+            delivered: false,
+            disposition: "intentional_non_delivery",
+          });
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(
+            loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake,
+          ).toBeUndefined();
+        } finally {
+          dispatch.mockRestore();
+        }
+      } else {
+        expect(completion.completeBatch).not.toHaveBeenCalled();
+        const retryAt = child.requesterSettleWake?.nextAttemptAt;
+        expect(retryAt).toBeGreaterThan(Date.now());
+        agentCommandMock.mockImplementationOnce(async (input) => {
+          await (input as AgentCommandOpts).userTurnTranscriptRecorder!.persistApproved();
+          return finalResult();
+        });
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          vi.setSystemTime(retryAt! + 1);
+          expect(await wake().result).toBe(true);
+          expect(agentCommandMock).toHaveBeenCalledTimes(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+      const transcript = JSON.stringify(loadTranscriptEventsSync(scope));
+      expect(transcript).toContain("isolated child result");
+      expect(transcript).toContain("newer-user-input");
     },
   );
 

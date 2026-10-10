@@ -210,7 +210,10 @@ export function resolvePrivateCompletionDeliveryResult(
   origin?: DeliveryContext,
 ): SubagentAnnounceDeliveryResult {
   const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
-  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
+  if (
+    (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") ||
+    (outcome?.reason === "superseded" && response?.inputConsumed === true)
+  ) {
     return {
       delivered: false,
       path: "direct",
