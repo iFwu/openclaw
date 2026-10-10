@@ -122,7 +122,7 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
         stopReason: extractToolCallsFromAssistant(message).length > 0 ? "toolUse" : "stop",
       };
     },
-    async settle(failed: boolean): Promise<void> {
+    async settle(failed: boolean, terminalError?: unknown): Promise<void> {
       if (!failed) {
         clear();
         return;
@@ -133,27 +133,39 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
         return;
       }
       const { message, target, assertActive } = failure;
-      await withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: target,
-          assertCommitAllowed: assertActive,
-          withTranscriptWrite: async (operation) => await operation(),
-        },
-        async () => {
-          assertActive();
-          const result = await appendExactAssistantMessageToSessionTranscript({
-            ...target,
-            expectedSessionId: target.sessionId,
-            message,
-            runId: params.runId,
-            idempotencyKey: terminalErrorIdempotencyKey(params.runId, message),
-            config: params.config,
-          });
-          if (!result.ok) {
-            throw new Error(`Failed to persist terminal assistant error: ${result.reason}`);
-          }
-        },
-      );
+      try {
+        await withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: target,
+            assertCommitAllowed: assertActive,
+            withTranscriptWrite: async (operation) => await operation(),
+          },
+          async () => {
+            assertActive();
+            const result = await appendExactAssistantMessageToSessionTranscript({
+              ...target,
+              expectedSessionId: target.sessionId,
+              message,
+              runId: params.runId,
+              idempotencyKey: terminalErrorIdempotencyKey(params.runId, message),
+              config: params.config,
+            });
+            if (!result.ok) {
+              throw new Error(`Failed to persist terminal assistant error: ${result.reason}`);
+            }
+          },
+        );
+      } catch (persistenceError) {
+        if (terminalError === undefined) {
+          throw persistenceError;
+        }
+        // eslint-disable-next-line preserve-caught-error -- The run cause owns retryability; persistence remains in errors.
+        throw new AggregateError(
+          [terminalError, persistenceError],
+          "Agent run failed and terminal assistant error persistence failed",
+          { cause: terminalError },
+        );
+      }
     },
   };
 }

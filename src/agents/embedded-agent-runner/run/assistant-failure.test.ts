@@ -251,6 +251,56 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each([
+    "Session transcript keyed user is outside the current turn: old-input",
+    "Pending input is no longer active in its admitted transcript",
+  ])("does not retry a local transcript admission failure (%s)", async (errorMessage) => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage,
+      content: [],
+    });
+    const fixture = makeTerminalStreamFailureInput({ assistant, profileAvailable: false });
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      message: errorMessage,
+    });
+  });
+
+  it.each([
+    "Session transcript keyed user is outside the current turn: old-input",
+    "Pending input is no longer active in its admitted transcript",
+  ])(
+    "does not switch models after a local transcript admission failure (%s)",
+    async (errorMessage) => {
+      const calls: string[] = [];
+      const cfg = createModelFallbackConfig("anthropic/mock-1", ["groq/mock-2", "groq/mock-3"]);
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "mock-1",
+        sessionId: "local-transcript-admission",
+        skipAuthProfileRuntime: true,
+        run: async (provider, model) => {
+          calls.push(`${provider}/${model}`);
+          const assistant = buildEmbeddedRunnerAssistant({
+            provider,
+            model,
+            stopReason: "error",
+            errorMessage,
+            content: [],
+          });
+          const fixture = makeTerminalStreamFailureInput({ assistant, profileAvailable: false });
+          fixture.input.emptyErrorRetries = 3;
+          return handleEmbeddedAssistantFailure(fixture.input);
+        },
+      }).catch((error: unknown) => error);
+      expect(calls).toHaveLength(1);
+      expect(result).toMatchObject({ message: errorMessage });
+    },
+  );
+
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.attemptAssistant = buildEmbeddedRunnerAssistant({

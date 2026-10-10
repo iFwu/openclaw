@@ -10,6 +10,7 @@ import {
   turn,
   unusedEnvironments,
 } from "../gateway/worker-environments/worker-turn-launcher.test-support.js";
+import { withBeforeAgentReplyObserver } from "../plugins/before-agent-reply.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -126,15 +127,27 @@ describe("independent placement caller scope", () => {
         await fromParent(async () => {
           const execute = async () => {
             await expect(
-              withSessionPlacementTurnAdmission(
+              withBeforeAgentReplyObserver(
                 {
-                  sessionId: SESSION_ID,
-                  sessionKey: SESSION_KEY,
-                  agentId: "main",
                   runId: input.runId,
+                  beforeExecution: async () => {
+                    expect(getGatewayToolCallerIdentity()).toBeUndefined();
+                    return undefined;
+                  },
+                  beforeDispatch: async () => {},
+                  afterDispatch: async (result) => result,
                 },
-                input,
-                vi.fn(),
+                () =>
+                  withSessionPlacementTurnAdmission(
+                    {
+                      sessionId: SESSION_ID,
+                      sessionKey: SESSION_KEY,
+                      agentId: "main",
+                      runId: input.runId,
+                    },
+                    input,
+                    vi.fn(),
+                  ),
               ),
             ).rejects.toBe(reachedWorkerExecution);
           };

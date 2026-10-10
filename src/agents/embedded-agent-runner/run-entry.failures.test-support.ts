@@ -301,6 +301,69 @@ export function registerRunEntryFailureTests(state: {
     },
   );
 
+  it.each(["refused", "rejected"] as const)(
+    "retains the run failure when terminal persistence is %s",
+    async (mode) => {
+      const transcript = await import("../../config/sessions/transcript.js");
+      const { makeAssistantMessageFixture } =
+        await import("../test-helpers/assistant-message-fixtures.js");
+      const { isPermanentAnnounceDeliveryError } =
+        await import("../subagents/announce/subagent-announce-delivery-retry.js");
+      const originalError = new Error(
+        "Session transcript keyed user is outside the current turn: stale-user",
+      );
+      const storageError = new Error("storage unavailable");
+      const append = vi.spyOn(transcript, "appendExactAssistantMessageToSessionTranscript");
+      if (mode === "refused") {
+        append.mockResolvedValue({
+          ok: false,
+          reason: "session rebound for sessionKey: agent:main:session-1",
+        });
+      } else {
+        append.mockRejectedValue(storageError);
+      }
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+        return await params.run(params.provider, params.model, initialAttemptOptions(params));
+      });
+      try {
+        const error = await runEmbeddedAgentEntry({
+          selection: { cfg: {}, provider: "provider", model: "model" },
+          identity: { runId: "run-terminal-cause", agentId: "main", sessionId: "session-1" },
+          harness: createDirectHarness(),
+          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+          sessionOverride: { kind: "preserve" },
+          runCandidate: async (provider, model, options) => {
+            options.assistantErrorTranscript.record(
+              makeAssistantMessageFixture({
+                provider,
+                model,
+                stopReason: "error",
+                errorMessage: originalError.message,
+              }),
+              {
+                agentId: "main",
+                sessionId: "session-1",
+                sessionKey: "agent:main:session-1",
+                storePath: "/tmp/unused-terminal-cause.sqlite",
+              },
+            );
+            throw originalError;
+          },
+        }).catch((caught: unknown) => caught);
+        expect(isPermanentAnnounceDeliveryError(error)).toBe(true);
+        expect(error).toMatchObject({
+          cause: originalError,
+          errors: [originalError, expect.any(Error)],
+        });
+        if (mode === "rejected") {
+          expect(error).toMatchObject({ errors: [originalError, storageError] });
+        }
+      } finally {
+        append.mockRestore();
+      }
+    },
+  );
+
   it("does not persist a previous candidate error after fallback setup fails", async () => {
     const transcript = await import("../../config/sessions/transcript.js");
     const { makeAssistantMessageFixture } =

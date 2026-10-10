@@ -253,10 +253,9 @@ async function runEmbeddedAgentInternal(
       let refreshed = false;
       let generationCleanup = Promise.resolve();
       let terminal: ReturnType<typeof createAgentLifecycleTerminalBackstop> | undefined;
-      let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
+      let errorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
-      const onAgentEvent = params.onAgentEvent;
-      const onAttemptStart = params.onAttemptStart;
+      const { onAgentEvent, onAttemptStart } = params;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
         assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
@@ -314,20 +313,17 @@ async function runEmbeddedAgentInternal(
           requestedRouteResolution: params.requestedRouteResolution,
           fallbacksOverride: runtimePluginFallbacksOverride,
         }).map((candidate, index) =>
-          requestedHarnessRuntime &&
-          // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-          (index === 0 || explicitHarnessRuntime)
-            ? {
-                provider: candidate.provider,
-                modelId: candidate.model,
-                runtime: requestedHarnessRuntime,
-                agentId: requestedWorkspaceResolution.agentId,
-              }
-            : {
-                provider: candidate.provider,
-                modelId: candidate.model,
-                agentId: requestedWorkspaceResolution.agentId,
-              },
+          Object.assign(
+            {
+              provider: candidate.provider,
+              modelId: candidate.model,
+              agentId: requestedWorkspaceResolution.agentId,
+            },
+            // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+            requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
+              ? { runtime: requestedHarnessRuntime }
+              : {},
+          ),
         );
         const preparedInput = {
           config,
@@ -527,7 +523,7 @@ async function runEmbeddedAgentInternal(
                 };
               }
 
-              assistantErrorTranscript ??=
+              errorTranscript ??=
                 params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
               terminal ??=
                 (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
@@ -553,7 +549,7 @@ async function runEmbeddedAgentInternal(
                 },
                 runParams: {
                   ...params,
-                  assistantErrorTranscript,
+                  assistantErrorTranscript: errorTranscript,
                   deferTerminalLifecycle: true,
                   onAttemptStart: () => {
                     runTerminal?.beginAttempt();
@@ -650,6 +646,7 @@ async function runEmbeddedAgentInternal(
       };
       try {
         let failed = true;
+        let runError: unknown;
         let result: EmbeddedAgentRunResult;
         try {
           for (;;) {
@@ -692,10 +689,13 @@ async function runEmbeddedAgentInternal(
             params = continuation;
             refreshed = true;
           }
+        } catch (error) {
+          runError = error;
+          throw error;
         } finally {
           // Error transcript and terminal publication belong to the logical run, not each generation.
           if (ownsAssistantErrorTranscript) {
-            await assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
+            await errorTranscript?.settle(failed && !params.abortSignal?.aborted, runError);
           }
         }
         refresh.mergeTerminalReceipt(result);

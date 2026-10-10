@@ -1,4 +1,7 @@
-import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import {
+  assertSessionPendingInputTranscriptRepairAllowed,
+  type SessionTranscriptRuntimeTarget,
+} from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import {
@@ -434,14 +437,21 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     });
   const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;
   if (orphanRepair?.removeLeaf) {
-    const repairedTarget = await withSessionManagerWrite(sessionManager, async () => {
+    const repairedTarget = await withSessionManagerWrite(sessionManager, async (admission) => {
       input.abortSignal?.throwIfAborted();
+      const target = sessionManager.getSessionTarget();
+      if (target && admission) {
+        assertSessionPendingInputTranscriptRepairAllowed(
+          admission.database,
+          target,
+          orphanRepair.messageEntry.id,
+        );
+      }
       if (orphanRepair.messageEntry.parentId) {
         sessionManager.branch(orphanRepair.messageEntry.parentId);
       } else {
         sessionManager.resetLeaf();
       }
-      const target = sessionManager.getSessionTarget();
       if (target) {
         // Commit the repaired cursor even when no metadata follows the orphan.
         // Its owning attempt must settle the projection before the next append adopts it.

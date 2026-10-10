@@ -2,6 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { prepareEmbeddedAttemptSessionBoundary } from "../../agents/embedded-agent-runner/run/attempt-session-prepare.js";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
+import type { AgentSession } from "../../agents/sessions/index.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -94,6 +98,67 @@ describe("committed pending input release", () => {
     }
     closeOpenClawAgentDatabasesForTest();
   });
+
+  it.each([false, true])(
+    "does not repair an input owned by another live turn (collected: %s)",
+    async (collected) => {
+      const seed = SessionManager.open(scope(), fixture.sessionsDir());
+      await seed.appendModelChange("openai", "synthetic-model");
+      const older = await stage("older-input");
+      await promote(older);
+      const source = await stage("newer-input");
+      const newer = collected
+        ? bindSessionPendingInputSources(
+            [source, await stage("newer-input-2")],
+            message("newer-aggregate"),
+          )!
+        : source;
+      if (collected) {
+        receipts.push(newer);
+      }
+      await promote(newer);
+      const before = await loadTranscriptEvents(scope());
+      const manager = guardSessionManager(
+        SessionManager.openBounded(scope(), { maxBytes: 100_000, maxEvents: 100 }),
+        { runId: "older-input" },
+      );
+      const activeSession = {
+        agent: { state: { messages: manager.buildSessionContext().messages } },
+      } as unknown as Pick<AgentSession, "agent">;
+      const recorder = {
+        hasPersisted: () => true,
+        getPersistedMessage: () => older.message,
+      } as NonNullable<
+        Parameters<
+          typeof prepareEmbeddedAttemptSessionBoundary
+        >[0]["attempt"]["userTurnTranscriptRecorder"]
+      >;
+
+      await expect(
+        older.run(() =>
+          prepareEmbeddedAttemptSessionBoundary({
+            activeSession,
+            attempt: {
+              prompt: "older input",
+              trigger: "user",
+              userTurnTranscriptRecorder: recorder,
+            },
+            getUserTranscriptContexts: () => undefined,
+            isRawModelRun: false,
+            preparedUserTurnMessage: older.message,
+            sessionManager: manager,
+            setActiveSessionSystemPrompt: () => {},
+          }),
+        ),
+      ).rejects.toThrow("Session transcript keyed user is outside the current turn");
+      expect(await loadTranscriptEvents(scope())).toEqual(before);
+      await expect(
+        withSessionPendingInputPersistence(newer, () =>
+          appendTranscriptMessage(scope(), { message: newer.message }),
+        ),
+      ).resolves.toMatchObject({ appended: false, messageId: newer.inputId });
+    },
+  );
 
   it.each([false, true])(
     "permits only exact committed persistence after custody closes (collected: %s)",

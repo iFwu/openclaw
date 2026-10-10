@@ -196,6 +196,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   });
   const modelContinuation = createModelContinuationState(params.identity.runId);
   let failed = true;
+  let terminalError: unknown;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
   let candidateIndex = 0;
   const committedSideEffect =
@@ -691,6 +692,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       }
     };
     return { ...settledResult, terminal, settleSessionOverride };
+  } catch (error) {
+    terminalError = error;
+    throw error;
   } finally {
     if (unsettledContextEngineTurnAttempt) {
       await discardContextEngineTurnAttemptIntent({
@@ -699,7 +703,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       });
     }
     try {
-      await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
+      await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted, terminalError);
     } finally {
       await contextEngineLogicalTurnLease.dispose();
     }

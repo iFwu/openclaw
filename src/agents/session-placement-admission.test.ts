@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  rotateAgentEventLifecycleGeneration,
+  getAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
+import {
+  getBeforeAgentReplyAdmission,
+  withBeforeAgentReplyObserver,
+} from "../plugins/before-agent-reply.js";
 import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
@@ -109,6 +117,66 @@ describe("captured compaction placement owner", () => {
 });
 
 describe("local turn placement admission", () => {
+  it.each(["CLI start", "worker dispatch"])("adopts deferred input before %s", async (runtime) => {
+    const events: string[] = [];
+    const claim = {
+      sessionId: "input-admission",
+      sessionKey: "agent:main:input-admission",
+      runId: `input-${runtime}`,
+    };
+    const result = { payloads: [{ text: "complete" }], meta: { durationMs: 1 } };
+    const beforeExecution = vi.fn(async () => {
+      events.push("adopted");
+      return undefined;
+    });
+    const task = vi.fn(async () => {
+      events.push("CLI start");
+      return result;
+    });
+    uninstallProvider = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed,
+      executeLocalTurn,
+      executeTurn: async () => {
+        events.push("worker dispatch");
+        return result;
+      },
+    });
+    await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), () =>
+      withBeforeAgentReplyObserver(
+        {
+          runId: claim.runId,
+          beforeExecution,
+          beforeDispatch: async () => {},
+          afterDispatch: async (value) => value,
+        },
+        async () => {
+          const outcome =
+            runtime === "CLI start"
+              ? await withLocalSessionPlacementTurnSettlement(claim, task)
+              : await enqueueCommandInLane(resolveSessionLane(claim.sessionKey), () =>
+                  withSessionPlacementTurnAdmission(
+                    claim,
+                    {
+                      ...claim,
+                      sessionFile: claim.sessionKey,
+                      workspaceDir: "/tmp",
+                      prompt: "test",
+                      timeoutMs: 1_000,
+                    },
+                    task,
+                  ),
+                );
+          expect(outcome).toEqual(result);
+          // The later hook gate must reuse the admission rather than replay ingress adoption.
+          await getBeforeAgentReplyAdmission(claim.runId)?.();
+        },
+      ),
+    );
+    expect(events).toEqual(["adopted", runtime]);
+    expect(beforeExecution).toHaveBeenCalledOnce();
+    expect(task).toHaveBeenCalledTimes(runtime === "CLI start" ? 1 : 0);
+  });
+
   const turnParams = {
     admittedRunContext: createTestAdmittedRunContext("run-1"),
     sessionId: "session-1",

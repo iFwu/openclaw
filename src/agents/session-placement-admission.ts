@@ -1,4 +1,5 @@
 import { registerReplyOperationSuccessorBarrier } from "../auto-reply/reply/reply-run-registry.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -8,6 +9,10 @@ import {
 } from "../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  getBeforeAgentReplyAdmission,
+  buildHandledBeforeAgentReplyPayloads,
+} from "../plugins/before-agent-reply.js";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
@@ -36,6 +41,29 @@ export type LocalTurnPlacementClaim = {
   sessionKey?: string;
   runId: string;
 };
+
+async function resolveReplyInputAdmission(
+  runId: string,
+  assertCurrent: () => void,
+): Promise<EmbeddedAgentRunResult | undefined> {
+  const admit = getBeforeAgentReplyAdmission(runId);
+  if (!admit) {
+    return undefined;
+  }
+  assertCurrent();
+  const result = await admit();
+  assertCurrent();
+  return result?.handled
+    ? {
+        payloads: buildHandledBeforeAgentReplyPayloads(result.reply),
+        meta: {
+          durationMs: 0,
+          finalAssistantVisibleText: result.reply?.text ?? SILENT_REPLY_TOKEN,
+          finalAssistantRawText: result.reply?.text ?? SILENT_REPLY_TOKEN,
+        },
+      }
+    : undefined;
+}
 
 export type SessionPlacementTurnParams = RunEmbeddedAgentInternalParams & { sessionFile: string };
 
@@ -183,11 +211,15 @@ export async function withSessionPlacementTurnAdmission(
     }
   };
   const result = await withPlacementTurnCallerScope(params, () =>
-    withoutSessionPlacementForcedTerminalSettlement(() =>
-      provider
+    withoutSessionPlacementForcedTerminalSettlement(async () => {
+      const handledInput = await resolveReplyInputAdmission(claim.runId, assertCurrent);
+      if (handledInput) {
+        return handledInput;
+      }
+      return provider
         ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn, assertCurrent)
-        : runAdmittedLocalTurn(),
-    ),
+        : runAdmittedLocalTurn();
+    }),
   );
   if (result.meta.executionTrace?.runner === "cli" && params.isFinalFallbackAttempt === undefined) {
     // Standalone CLI completion releases placement before admitting a successor;
@@ -263,6 +295,12 @@ export async function withLocalSessionPlacementTurnSettlement(
             assertSettlementCurrent();
             releaseCapacityWait?.();
             releaseQueuedContext?.("admitted");
+            const handledInput = await resolveReplyInputAdmission(claim.runId, assertCurrent);
+            assertCurrent();
+            assertSettlementCurrent();
+            if (handledInput) {
+              return handledInput;
+            }
             return await task(assertSettlementCurrent);
           } finally {
             open = false;
