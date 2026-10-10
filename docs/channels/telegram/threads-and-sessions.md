@@ -53,6 +53,8 @@ How forum topics map to sessions, agents, and ACP bindings.
     Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
 
+    In threaded DM mode, task handoffs and continuations must retain the exact existing topic session. `sessions_send` supports these private-topic sessions without replacing them with a parent private-chat session. A topic's transcript, model selection, and task ownership remain separate from its parent. A notification sent without a topic does not establish a user-accessible task conversation or authorize waking that parent session.
+
   </Accordion>
 </AccordionGroup>
 

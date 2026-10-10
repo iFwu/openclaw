@@ -3,7 +3,6 @@ import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/sess
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
-import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
@@ -62,6 +61,7 @@ import {
   prepareSessionsSendFollowup,
   startSessionsSendFollowup,
 } from "./sessions-send-followup.js";
+import { resolveSessionsSendThreadTargetError } from "./sessions-send-helpers.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
@@ -459,12 +459,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           sessionKey: unresolvedDisplayKey,
         });
       }
-      if (resolveSessionThreadInfo(resolvedKey).threadId) {
-        return sendFailure(
-          "error",
-          "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
-          unresolvedDisplayKey,
-        );
+      const threadTargetError = resolveSessionsSendThreadTargetError(
+        resolvedKey,
+        visibleSession.missing,
+      );
+      if (threadTargetError) {
+        return sendFailure("error", threadTargetError, unresolvedDisplayKey);
       }
       const authorizationTargetKey = mayUseRequesterForLiteralSentinel
         ? effectiveRequesterKey

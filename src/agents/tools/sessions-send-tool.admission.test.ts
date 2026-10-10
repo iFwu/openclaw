@@ -102,6 +102,44 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
+  it.each([
+    "agent:main:telegram:direct:123:thread:123:77",
+    "agent:main:telegram:work:direct:123:thread:123:77",
+  ])("dispatches a Telegram private topic without substituting its parent (%s)", async (key) => {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: key },
+      { sessionId: "private-topic-session", updatedAt: 1 },
+    );
+    const callGateway = vi.fn<AgentToolGatewayRequestCaller>(async (request) => {
+      if (request.method === "sessions.resolve") {
+        return { key, agentId: "main" };
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [{ key, agentId: "main", kind: "direct" }] };
+      }
+      if (request.method === "agent") {
+        return { runId, status: "accepted" };
+      }
+      throw new Error(`Unexpected Gateway method: ${request.method}`);
+    });
+    const result = await createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      config,
+      callGateway,
+      idempotencyKey: runId,
+    }).execute("send-private-topic", {
+      sessionKey: key,
+      message: "Continue the task in this topic",
+      mode: "followup",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted", sessionKey: key });
+    const dispatches = callGateway.mock.calls.filter(([request]) => request.method === "agent");
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.[0].params).toMatchObject({ sessionKey: key, deliver: false });
+  });
+
   const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
   it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
     if (sourceKey !== requesterSessionKey) {

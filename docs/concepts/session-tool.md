@@ -255,7 +255,9 @@ delivery records and does not resume these replies.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
-Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
+Existing Telegram private-topic sessions are valid `sessions_send` targets under the normal session visibility and send authorization checks. Preserve the complete resolved topic session key, including its account and thread identity. In Telegram threaded mode, a parent private-chat session is not an interchangeable user conversation: users continue in their topics, not in that internal parent session.
+
+Other thread-scoped chat sessions remain unsupported by `sessions_send`. An unsupported target is a routing limitation, not permission to remove its thread suffix or wake a parent session. Keep the original task and target until a supported, authorized continuation path is available. Sending a notification to a chat through a message or conversation tool is distinct from running its local agent session.
 
 Messages and A2A follow-up replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 
