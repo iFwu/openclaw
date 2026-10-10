@@ -71,7 +71,7 @@ import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from ".
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
-import { testing as sessionAutoNewTesting } from "./session-auto-new.js";
+import { testing as sessionAutoNewTesting } from "./session-auto-new.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";

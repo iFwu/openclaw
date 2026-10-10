@@ -78,9 +78,7 @@ export function resolveCronFallbackPolicy(params: CronFallbackPolicyParams) {
 }
 
 /** Explicit payload and subagent lists retain precedence over the selected-model policy. */
-export function resolveCronFallbacksOverride(
-  params: CronFallbackPolicyParams,
-): string[] | undefined {
+function resolveCronFallbacksOverride(params: CronFallbackPolicyParams): string[] | undefined {
   return resolveCronFallbackPolicy(params).fallbacksOverride;
 }
 

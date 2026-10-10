@@ -370,7 +370,7 @@ export async function handlePreviewFinalizedResult(
   }
 }
 
-export function registerTelegramQuestionDeliveryForMessage(
+function registerTelegramQuestionDeliveryForMessage(
   turn: Turn,
   payload: ReplyPayload,
   delivery: { messageId: number; text: string },

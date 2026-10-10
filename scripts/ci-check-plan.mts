@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Materialize compiler and lint selections only after the check-planning job installs dependencies.
 import { appendFileSync, existsSync } from "node:fs";
-import { detectChangedLanes } from "./changed-lanes.mts";
+import { detectChangedLanes, type ChangedLaneResult } from "./changed-lanes.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -26,6 +26,7 @@ export type CiCheckPlanInput = {
   changedPaths: string[];
   changedCoreTestPaths: string[] | null;
   runnerProfile: string;
+  materializeFullFallback?: boolean;
   checkMatrix: Matrix<CheckRow>;
   coreTypeMatrix: Matrix<StripeRow>;
   lintCoreMatrix: Matrix<StripeRow>;
@@ -33,13 +34,17 @@ export type CiCheckPlanInput = {
 };
 
 /** Narrow checks and pack complete extension fallback within the existing runner budget. */
-export async function createCiCheckPlan(input: CiCheckPlanInput) {
+export async function createCiCheckPlan(
+  input: CiCheckPlanInput,
+  changedLintResult: ChangedLaneResult = detectChangedLanes(input.changedPaths),
+) {
   const runs = (task: string) => input.checkMatrix.include.some((row) => row.task === task);
   const lintPlan = runs("lint")
     ? await (
         await import("./check-changed.mts")
-      ).createChangedCiLintPlan(detectChangedLanes(input.changedPaths), {
+      ).createChangedCiLintPlan(changedLintResult, {
         runnerProfile: input.runnerProfile,
+        materializeFullFallback: input.materializeFullFallback,
       })
     : null;
   const started = performance.now();
@@ -208,6 +213,12 @@ function parseInput(value: unknown): CiCheckPlanInput {
   if (!isRecord(value) || typeof value.runnerProfile !== "string") {
     throw new Error("Check planning requires its preflight input");
   }
+  if (
+    value.materializeFullFallback !== undefined &&
+    typeof value.materializeFullFallback !== "boolean"
+  ) {
+    throw new Error("Check planning requires a boolean materializeFullFallback option");
+  }
   const boundaryOwner = value.typeGraphBoundaryOwner;
   if (
     boundaryOwner !== "" &&
@@ -222,6 +233,9 @@ function parseInput(value: unknown): CiCheckPlanInput {
     changedCoreTestPaths:
       value.changedCoreTestPaths === null ? null : paths(value.changedCoreTestPaths),
     runnerProfile: value.runnerProfile,
+    ...(value.materializeFullFallback !== undefined
+      ? { materializeFullFallback: value.materializeFullFallback }
+      : {}),
     checkMatrix: matrix(value.checkMatrix, (row): CheckRow => {
       if (
         !isRecord(row) ||

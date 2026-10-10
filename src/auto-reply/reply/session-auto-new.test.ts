@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { buildGetReplyGroupCtx } from "./get-reply.test-fixtures.js";
 import {
-  evaluateJevSessionDependency,
   isSessionAutoNewCandidateCurrent,
   prepareSessionAutoNewCandidate,
-  testing as sessionAutoNewTesting,
   type SessionAutoNewDependencies,
 } from "./session-auto-new.js";
+import {
+  evaluateJevSessionDependency,
+  testing as sessionAutoNewTesting,
+} from "./session-auto-new.test-support.js";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

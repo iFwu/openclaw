@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
-  resolveCronFallbacksOverride,
+  resolveCronFallbackPolicy,
   resolveCronPreflightCandidates,
 } from "./run-fallback-policy.js";
 
@@ -31,10 +31,10 @@ function makeConfig(fallbacks?: string[]): OpenClawConfig {
   };
 }
 
-describe("resolveCronFallbacksOverride", () => {
+describe("resolveCronFallbackPolicy", () => {
   it("returns an empty override for payload model overrides without configured fallbacks", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: makeConfig(),
         agentId: "main",
         job: makeJob({
@@ -42,13 +42,13 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
           model: "google/gemini-2.0-flash",
         }),
-      }),
+      }).fallbacksOverride,
     ).toStrictEqual([]);
   });
 
   it("lets payload fallbacks override the configured fallback policy", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: makeConfig(["openai/gpt-5.4"]),
         agentId: "main",
         job: makeJob({
@@ -57,13 +57,13 @@ describe("resolveCronFallbacksOverride", () => {
           model: "google/gemini-2.0-flash",
           fallbacks: [],
         }),
-      }),
+      }).fallbacksOverride,
     ).toStrictEqual([]);
   });
 
   it("uses default subagent fallbacks ahead of the agent primary", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -90,13 +90,13 @@ describe("resolveCronFallbacksOverride", () => {
           kind: "agentTurn",
           message: "summarize",
         }),
-      }),
+      }).fallbacksOverride,
     ).toEqual(["openai/gpt-5.2"]);
   });
 
   it("keeps the agent primary strict when the default subagent model has no primary", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -122,13 +122,13 @@ describe("resolveCronFallbacksOverride", () => {
           kind: "agentTurn",
           message: "summarize",
         }),
-      }),
+      }).fallbacksOverride,
     ).toStrictEqual([]);
   });
 
   it("keeps explicit empty subagent fallbacks as a fallback override", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -151,13 +151,13 @@ describe("resolveCronFallbacksOverride", () => {
           kind: "agentTurn",
           message: "summarize",
         }),
-      }),
+      }).fallbacksOverride,
     ).toStrictEqual([]);
   });
 
   it("ignores subagent fallbacks when cron did not select the subagent model", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -179,13 +179,13 @@ describe("resolveCronFallbacksOverride", () => {
           kind: "agentTurn",
           message: "summarize",
         }),
-      }),
+      }).fallbacksOverride,
     ).toStrictEqual([]);
   });
 
   it("inherits default fallbacks for cron runs when the agent model is a string", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -207,13 +207,13 @@ describe("resolveCronFallbacksOverride", () => {
           kind: "agentTurn",
           message: "summarize",
         }),
-      }),
+      }).fallbacksOverride,
     ).toEqual(["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"]);
   });
 
   it("does not give a non-global agent string primary the global tail", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -235,13 +235,13 @@ describe("resolveCronFallbacksOverride", () => {
           kind: "agentTurn",
           message: "summarize",
         }),
-      }),
+      }).fallbacksOverride,
     ).toStrictEqual([]);
   });
 
   it("keeps payload model overrides on the configured model fallback policy", () => {
     expect(
-      resolveCronFallbacksOverride({
+      resolveCronFallbackPolicy({
         cfg: {
           agents: {
             defaults: {
@@ -266,7 +266,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
           model: "google/gemini-3-pro",
         }),
-      }),
+      }).fallbacksOverride,
     ).toEqual(["selected/backup"]);
   });
 

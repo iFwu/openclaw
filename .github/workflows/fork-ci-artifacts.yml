@@ -5,6 +5,15 @@ on:
     branches: [ifwu-fork]
   workflow_dispatch:
     inputs:
+      base_sha:
+        description: Exact ancestor commit for changed checks (use the task's reviewed base)
+        type: string
+        required: true
+      regression_tests:
+        description: JSON array of task-specific tracked test files sharing one regression runner
+        type: string
+        default: "[]"
+        required: false
       verify_download:
         description: Verify downloaded artifacts on a fresh runner
         type: boolean
@@ -15,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: fork-ci-artifacts-${{ github.ref }}
+  group: fork-ci-artifacts-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -24,6 +33,126 @@ env:
   OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0"
 
 jobs:
+  check-plan:
+    name: check-plan
+    if: github.repository == 'iFwu/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      base: ${{ steps.scope.outputs.base }}
+      head: ${{ steps.scope.outputs.head }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_checks: ${{ steps.plan.outputs.has_checks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+      - name: Validate changed-check range
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ || "$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then
+            echo "::error::A concrete 40-character base SHA is required; do not infer a base from a moving branch."
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$BASE_SHA" != "$HEAD_SHA"
+          git cat-file -e "$BASE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          printf '### Changed-check source\n- Base: `%s`\n- Head: `%s`\n' "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.8.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Configure isolated verification state
+        run: |
+          echo "OPENCLAW_STATE_DIR=$RUNNER_TEMP/openclaw-ci-check-state" >> "$GITHUB_ENV"
+          echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/openclaw-ci-check-state/openclaw.json" >> "$GITHUB_ENV"
+      - name: Check tracked private keys
+        run: node scripts/detect-private-keys.mts
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Plan affected check shards
+        id: plan
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base }}
+          HEAD_SHA: ${{ steps.scope.outputs.head }}
+          FORK_CI_REGRESSION_TESTS_JSON: ${{ inputs.regression_tests || '[]' }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: node --import ./scripts/tsx.mjs scripts/fork-ci-checks.mts plan
+
+  checks:
+    name: checks (${{ matrix.id }})
+    needs: check-plan
+    if: needs.check-plan.outputs.has_checks == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.check-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.8.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Configure isolated verification state
+        run: |
+          echo "OPENCLAW_STATE_DIR=$RUNNER_TEMP/openclaw-ci-check-state" >> "$GITHUB_ENV"
+          echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/openclaw-ci-check-state/openclaw.json" >> "$GITHUB_ENV"
+      - name: Check tracked private keys
+        run: node scripts/detect-private-keys.mts
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run planned check shard
+        env:
+          BASE_SHA: ${{ needs.check-plan.outputs.base }}
+          HEAD_SHA: ${{ needs.check-plan.outputs.head }}
+          FORK_CI_TASK_JSON: ${{ toJSON(matrix) }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: node --import ./scripts/tsx.mjs scripts/fork-ci-checks.mts run
+
+  check-gate:
+    name: check-gate
+    needs: [check-plan, checks]
+    if: ${{ always() && github.repository == 'iFwu/openclaw' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require complete planned coverage
+        env:
+          PLAN_RESULT: ${{ needs.check-plan.result }}
+          CHECK_RESULT: ${{ needs.checks.result }}
+          HAS_CHECKS: ${{ needs.check-plan.outputs.has_checks }}
+        run: |
+          set -euo pipefail
+          test "$PLAN_RESULT" = success
+          if [[ "$HAS_CHECKS" == true ]]; then
+            test "$CHECK_RESULT" = success
+          else
+            test "$HAS_CHECKS" = false
+            test "$CHECK_RESULT" = skipped
+          fi
+
   build:
     if: github.repository == 'iFwu/openclaw'
     runs-on: ubuntu-24.04
@@ -31,6 +160,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-node-env
         with:

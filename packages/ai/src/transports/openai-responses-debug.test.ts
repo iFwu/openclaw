@@ -4,9 +4,8 @@ import {
   normalizeResponsesFailedEvent,
   ResponsesStreamFailure,
   summarizeResponsesPayload,
-  summarizeWebSocketFailureCause,
-  createWebSocketFailureDiagnostics,
 } from "./openai-responses-debug.js";
+import { createWebSocketFailureDiagnostics } from "./openai-responses-websocket-diagnostics.js";
 
 const failedEventModel = {
   provider: "openai",
@@ -97,36 +96,32 @@ describe("WebSocket failure cause metadata", () => {
       headers: { authorization: "private-token" },
     });
     const outer = new Error("private-prompt", { cause: inner });
-    expect(summarizeWebSocketFailureCause(outer)).toEqual({
-      causes: [
-        { name: "Error", code: undefined },
-        { name: "Error", code: "ECONNRESET" },
-      ],
-    });
-    expect(JSON.stringify(summarizeWebSocketFailureCause(outer))).not.toContain("private");
+    const snapshot = createWebSocketFailureDiagnostics({ reusedConnection: false }).snapshot(outer);
+    expect(snapshot.causes).toEqual([
+      { name: "Error", code: undefined },
+      { name: "Error", code: "ECONNRESET" },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("private");
   });
 
   it("preserves CPR server failure code and HTTP status without the error body", () => {
     expect(
-      summarizeWebSocketFailureCause({
+      createWebSocketFailureDiagnostics({ reusedConnection: false }).snapshot({
         name: "OpenAIResponsesWebSocketServerError",
         code: "upstream_unavailable",
         status: 502,
         message: "private upstream body",
-      }),
-    ).toEqual({
-      causes: [
-        { name: "OpenAIResponsesWebSocketServerError", code: "upstream_unavailable", status: 502 },
-      ],
-    });
+      }).causes,
+    ).toEqual([
+      { name: "OpenAIResponsesWebSocketServerError", code: "upstream_unavailable", status: 502 },
+    ]);
   });
 
   it("bounds cyclic causes and treats peer supplied names/codes as untrusted", () => {
     const error: Record<string, unknown> = { name: "private-name", code: "private-code" };
     error.cause = error;
-    expect(summarizeWebSocketFailureCause(error)).toEqual({
-      causes: [{ name: "other", code: "other" }],
-    });
+    const snapshot = createWebSocketFailureDiagnostics({ reusedConnection: false }).snapshot(error);
+    expect(snapshot.causes).toEqual([{ name: "other", code: "other" }]);
   });
 });
 
@@ -176,8 +171,8 @@ describe("bounded WebSocket failure observations", () => {
       status: 502.5,
       cause: { name: "Error", cause: { name: "Error", cause: { name: "Error", cause } } },
     };
-    const summary = summarizeWebSocketFailureCause(nested);
+    const summary = createWebSocketFailureDiagnostics({ reusedConnection: false }).snapshot(nested);
     expect(summary.causes).toHaveLength(4);
-    expect(JSON.stringify(summary)).not.toContain("502");
+    expect(JSON.stringify(summary.causes)).not.toContain("502");
   });
 });

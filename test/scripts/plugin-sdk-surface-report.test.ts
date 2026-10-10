@@ -31,31 +31,8 @@ function runSurfaceReport(env: Record<string, string>) {
   );
 }
 
-type PublicSurfaceCounts = {
-  callableExports: number;
-  exports: number;
-  wildcardReexports: number;
-};
-
-function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
-  const { budgets } = readPluginSdkSurfaceBudgets({});
-  return {
-    exports: budgets.publicExports,
-    callableExports: budgets.publicFunctionExports,
-    wildcardReexports: budgets.publicWildcardReexports,
-  };
-}
-
 type SurfaceReport = ReturnType<typeof collectPluginSdkSurfaceReport>;
 let surfaceReport: SurfaceReport;
-
-function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
-  return {
-    exports: surfaceReport.publicStats.totals.exports,
-    callableExports: surfaceReport.publicStats.totals.callableExports,
-    wildcardReexports: surfaceReport.publicWildcards.count,
-  };
-}
 
 describe("plugin SDK surface report", () => {
   beforeAll(() => {
@@ -100,26 +77,26 @@ describe("plugin SDK surface report", () => {
 
   it("rejects loose numeric budget env vars before collecting SDK stats", () => {
     const result = runSurfaceReport({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "1e9",
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS: "1e9",
     });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS must be a non-negative integer",
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS must be a non-negative integer",
     );
     expect(result.stderr).not.toContain("at ");
   });
 
   it("rejects unsafe budget env vars before collecting SDK stats", () => {
     const result = runSurfaceReport({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "9007199254740992",
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS: "9007199254740992",
     });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS must be a safe non-negative integer",
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS must be a safe non-negative integer",
     );
     expect(result.stderr).not.toContain("at ");
   });
@@ -134,8 +111,10 @@ describe("plugin SDK surface report", () => {
     );
   });
 
-  it("keeps default public surface budgets pinned to current source counts", () => {
-    expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+  it("keeps wildcard and deprecated surface budgets pinned to current source counts", () => {
+    expect(readPluginSdkSurfaceBudgets({}).budgets.publicWildcardReexports).toBe(
+      surfaceReport.publicWildcards.count,
+    );
     const channelMessage = surfaceReport.publicStats.byEntrypoint.get("channel-message");
     expect(channelMessage).toBeDefined();
     expect(
@@ -171,15 +150,25 @@ describe("plugin SDK surface report", () => {
     }
   });
 
-  it("rejects callable surface growth from the canonical source graph", () => {
-    const budget = readDefaultPublicSurfaceBudgets().callableExports;
-    const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),
-    });
-
-    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      `public callable exports ${budget} > ${budget - 1}`,
-    );
+  it("reports total and callable exports without imposing growth caps", () => {
+    const report = {
+      ...surfaceReport,
+      publicStats: {
+        ...surfaceReport.publicStats,
+        totals: {
+          ...surfaceReport.publicStats.totals,
+          exports: 1_000_000,
+          callableExports: 1_000_000,
+        },
+      },
+    };
+    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toEqual([]);
+    expect(
+      evaluatePluginSdkSurfaceReport(
+        { ...report, leakedForbiddenExports: ["test-utils"] },
+        readPluginSdkSurfaceBudgets({}),
+      ),
+    ).toContain("forbidden public subpaths: test-utils");
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {

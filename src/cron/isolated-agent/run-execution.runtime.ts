@@ -1,7 +1,6 @@
 /** Lazy runtime facade for isolated cron agent execution dependencies. */
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 export {
-  resolveEffectiveModelFallbacks,
   resolveModelFallbackAvailability,
   modelFallbackOverrideFromAvailability,
   resolveSubagentModelFallbacksOverride,

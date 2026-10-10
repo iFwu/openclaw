@@ -33,7 +33,9 @@ vi.mock("./call.js", () => ({
 }));
 const owners: PreparedAgentRunAdmission[] = [];
 afterEach(() => {
-  for (const owner of owners.splice(0)) owner.close();
+  for (const owner of owners.splice(0)) {
+    owner.close();
+  }
 });
 
 async function fixture(options: { qualified?: boolean; operator?: boolean } = {}) {
@@ -78,7 +80,9 @@ async function fixture(options: { qualified?: boolean; operator?: boolean } = {}
       ingress: { kind: "system", boundary: "retained-user-completion", state: "present" },
     },
     assertSourceCurrent: () => {
-      if (!current) throw new Error("requester stopped");
+      if (!current) {
+        throw new Error("requester stopped");
+      }
     },
   });
   owners.push(owner);
@@ -88,7 +92,9 @@ async function fixture(options: { qualified?: boolean; operator?: boolean } = {}
     bindAdmittedRunApprovalRequesterSource(
       admitted,
       createApprovalRequesterSource(() => {
-        if (!current) throw new Error("requester stopped");
+        if (!current) {
+          throw new Error("requester stopped");
+        }
       }),
     );
   }
@@ -147,8 +153,12 @@ describe("native approval requester continuation", () => {
         qualified: kind !== "unqualified",
         operator: kind === "write-only-operator",
       });
-      if (kind === "stopped") test.stop();
-      if (kind === "closed") test.owner.close();
+      if (kind === "stopped") {
+        test.stop();
+      }
+      if (kind === "closed") {
+        test.owner.close();
+      }
       await expect(test.invoke("plugin.approval.request")).rejects.toThrow();
       expect(test.handler).not.toHaveBeenCalled();
     },

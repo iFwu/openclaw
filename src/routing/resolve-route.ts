@@ -4,7 +4,7 @@ import {
   listAgentEntries,
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
-} from "../agents/agent-scope.js";
+} from "../agents/agent-scope-config.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { listRouteBindings } from "../config/bindings.js";

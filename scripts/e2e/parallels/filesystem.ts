@@ -1,24 +1,11 @@
 // Filesystem script supports OpenClaw repository automation.
 import { mkdirSync, mkdtempSync } from "node:fs";
-import { access, mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot } from "./host-command.ts";
 
 const TEXT_FILE_TAIL_BYTES = 4 * 1024 * 1024;
 const OPENCLAW_VERSION_PATTERN = /OpenClaw\s+([0-9][^\s]*)/gi;
-
-export async function exists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function readJson<T>(filePath: string): Promise<T> {
-  return JSON.parse(await readFile(filePath, "utf8")) as T;
-}
 
 async function readTextFileTail(filePath: string): Promise<string> {
   const file = await open(filePath, "r").catch(() => null);
