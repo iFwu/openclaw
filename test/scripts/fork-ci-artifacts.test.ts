@@ -17,35 +17,74 @@ type Step = {
 };
 type Job = {
   needs?: string | string[];
-  strategy?: { "fail-fast": boolean; "max-parallel": number; matrix: { phase: string[] } };
+  if?: string;
+  strategy?: { "fail-fast": boolean; "max-parallel": number; matrix: string };
   steps: Step[];
   "continue-on-error"?: boolean;
 };
 const workflow = parse(readFileSync(".github/workflows/fork-ci-artifacts.yml", "utf8")) as {
-  jobs: { checks: Job; build: Job; "verify-download": Job };
+  jobs: { "check-plan": Job; checks: Job; "check-gate": Job; build: Job; "verify-download": Job };
 };
 const checks = workflow.jobs.checks;
+const planner = workflow.jobs["check-plan"];
 
-it("runs static checks independently of build and retains artifact-dependent verification", () => {
-  for (const job of [checks, workflow.jobs.build]) {
+it("plans independently of build and dispatches canonical rows on isolated runners", () => {
+  for (const job of [planner, workflow.jobs.build]) {
     expect(job.needs ?? []).toHaveLength(0);
+  }
+  for (const job of [planner, checks, workflow.jobs.build]) {
     expect(job["continue-on-error"]).not.toBe(true);
     const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkout?.with?.ref).toBe("${{ github.sha }}");
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
   }
-  expect(checks.strategy?.matrix.phase).toEqual(["guards-types", "lint", "audits"]);
+  expect(checks.needs).toBe("check-plan");
+  expect(checks.if).toBe("needs.check-plan.outputs.has_checks == 'true'");
+  expect(checks.strategy?.matrix).toBe("${{ fromJSON(needs.check-plan.outputs.matrix) }}");
   expect(checks.strategy?.["fail-fast"]).toBe(false);
-  expect(checks.strategy?.["max-parallel"]).toBe(3);
+  expect(checks.strategy?.["max-parallel"]).toBe(8);
   expect(workflow.jobs["verify-download"].needs).toBe("build");
-  const setup = checks.steps.find((step) => step.uses === "./.github/actions/setup-node-env");
-  expect(setup?.with?.["semantic-checks"]).toBe("true");
-  const check = checks.steps.find((step) => step.name === "Run changed checks");
-  expect(check?.["continue-on-error"]).not.toBe(true);
-  expect(check?.env?.CHECK_PHASE).toBe("${{ matrix.phase }}");
-  expect(check?.run).toBe(
-    'node scripts/check-changed.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --phase "$CHECK_PHASE" --timed',
+  for (const job of [planner, checks]) {
+    const setup = job.steps.find((step) => step.uses === "./.github/actions/setup-node-env");
+    expect(setup?.with?.["semantic-checks"]).toBe("true");
+  }
+  const planStep = planner.steps.find((step) => step.id === "plan");
+  expect(planStep?.env?.FORK_CI_REGRESSION_TESTS_JSON).toBe(
+    "${{ inputs.regression_tests || '[]' }}",
   );
+  const check = checks.steps.find((step) => step.name === "Run planned check shard");
+  expect(check?.["continue-on-error"]).not.toBe(true);
+  expect(check?.env?.FORK_CI_TASK_JSON).toBe("${{ toJSON(matrix) }}");
+  expect(check?.env?.BASE_SHA).toBe("${{ needs.check-plan.outputs.base }}");
+  expect(check?.env?.HEAD_SHA).toBe("${{ needs.check-plan.outputs.head }}");
+  expect(check?.run).toBe("node --import ./scripts/tsx.mjs scripts/fork-ci-checks.mts run");
+});
+
+describe("fork CI terminal check gate", () => {
+  const gate = workflow.jobs["check-gate"];
+  it.each([
+    ["success", "success", "true", true],
+    ["success", "skipped", "false", true],
+    ["success", "skipped", "true", false],
+    ["success", "failure", "true", false],
+    ["success", "cancelled", "true", false],
+    ["failure", "skipped", "false", false],
+    ["cancelled", "skipped", "false", false],
+    ["skipped", "skipped", "", false],
+    ["success", "success", "", false],
+  ])("requires admitted coverage: %s/%s/%s", (plan, checks, hasChecks, passes) => {
+    expect(gate.needs).toEqual(["check-plan", "checks"]);
+    expect(gate.if).toContain("always()");
+    const step = gate.steps[0];
+    if (!step?.run) {
+      throw new Error("Missing terminal check gate");
+    }
+    const result = spawnSync(resolveWorkflowBash(), ["--noprofile", "--norc", "-c", step.run], {
+      encoding: "utf8",
+      env: { ...process.env, PLAN_RESULT: plan, CHECK_RESULT: checks, HAS_CHECKS: hasChecks },
+    });
+    expect(result.status === 0).toBe(passes);
+  });
 });
 
 describe("fork CI changed-check admission", () => {
@@ -86,7 +125,7 @@ describe("fork CI changed-check admission", () => {
   });
 
   function admit(baseSha: string, headSha = head) {
-    const step = checks.steps.find((entry) => entry.id === "scope");
+    const step = planner.steps.find((entry) => entry.id === "scope");
     if (!step?.run) {
       throw new Error("Missing changed-check admission step");
     }

@@ -39,27 +39,41 @@ GitHub fork and can also be manually dispatched. It uses standard `ubuntu-24.04`
 GitHub-hosted runners, not a third-party or larger runner, with no production
 secrets or live model tests. Node is pinned to 26.8.1; `package.json` owns pnpm.
 
-The workflow runs `build` and three independent `checks` matrix jobs on separate
-runners at the same immutable SHA. It reuses `setup-node-env` for the toolchain.
-The check jobs also enable that action's semantic-check containment required by
-the native compiler wrappers. No job uses the operator's shared-host wrapper or
-headroom reservation, and none changes the runner's swap configuration.
-Job timeouts remain enforced; OOM or timeout is a failed run. Local and shared-host
-checks still use the existing `run-bounded.sh` policy unchanged.
+The workflow starts `build` and `check-plan` independently at the same immutable
+SHA. It reuses `setup-node-env` for the toolchain and enables semantic-check
+containment for the planner and check runners. No job uses the operator's
+shared-host wrapper or headroom reservation, and none changes the runner's swap
+configuration. Job timeouts remain enforced; OOM or timeout is a failed run.
+Local and shared-host checks retain the existing `run-bounded.sh` policy.
 
-`checks` uses `scripts/check-changed.mjs --base BASE_SHA --head HEAD_SHA --phase PHASE --timed`:
+`scripts/fork-ci-checks.mts plan` admits check families from the original
+`check-changed` plan, then materializes the existing `createCiCheckPlan` selectors:
 
-- `guards-types`: guards and the existing serial type graphs.
-- `lint`: formatting and the same targeted or fallback lint commands selected by the planner.
-- `audits`: the same broad audits, including hard-zero unused-export checks.
+- Compiler membership and boundary validation belong to the canonical planner.
+  Selected core-test graphs retain their five stripe owners; production and
+  remaining test graphs get independent rows. `test-root` remains one row whose
+  existing runner serially executes its four memory-bounded partitions.
+- Lint uses the existing consumer closure and GitHub stripe layout: up to five
+  combined core/extension rows, plus a central row for the sixth extension stripe,
+  scripts, formatting, changed root tests, and other selected lint checks. A broad
+  fallback is explicitly materialized on the same owners, not run again centrally.
+- Guards and broad audits retain their original commands, including hard-zero
+  unused-export checks. The planner owns the compiler boundary; guards do not run
+  it a second time.
 
-The three phases partition the original plan without dropping or duplicating
-commands. The default `--phase all` preserves the serial local entrypoint. Core
-type boundary discovery stays with its consuming typecheck, and each phase
-preserves command order. Use separate checkouts/runners for overlap, not concurrent
-writers in one validation checkout. Matrix fail-fast is disabled so one failed
-audit cannot cancel the other independent evidence. Phase selection does not
-narrow type graphs, suppress findings, or maintain another path classifier.
+Only nonempty selected rows enter the `checks` matrix. A narrow change does not
+start every possible stripe; shared/ambient/configuration changes retain the
+native broader fallback. One matrix limits total check concurrency to eight,
+subject to account capacity; build remains independent. Each runner executes one
+type graph or lint Program at a time. Fail-fast is disabled, and `check-gate`
+requires the plan and every admitted row to succeed, refusing failed/cancelled
+plans and unexpectedly skipped checks. No failed result is converted to success.
+
+The local `--phase all` default and `guards-types` entrypoint remain unchanged.
+The additional `guards` and `types` partitions split that phase without dropping
+commands; `types` keeps its boundary/typecheck pair when run directly. Use separate
+checkouts/runners for overlap, not concurrent writers in one validation checkout.
+No second path classifier or custom compiler graph is introduced.
 
 Pushes use the event's `before` commit; manual dispatch requires an exact `base_sha`. The base must be a distinct ancestor of the checked-out head. Missing,
 zero, or unrelated bases fail instead of producing an empty or guessed check.
@@ -74,12 +88,35 @@ subpath exposure, deprecated facades, and the separate entrypoint, deprecation, 
 wildcard rules. Typechecking, unused-export scans, and behavioral tests remain
 required by their existing scope rules.
 
-After review, required prepublication checks, and privacy scanning, freeze and
-publish the candidate. Start the remaining local regressions while the CI jobs
-run; do not wait for the cloud build before launching independent local work.
-Keep the validation checkout unchanged until its commands finish. Reuse completed
-evidence only when its source, configuration, toolchain, and dependency inputs
-remain valid. A new commit invalidates affected evidence, not unrelated checks.
+Use small, fast targeted tests locally for immediate feedback while editing.
+After review, lightweight formatting/workflow checks, and privacy scanning,
+freeze and publish the candidate for cloud acceptance. Do not require the same
+expensive type/lint checks to finish locally before starting them on GitHub.
+Publishing a candidate is not accepting or deploying it: all required checks must
+still pass at the final join.
+
+Manual dispatch accepts `regression_tests`, a JSON array of up to 32 explicitly
+selected, tracked repository test files. Each unique file runs through the native
+`run-vitest.mjs` entrypoint in its own row of the same eight-runner matrix; failures
+block `check-gate` just like static-check failures. The default empty array adds
+no tests. Test targets are data, never shell commands, and must exist at the exact
+head. Use this to move task-specific regression acceptance off a contended local
+host without broadening to the complete functional suite. For example:
+
+```bash
+gh workflow run fork-ci-artifacts.yml --ref ifwu-fork \
+  -f base_sha=<exact-reviewed-base> \
+  -f regression_tests='["test/scripts/fork-ci-checks.test.ts","test/scripts/fork-ci-artifacts.test.ts"]'
+```
+
+Independent candidate branches can be dispatched at their own refs; workflow
+concurrency is per ref, not a global repository queue. GitHub account runner
+capacity still limits actual overlap. Platform-specific or genuinely local
+boundary proofs remain on their required hosts and can overlap the cloud jobs.
+Keep any active validation checkout unchanged until its commands finish. Reuse
+completed evidence only when its source, configuration, toolchain, and dependency
+inputs remain valid. A new commit invalidates affected evidence, not unrelated
+checks.
 
 `pnpm build` produces the default `ciArtifacts` profile. The producer verifies
 package import closure and the built CLI, then uploads:
@@ -98,8 +135,9 @@ the artifact, verify source/runtime identity and checksum, restore outputs, chec
 SDK runtime/type exports and UI, then verify import closure and the built CLI
 without rebuilding. Use it when changing build, packaging, or restore behavior.
 
-A normal successful run requires `build` and all three `checks` phases to pass;
-`verify-download` is intentionally skipped, not a verification pass. If explicitly
+A normal successful run requires `build`, `check-plan`, every selected `checks`
+row, and `check-gate` to pass; `verify-download` is intentionally skipped, not a
+verification pass. If explicitly
 enabled, it must also pass. An uploaded build artifact is not a successful
 candidate while `checks` or required local validation is pending or failed.
 Destination-side identity, checksum, dependency, and artifact checks remain

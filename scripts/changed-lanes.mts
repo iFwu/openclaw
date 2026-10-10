@@ -384,6 +384,7 @@ export function detectChangedLanesForPaths(params: {
   head?: string;
   staged?: boolean;
   mergeHeadFirstParent?: boolean;
+  includeWorktree?: boolean;
 }): ChangedLaneResult {
   const resolvedBase = params.staged
     ? params.base
@@ -399,6 +400,7 @@ export function detectChangedLanesForPaths(params: {
         base,
         head: params.head,
         staged: params.staged,
+        includeWorktree: params.includeWorktree,
       })
     : null;
   return detectChangedLanes(params.paths, { packageJsonChangeKind });

@@ -4,7 +4,7 @@ import { detectChangedLanes } from "../../scripts/changed-lanes.mts";
 import { createChangedCheckPlan } from "../../scripts/check-changed.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
-const phases = ["guards-types", "lint", "audits"] as const;
+const phases = ["guards", "types", "lint", "audits"] as const;
 const inputs = [
   ["README.md"],
   ["src/agents/model-fallback.test.ts"],
@@ -30,6 +30,17 @@ describe("changed-check phases", () => {
       );
       expect(partitioned.toSorted()).toEqual(full.commands.map(commandKey).toSorted());
       expect(createChangedCheckPlan(lanes, { phase: "all" })).toEqual(full);
+      const legacy = createChangedCheckPlan(lanes, { phase: "guards-types" }).commands;
+      const split = ["guards", "types"] as const;
+      const splitKeys = new Set(
+        split.flatMap((phase) => createChangedCheckPlan(lanes, { phase }).commands.map(commandKey)),
+      );
+      expect(legacy).toEqual(full.commands.filter((command) => splitKeys.has(commandKey(command))));
+      expect(legacy.map(commandKey).toSorted()).toEqual(
+        split
+          .flatMap((phase) => createChangedCheckPlan(lanes, { phase }).commands.map(commandKey))
+          .toSorted(),
+      );
       for (const phase of phases) {
         const selected = createChangedCheckPlan(lanes, { phase }).commands.map(commandKey);
         const membership = new Set(selected);
@@ -42,16 +53,29 @@ describe("changed-check phases", () => {
 
   it("keeps compiler boundary discovery with its consuming typecheck", () => {
     const lanes = detectChangedLanes(["src/agents/model-fallback.test.ts"]);
-    const validation = createChangedCheckPlan(lanes, { phase: "guards-types" }).commands;
+    const validation = createChangedCheckPlan(lanes, { phase: "types" }).commands;
     expect(validation.flatMap((command) => command.coreTestCheck ?? [])).toEqual([
       "checkBoundary",
       "checkTypes",
     ]);
-    for (const phase of ["lint", "audits"] as const) {
+    for (const phase of ["guards", "lint", "audits"] as const) {
       expect(createChangedCheckPlan(lanes, { phase }).commands.every((c) => !c.coreTestCheck)).toBe(
         true,
       );
     }
+  });
+
+  it("keeps erasability and noncompiler guards outside the type phase", () => {
+    const lanes = detectChangedLanes(["scripts/check-changed.mts"]);
+    const guards = createChangedCheckPlan(lanes, { phase: "guards" }).commands;
+    const types = createChangedCheckPlan(lanes, { phase: "types" }).commands;
+    expect(guards.some(({ args }) => args[0] === "check:script-erasability")).toBe(true);
+    expect(guards.some(({ args }) => args[0] === "check:no-conflict-markers")).toBe(true);
+    expect(guards.some(({ args }) => args[0]?.startsWith("tsgo:"))).toBe(false);
+    expect(guards.some(({ args }) => args[0] === "lint:tmp:tsgo-core-boundary")).toBe(false);
+    expect(types.some(({ args }) => args[0] === "check:script-erasability")).toBe(false);
+    expect(types.some(({ args }) => args[0] === "lint:tmp:tsgo-core-boundary")).toBe(true);
+    expect(types.some(({ args }) => args[0] === "tsgo:scripts")).toBe(true);
   });
 
   it("retains hard-zero export audits without serializing lint behind them", () => {
@@ -76,8 +100,7 @@ describe("changed-check phases", () => {
     ).toThrow("cannot be combined");
   });
 
-  it("routes the CLI dry-run to only the requested phase", () => {
-    const phase = "lint";
+  it.each(["lint", "guards", "types"] as const)("routes the CLI dry-run to only %s", (phase) => {
     const paths = ["scripts/e2e/parallels/filesystem.ts"];
     const result = spawnSync(
       resolveTestNodeExecPath(),
