@@ -3,6 +3,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { canSteerEmbeddedRunDuringCompaction } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
   QuestionAnswerUnconfirmedError,
@@ -13,6 +14,7 @@ import { SessionPendingInputCustodyError } from "../../config/sessions/session-p
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   createMessageInjectionAuthority,
   MessageInjectionAuthorityError,
@@ -381,6 +383,40 @@ export function beginReplyMessageInjectionTarget(
       } catch (error) {
         outcome = Promise.resolve(onCancellationError(error));
       }
+    }
+    const operatorAuthority =
+      toolAuthorityOverlay?.operatorAuthority ?? personalToolParticipant?.operatorAuthority;
+    if (
+      queueOptions?.isInboundUserMessage &&
+      allowPendingUserInputAnswer !== false &&
+      owner.requestYieldToVisibleTurn &&
+      operatorAuthority &&
+      operatorScopeSatisfied("operator.write", operatorAuthority.scopes)
+    ) {
+      const isSourceCurrent = () => {
+        try {
+          queueOptions.abortSignal?.throwIfAborted();
+          assertCurrent?.();
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
+          operatorAuthority.assertCurrent();
+          return operatorScopeSatisfied("operator.write", operatorAuthority.scopes);
+        } catch {
+          return false;
+        }
+      };
+      outcome = outcome.then((result) => {
+        if (
+          result.status === "rejected" &&
+          (result.reason === "tool_authority_mismatch" ||
+            result.reason === "reply_expectation_mismatch" ||
+            result.reason === "source_reply_delivery_mode_mismatch") &&
+          isSourceCurrent()
+        ) {
+          // Only proven rejection retains FIFO custody; the old tool bindings never change.
+          owner.requestYieldToVisibleTurn?.(isSourceCurrent);
+        }
+        return result;
+      });
     }
     return {
       targetRunId: target.runId,

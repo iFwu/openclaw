@@ -18,16 +18,15 @@ import {
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
-import { createApprovalDeniedAbortError } from "../../approval-denied-abort.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
 } from "../../run-termination.js";
 import { isNativeCompletionOwnerForRun } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
@@ -59,6 +58,7 @@ import {
   withEmbeddedAttemptSteeringAdmission,
   type EmbeddedAttemptSteeringAdmission,
 } from "./attempt-steering-admission.js";
+import { createAttemptStreamAbortReason } from "./attempt-stream-abort.js";
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
@@ -72,6 +72,7 @@ import {
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
 import type { EmbeddedRunAttemptParams, StreamRunState } from "./types.js";
+import { preparePeerSessionVisibleTurnHandoff } from "./visible-turn-handoff.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
@@ -355,7 +356,9 @@ function prepareStream(
     resolveTerminalStopReason: () =>
       isAgentRunRestartAbortReason(input.runAbortController.signal.reason)
         ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-        : undefined,
+        : isAgentRunSupersededAbortReason(input.runAbortController.signal.reason)
+          ? AGENT_RUN_SUPERSEDED_STOP_REASON
+          : undefined,
     onBeforeLifecycleTerminal: async () => {
       if (deferredLifecycleOwner) {
         return;
@@ -412,7 +415,20 @@ function prepareStream(
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
   });
-  const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
+  const visibleTurnHandoff = preparePeerSessionVisibleTurnHandoff({
+    attempt,
+    agent: activeSession.agent,
+    isCurrent: () => isSteeringAdmissionOpen() && hasCurrentRegistration(),
+    canRelinquish: () => activeQueueAdmissions === 0 && !activeSession.agent.hasQueuedMessages(),
+    handoff: () => abortActiveRunExternally("superseded"),
+  });
+  const unsubscribe = admission.bindStreamUnsubscribe(() => {
+    try {
+      visibleTurnHandoff?.restore();
+    } finally {
+      streamSubscription.unsubscribe();
+    }
+  });
   const subscription = { ...streamSubscription, unsubscribe };
   toolMetasForTerminal = subscription.toolMetas;
 
@@ -439,14 +455,10 @@ function prepareStream(
     externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onDeferredLifecycleAbort?.(reason);
-    const abortReason =
-      reason === "approval-denied"
-        ? createApprovalDeniedAbortError()
-        : reason === "restart"
-          ? createAgentRunRestartAbortError()
-          : reason === "superseded"
-            ? createAgentRunSupersededAbortError()
-            : undefined;
+    const abortReason = createAttemptStreamAbortReason(
+      reason,
+      visibleTurnHandoff?.requested === true,
+    );
     attempt.onAttemptAbort?.(abortReason);
     input.abortRun(false, abortReason);
   };
@@ -535,7 +547,7 @@ function prepareStream(
       return await steerActiveSessionWithOptionalDeliveryWait(
         activeSession,
         text,
-        options,
+        visibleTurnHandoff?.observeQueueOptions(options) ?? options,
         attempt.sessionKey,
         canInjectMessage,
         questionAuthority(assertCurrent, authorityKind),
@@ -639,6 +651,7 @@ function prepareStream(
           }
         : undefined,
     waitForVisibleTurnCleanup: isNativeCompletion() ? attempt.waitForOwnerCleanup : undefined,
+    requestYieldToVisibleTurn: visibleTurnHandoff?.request,
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,

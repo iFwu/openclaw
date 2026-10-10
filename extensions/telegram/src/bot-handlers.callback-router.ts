@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "grammy";
+import type { Message } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -150,8 +151,6 @@ export function createTelegramCallbackRouter({
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
-      const callbackCommandText =
-        nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
@@ -225,7 +224,7 @@ export function createTelegramCallbackRouter({
         }
       };
       const terminalizeUnavailableCallback = async () => {
-        logVerbose("telegram: typed callback unavailable (handler missing or payload invalid)");
+        logVerbose("telegram: typed callback unavailable");
         await clearRoutedCallbackButtons();
         await actions.replyToCallbackChat("This action is no longer available.");
       };
@@ -314,11 +313,10 @@ export function createTelegramCallbackRouter({
         await approvalRuntime.handleMalformedReserved();
         return;
       }
-      if (
-        !nativeCallbackCommand &&
-        !hasReservedModelPrefix &&
-        !inlineButtonsUnavailable &&
-        (await handleTelegramInteractiveCallback({
+      let interactiveCallbackResult: Awaited<ReturnType<typeof handleTelegramInteractiveCallback>> =
+        "unmatched";
+      if (!nativeCallbackCommand && !hasReservedModelPrefix && !inlineButtonsUnavailable) {
+        interactiveCallbackResult = await handleTelegramInteractiveCallback({
           accountId,
           callback,
           ctx,
@@ -335,15 +333,19 @@ export function createTelegramCallbackRouter({
           actions,
           messageRuntime,
           authorizeCallback,
-        }))
-      ) {
-        return;
+        });
+        if (interactiveCallbackResult === "handled") {
+          return;
+        }
       }
       if (legacyApprovalCallback) {
         await approvalRuntime.handleLegacy(legacyApprovalCallback);
         return;
       }
-      if (hasReservedOpaquePrefix) {
+      if (
+        hasReservedOpaquePrefix &&
+        (!opaqueCallbackData || interactiveCallbackResult === "declined")
+      ) {
         await terminalizeUnavailableCallback();
         return;
       }
@@ -377,7 +379,16 @@ export function createTelegramCallbackRouter({
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
-        text: callbackCommandText,
+        text:
+          nativeCallbackCommand ??
+          (opaqueCallbackData
+            ? buildOrdinaryTypedCallbackText(
+                callbackMessage,
+                callback.data ?? data,
+                opaqueCallbackData,
+                ctx.me.id,
+              )
+            : genericCallbackText),
       });
       const syntheticCtx = buildSyntheticContext(ctx, syntheticMessage);
       await processMessageWithReplyChain({
@@ -409,6 +420,26 @@ export function createTelegramCallbackRouter({
   };
 
   return { route: handleCallback };
+}
+
+function buildOrdinaryTypedCallbackText(
+  message: Message,
+  callbackData: string,
+  value: string,
+  botUserId: number,
+): string {
+  const buttons = message.reply_markup?.inline_keyboard.flat() ?? [];
+  const matchingButtons = buttons.filter(
+    (button) => "callback_data" in button && button.callback_data === callbackData,
+  );
+  const label =
+    message.from?.is_bot && message.from.id === botUserId && matchingButtons.length === 1
+      ? matchingButtons[0]?.text
+      : undefined;
+  const textValue = value.trim() === value ? value : JSON.stringify(value);
+  return label
+    ? `callback_label: ${label}\ncallback_data: ${textValue}`
+    : `callback_data: ${textValue}`;
 }
 
 async function handleTelegramModelCallback(params: {

@@ -53,6 +53,8 @@ export type EmbeddedAgentQueueHandle = {
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   /** Native producer capability retained after its reply-operation registration clears. */
   readonly preemptByVisibleTurn?: () => boolean;
+  /** Request handoff only after current tools and their results have settled. */
+  readonly requestYieldToVisibleTurn?: (isSourceCurrent: () => boolean) => boolean;
   /** Exact captured attempt resources, not registry disappearance or a reporting budget. */
   readonly waitForVisibleTurnCleanup?: () => Promise<void>;
   queueMessage: (

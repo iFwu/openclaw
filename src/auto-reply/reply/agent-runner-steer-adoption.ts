@@ -24,9 +24,11 @@ import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   type ReplyOperation,
+  type ReplyMessageInjectionTarget,
   replyRunRegistry,
 } from "./reply-run-registry.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -34,6 +36,7 @@ type ActiveReplySteerParams = {
   followupRun: RunReplyAgentParams["followupRun"];
   opts: RunReplyAgentParams["opts"];
   providedReplyOperation: ReplyOperation | undefined;
+  injectionTarget?: ReplyMessageInjectionTarget;
   automaticFallbackRoute?: ReplyOperation["automaticFallbackRoute"];
   queueKey: string;
   releaseAdmissionTicket: () => void;
@@ -98,10 +101,13 @@ export async function runActiveReplySteer(
   const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   // Capture exact injection authority before parking or awaiting admission.
   // A same-key successor must never inherit this turn's steer or abort.
-  const injectionTarget =
-    activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
-      ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
-      : undefined;
+  const injectionTarget = Object.hasOwn(params, "injectionTarget")
+    ? params.injectionTarget
+    : activeReplyOperation
+      ? replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
+        : undefined
+      : replyRunRegistry.resolveCurrentMessageInjectionTarget(queueKey);
   const ownerGrace = injectionTarget
     ? undefined
     : captureUninjectableOwnerGrace({
@@ -219,6 +225,18 @@ export async function runActiveReplySteer(
           followupRun.run.inputProvenance.kind === "external_user"),
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      ...(!activeReplyOperation
+        ? {
+            toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
+              ctx: params.sessionCtx,
+              sessionEntry: params.sessionEntry,
+              senderIsOwner: followupRun.run.senderIsOwner === true,
+              operatorAuthority: followupRun.operatorAuthority,
+              toolsAllow: followupRun.toolsAllow,
+              disableTools: followupRun.disableTools === true,
+            }),
+          }
+        : {}),
       personalToolParticipant: {
         operatorAuthority: followupRun.operatorAuthority,
         senderId: followupRun.run.senderId,

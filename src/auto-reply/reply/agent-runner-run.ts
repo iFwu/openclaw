@@ -222,6 +222,11 @@ export async function runReplyAgent(
   const activeReplyOperation = sessionKey
     ? (replyRunRegistry.get(sessionKey) ?? providedReplyOperation)
     : providedReplyOperation;
+  // Capture the admitted execution owner even when a direct command has no reply operation.
+  const injectionTarget =
+    effectiveShouldSteer && isActive
+      ? replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey ?? queueKey)
+      : undefined;
   const steeringAuthority = resolveReplySteeringAuthority(followupRun, activeReplyOperation);
   const shouldQueueAuthorityMismatch =
     effectiveShouldSteer && isActive && steeringAuthority.shouldQueueAuthorityMismatch;
@@ -239,6 +244,7 @@ export async function runReplyAgent(
   // source identity so unrelated retained tombstones still permit steering.
   // The parked admission owner rechecks after any predecessor wait.
   const activeSourceTurnId =
+    injectionTarget?.sourceTurnId ??
     replyRunRegistry.getSourceTurnId(sessionKey ?? "") ??
     normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
     "";
@@ -349,6 +355,7 @@ export async function runReplyAgent(
       followupRun,
       opts,
       providedReplyOperation: activeReplyOperation,
+      injectionTarget,
       queueKey,
       releaseAdmissionTicket,
       replyOperationRunState,

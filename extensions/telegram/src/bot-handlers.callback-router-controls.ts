@@ -459,7 +459,7 @@ export async function handleTelegramInteractiveCallback(params: {
   actions: TelegramCallbackMessageActions;
   messageRuntime: TelegramCallbackMessageRuntime;
   authorizeCallback: () => Promise<boolean>;
-}): Promise<boolean> {
+}): Promise<"handled" | "unmatched" | "declined"> {
   const {
     accountId,
     callback,
@@ -560,7 +560,7 @@ export async function handleTelegramInteractiveCallback(params: {
     }
     await clearCallbackButtons();
     await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
-    return true;
+    return "handled";
   }
 
   const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
@@ -620,12 +620,15 @@ export async function handleTelegramInteractiveCallback(params: {
     },
   });
   if (pluginCallback.handled) {
-    return true;
+    return "handled";
+  }
+  if (pluginCallback.matched) {
+    return "declined";
   }
 
   const selectCallback = parseTelegramManagedSelectCallback(callback.data?.trimStart() ?? data);
   if (!selectCallback) {
-    return false;
+    return "unmatched";
   }
   if (selectCallback.type === "multi-toggle" || selectCallback.type === "multi-clear") {
     const buttons = updateMultiSelectKeyboard(
@@ -642,7 +645,7 @@ export async function handleTelegramInteractiveCallback(params: {
         }
       }
     }
-    return true;
+    return "handled";
   }
 
   let text: string;
@@ -671,5 +674,5 @@ export async function handleTelegramInteractiveCallback(params: {
     storeAllowFrom,
     options: { forceWasMentioned: true, messageIdOverride: callback.id },
   });
-  return true;
+  return "handled";
 }

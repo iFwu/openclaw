@@ -233,6 +233,7 @@ type ReplyMessageInjectionOwner = {
     assertCurrent?: () => void;
   }): ReplyMessageInjectionResolution;
   recordAccepted(options?: { inboundAudio?: boolean }): void;
+  requestYieldToVisibleTurn?(isSourceCurrent: () => boolean): boolean;
   abort(): boolean;
 };
 

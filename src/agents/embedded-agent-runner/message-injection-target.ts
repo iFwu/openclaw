@@ -59,6 +59,7 @@ export function captureDirectEmbeddedMessageInjectionTarget(
   }
   const runId = instance.runId;
   const injection = handle.messageInjectionV2;
+  const requestYield = handle.requestYieldToVisibleTurn;
   const ownsRegistration = () =>
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey) === sessionId &&
     ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
@@ -162,6 +163,22 @@ export function captureDirectEmbeddedMessageInjectionTarget(
           logMessageQueuedWithBacklogPolicy({ sessionId, source: "embedded-agent-runner" }, false);
         }
       },
+      ...(requestYield
+        ? {
+            requestYieldToVisibleTurn: (isSourceCurrent: () => boolean) => {
+              try {
+                return (
+                  canInject() &&
+                  handle.requestYieldToVisibleTurn === requestYield &&
+                  requestYield.call(handle, () => canInject() && isSourceCurrent() && canInject())
+                );
+              } catch {
+                // Optional handoff cannot turn a proven rejection into a source admission error.
+                return false;
+              }
+            },
+          }
+        : {}),
       abort: () => {
         try {
           if (!canInject() || !isEmbeddedRunHandleAbortable(sessionId, handle) || !canInject()) {

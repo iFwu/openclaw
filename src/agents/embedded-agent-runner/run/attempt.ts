@@ -67,6 +67,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "./types.js";
+import { isPeerSessionContinuation } from "./visible-turn-handoff.js";
 
 export async function runEmbeddedAttempt(
   input: EmbeddedRunAttemptParams,
@@ -80,8 +81,9 @@ export async function runEmbeddedAttempt(
     provider: input.provider,
     model: input.modelId,
   });
-  const closed = nativeCompletion ? createDeferredCore() : undefined;
-  const cleanupScope = nativeCompletion ? createAgentCleanupScope() : undefined;
+  const canHandoff = nativeCompletion || isPeerSessionContinuation(input);
+  const closed = canHandoff ? createDeferredCore() : undefined;
+  const cleanupScope = canHandoff ? createAgentCleanupScope() : undefined;
   const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
     provider: input.provider,
     model: input.modelId,
@@ -116,7 +118,7 @@ export async function runEmbeddedAttempt(
                   closed.resolve();
                 } else {
                   // Uncertain cleanup cannot certify a successor writer, even after a timer.
-                  log.warn(`native completion cleanup remains fenced: runId=${input.runId}`);
+                  log.warn(`internal continuation cleanup remains fenced: runId=${input.runId}`);
                 }
               }
             : undefined,

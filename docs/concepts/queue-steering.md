@@ -74,8 +74,23 @@ If four users send messages while the agent is executing a tool call:
 Steering always targets the current active session run. It does not create a new session, change the active run's tool policy, or split messages by sender. In multi-user channels, inbound prompts already include sender and route context, so the next model call can see who sent each message.
 
 Visible user turns started through the `agent` RPC can also receive compatible
-steering. Direct background turns with optional replies leave new human messages
-queued for a followup turn that can provide the required answer.
+steering. Channel input, including Telegram, resolves the same admitted direct-run
+owner as Control UI input. The captured owner supplies its original source identity;
+unrelated terminal receipts do not make a current turn unsteerable.
+
+A direct peer continuation started by `sessions_send` can yield to authenticated
+human input that cannot share its permissions or reply contract. This is an ordered
+handoff, not a permission upgrade or interrupt: already-started tools finish, their
+results commit, and the peer turn stops before its next model request. Its resources
+settle before the queued human turn runs with its own authority and reply destination.
+The incoming message stays in FIFO followup custody and completed tools are not
+replayed. Once that logical run has already accepted human input, it retains the
+required-answer responsibility through retries and finishes normally rather than
+yielding it away. Read-only or unverified input cannot request this handoff; subagent
+sessions, hidden coordination, and other background sources do not acquire this capability.
+
+Other direct background turns with optional replies leave new human messages queued
+for a followup turn that can provide the required answer.
 
 Different signed-in people with the same permissions can steer each other's
 active turn, including from different browsers or after reconnecting. The turn

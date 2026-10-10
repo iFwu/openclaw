@@ -31,6 +31,10 @@ import {
   createConfiguredBindingRoute,
 } from "./bot-native-command-dispatch.test-support.js";
 import {
+  registerTelegramMalformedTypedCallbackCases,
+  registerTelegramOrdinaryTypedCallbackCases,
+} from "./bot.create-telegram-bot.callback.test-support.js";
+import {
   makeCallbackRetryContext,
   makePrivateTextContext,
   telegramBotInfoForTest,
@@ -334,6 +338,14 @@ async function expectBlockedContentExcluded(params: { edited?: boolean; group?: 
 }
 
 describe("createTelegramBot", () => {
+  const typedCallbackCases = {
+    createTelegramBot: (options: TelegramBotOptions) => createTelegramBot(options),
+    getCallbackHandler,
+    configureOpenDm,
+    loadConfig,
+    requireValue,
+    harness: { replySpy, editMessageReplyMarkupSpy, answerCallbackQuerySpy, sendMessageSpy },
+  };
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
@@ -1690,20 +1702,7 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("skip nightly build tonight");
   });
 
-  it("does not route opaque callback_query payloads as synthetic commands", async () => {
-    await createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-    await callbackHandler(
-      makeCallbackRetryContext({
-        id: "cbq-opaque-1",
-        data: buildTelegramOpaqueCallbackData("/codex permissions yolo"),
-        messageId: 10,
-      }),
-    );
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-1");
-  });
+  registerTelegramOrdinaryTypedCallbackCases(typedCallbackCases);
 
   it("preserves trailing whitespace in OC_MULTI values without routing generic messages", async () => {
     const value = "env|prod ";
@@ -1940,47 +1939,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("terminalizes malformed typed callbacks without raw-text fallthrough", async () => {
-    const data = "tgcb1:invalid";
-    const pluginHandler = vi.fn(async () => ({ handled: true }));
-    registerPluginInteractiveHandler("disabled-typed-owner", {
-      channel: "telegram",
-      namespace: "missing-plugin",
-      handler: pluginHandler,
-    });
-    loadConfig.mockReturnValue({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          capabilities: { inlineButtons: "off" },
-        },
-      },
-    });
-    await createTelegramBot({ token: "tok" });
-    await getCallbackHandler()(
-      makeCallbackRetryContext({
-        id: "cbq-opaque-malformed",
-        data,
-        messageId: 10,
-        message: {
-          reply_markup: { inline_keyboard: [[{ text: "Approve", callback_data: data }]] },
-        },
-      }),
-    );
-
-    expect(pluginHandler).not.toHaveBeenCalled();
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
-      reply_markup: { inline_keyboard: [] },
-    });
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      1234,
-      "This action is no longer available.",
-      undefined,
-    );
-  });
+  registerTelegramMalformedTypedCallbackCases(typedCallbackCases);
 
   it("handles pairing DM flows for new and already-pending requests", async () => {
     loadConfig.mockReturnValue({
