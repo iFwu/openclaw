@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import * as execApprovals from "../../../infra/exec-approvals.js";
 import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import {
+  addSession,
+  deleteSession,
+  getFinishedSession,
+  getSession,
+  markExited,
+} from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -186,6 +192,17 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       text: expect.stringContaining("Active exec sessions:"),
     });
     expect(active.promptForSession).toBe("Visible request");
+
+    markExited(getSession("exec-a")!, 0, null, "completed");
+    const resumed = await prepareEmbeddedAttemptPromptContext({
+      ...fixture.input,
+      attempt: { ...fixture.input.attempt, sessionId: "compacted-successor" },
+      appendOnlyRuntimeContext: true,
+      messages: [...messages, active.runtimeContextMessageForCurrentTurn!],
+    });
+    expect(resumed.runtimeContextMessageForCurrentTurn?.content).toContain("exec-z running");
+    expect(resumed.runtimeContextMessageForCurrentTurn?.content).not.toContain("exec-a running");
+    expect(getFinishedSession("exec-a")).toMatchObject({ exitCode: 0 });
   });
 
   it("carries changed subagent status without rewriting the system prompt", async () => {

@@ -62,6 +62,8 @@ This option supports hidden, native, one-shot runs only. It cannot be combined
 with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
 `expectsCompletionMessage: false`. It does not change the default completion mode.
 
+If a newer input supersedes a private completion turn, retry depends on whether its input was committed to the original conversation. A committed input is retained in history and the old continuation ends as intentional non-delivery, not successful delivery; its durable receipt prevents replay after restart. An input that was not committed remains pending and may retry. Supersession alone does not prove consumption or a visible final reply.
+
 Finished private results remain in the registry until the spawning parent turn
 settles. A normal parent finish releases each ready result for private review;
 `sessions_yield` hands the results to its existing child batch instead. A reset or

@@ -133,14 +133,27 @@ export async function createEmbeddedRunSessionPromptState(input: {
     activateInternalPrompt(basePromptOverride ?? "");
   };
   const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
-  const continueFromCurrentTranscript = (options?: { includeToolFailureInstruction?: boolean }) => {
+  const backgroundExecSessionIds = new Set<string>();
+  const continueFromCurrentTranscript = (options?: {
+    includeToolFailureInstruction?: boolean;
+    backgroundExecSessionIds?: readonly string[];
+  }) => {
     // Raw runs have no transcript history from which to recover the original task.
     if (params.modelRun === true || params.promptMode === "none") {
       return;
     }
-    const prompt = options?.includeToolFailureInstruction
-      ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
-      : CONTINUATION_PROMPT;
+    for (const sessionId of options?.backgroundExecSessionIds ?? []) {
+      backgroundExecSessionIds.add(sessionId);
+    }
+    const prompt = [
+      CONTINUATION_PROMPT,
+      options?.includeToolFailureInstruction ? TOOL_FAILURE_INSTRUCTION : "",
+      backgroundExecSessionIds.size > 0
+        ? `Existing background exec session IDs: ${JSON.stringify([...backgroundExecSessionIds])}. These processes may still be running or may have finished during compaction. Inspect their current state and existing results. Do not start replacement processes merely because the conversation was compacted.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     // Model-only tasks cannot recover their original instructions from the transcript.
     activateInternalPrompt(
       params.promptIsModelOnly && params.prompt.trim() ? `${params.prompt}\n\n${prompt}` : prompt,

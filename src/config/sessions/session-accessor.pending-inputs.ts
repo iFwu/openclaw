@@ -64,10 +64,8 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  readTranscriptMessageByScopedIdempotencyKey,
-  redactTranscriptMessageForStorage,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-message-read.js";
+import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -81,8 +79,8 @@ export type SessionPendingInputReceipt = {
   message: PersistedUserTurnMessage;
   run: <T>(operation: () => T) => T;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
-  completion?: AgentRunTerminalOutcome;
-  complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;
+  completion?: ReturnType<typeof writeSessionInputCompletion>;
+  complete?: (outcome: AgentRunTerminalOutcome) => ReturnType<typeof writeSessionInputCompletion>;
 };
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 

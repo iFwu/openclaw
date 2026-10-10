@@ -19,6 +19,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
+export type UserTurnProcessingCompletion = AgentRunTerminalOutcome & {
+  /** Proven by the receipt owner against the committed keyed input. */
+  inputConsumed?: true;
+};
+
 export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
   | "contentType"
@@ -208,8 +213,10 @@ export type UserTurnTranscriptRecorder = {
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
   }) => Promise<boolean>;
-  getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
-  completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
+  getProcessingCompletion?: () => UserTurnProcessingCompletion | undefined;
+  completeProcessing?: (
+    outcome: AgentRunTerminalOutcome,
+  ) => UserTurnProcessingCompletion | undefined;
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
   isPendingInputConsumed?: () => boolean;
   withPendingInput?: <T>(run: () => T) => T;

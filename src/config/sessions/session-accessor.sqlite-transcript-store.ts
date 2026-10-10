@@ -3,11 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  prepareSqliteQuerySync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import {
@@ -21,13 +17,10 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   createTranscriptIdentityReader,
-  findAssistantTranscriptEventInDatabase,
   readEventTimestamp,
-  readTranscriptEventId,
-  readTranscriptEventMessage,
-  readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { readIdempotencyKeyOwner } from "./session-accessor.sqlite-transcript-message-read.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   deleteTranscriptEventsInTransaction,
@@ -593,75 +586,6 @@ export function updateSqliteTranscriptEventJsonInTransaction(
     sessionId,
     readTranscriptMutationStateInTransaction(database, sessionId).updatedAt,
   );
-}
-
-function readIdempotencyKeyOwner(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-  idempotencyKey: string,
-): { eventId: string; seq: number } | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_event_identities")
-      .select(["event_id", "seq"])
-      .where("session_id", "=", sessionId)
-      .where("message_idempotency_key", "=", idempotencyKey)
-      .orderBy("seq", "desc")
-      .limit(1),
-  );
-  return row ? { eventId: row.event_id, seq: row.seq } : undefined;
-}
-
-export function readTranscriptMessageByScopedIdempotencyKey(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  scope: ResolvedTranscriptScope,
-  idempotencyKey: string,
-  lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
-): { messageId: string; message: unknown } | undefined {
-  if (lookup !== "scan-assistant") {
-    const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
-    return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-  }
-  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
-  if (!found) {
-    return undefined;
-  }
-  const message = readTranscriptEventMessage(found.event);
-  return message
-    ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
-    : undefined;
-}
-
-export function readTranscriptMessageByEventId(
-  database: OpenClawAgentDatabase,
-  scope: ResolvedTranscriptScope,
-  eventId: string,
-): { messageId: string; message: unknown } | undefined {
-  const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
-  return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-}
-
-function readTranscriptMessageByIdentity(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  scope: ResolvedTranscriptScope,
-  identity: { eventId: string; seq: number },
-): { messageId: string; message: unknown } | undefined {
-  const db = getSessionKysely(database.db);
-  const eventRow = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select(transcriptEventJsonSql(database.db).as("event_json"))
-      .where("session_id", "=", scope.sessionId)
-      .where("seq", "=", identity.seq),
-  );
-  if (!eventRow) {
-    return undefined;
-  }
-  const event = JSON.parse(eventRow.event_json) as { message?: unknown };
-  return { messageId: identity.eventId, message: event.message };
 }
 
 function readTranscriptEventIdentity(event: unknown) {

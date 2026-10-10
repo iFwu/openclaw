@@ -3,6 +3,7 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
 } from "../../agents/run-termination.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { readErrorName } from "../../infra/errors.js";
@@ -28,7 +29,7 @@ function isGatewayAbortSignalReason(reason: unknown): boolean {
 export function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): boolean {
   if (!signal.aborted) {
     // The run can cancel its own controller without aborting the Gateway observer.
-    return isAgentRunDirectAbortReason(error);
+    return isAgentRunDirectAbortReason(error) || isAgentRunSupersededAbortReason(error);
   }
   if (isAgentRunRestartAbortReason(signal.reason)) {
     return true;
@@ -44,7 +45,11 @@ export function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal
 
 export function resolveGatewayAgentAbortStopReason(
   signal: AbortSignal,
-): "restart" | "rpc" | "timeout" {
+  cause?: unknown,
+): "restart" | "rpc" | "timeout" | "superseded" {
+  if (!signal.aborted && isAgentRunSupersededAbortReason(cause)) {
+    return "superseded";
+  }
   if (isAgentRunRestartAbortReason(signal.reason)) {
     return "restart";
   }

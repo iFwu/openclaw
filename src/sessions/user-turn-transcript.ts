@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import {
   bindSessionPendingInputSources,
   persistSessionTranscriptTurn,
@@ -39,6 +38,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnOriginalInputCommit,
+  UserTurnProcessingCompletion,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -232,7 +232,7 @@ export function createUserTurnTranscriptRecorder(
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
   let pendingInput: Awaited<ReturnType<typeof stageSessionPendingInput>>;
-  let processingCompletion: Result<AgentRunTerminalOutcome, unknown> | undefined;
+  let processingCompletion: Result<UserTurnProcessingCompletion, unknown> | undefined;
   let staging: Promise<boolean> | undefined;
 
   const applyReplacementText = (

@@ -720,6 +720,74 @@ describe("committed pending input release", () => {
     },
   );
 
+  it.each([false, true])(
+    "only closes superseded private input after committed consumption (consumed=%s)",
+    async (consumed) => {
+      const first = await stagePrivate();
+      if (consumed) {
+        promoteSync(first);
+      }
+      const superseded = Object.assign(
+        buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
+        { inputConsumed: true as const },
+      );
+      const recorded = first.complete!(superseded);
+      expect(recorded.inputConsumed).toBe(consumed ? true : undefined);
+      expect(pendingCount()).toBe(consumed ? 0 : 1);
+      first.finish("interrupted");
+      rotateAgentEventLifecycleGeneration();
+      closeOpenClawAgentDatabasesForTest();
+
+      const retry = await stagePrivate();
+      if (consumed) {
+        expect(retry.completion).toMatchObject({
+          reason: "superseded",
+          inputConsumed: true,
+        });
+        expect(() => retry.run(() => "repeat old completion")).toThrow("already completed");
+        expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
+      } else {
+        expect(retry.completion).toBeUndefined();
+        promoteSync(retry);
+        retry.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+        expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
+      }
+    },
+  );
+
+  it("proves consumption for superseded replay whose receipt still reports queued", async () => {
+    const first = await stagePrivate();
+    promoteSync(first);
+    first.finish("interrupted");
+    const replay = await stagePrivate();
+    expect(replay.state).toBe("queued");
+    const recorded = replay.complete!(
+      buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
+    );
+    expect(recorded.inputConsumed).toBe(true);
+    expect(replay.complete!(buildAgentRunTerminalOutcome({ status: "ok" }))).toEqual(recorded);
+    replay.finish("interrupted");
+    const terminal = await stagePrivate();
+    expect(terminal.completion).toEqual(recorded);
+    expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
+  });
+
+  it("does not retain superseded consumption proof after transaction rollback", async () => {
+    const first = await stagePrivate();
+    const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" });
+    expect(() =>
+      runOpenClawAgentWriteTransaction(() => {
+        promoteSync(first);
+        expect(first.complete!(outcome).inputConsumed).toBe(true);
+        throw new Error("rollback private handoff");
+      }, options()),
+    ).toThrow("rollback private handoff");
+    expect(completionRows()).toEqual([]);
+    expect(first.state).toBe("queued");
+    expect(first.complete!(outcome).inputConsumed).toBeUndefined();
+    expect(pendingCount()).toBe(1);
+  });
+
   it("retries a restart interruption instead of treating it as an operator stop", async () => {
     const first = await stagePrivate();
     promoteSync(first);

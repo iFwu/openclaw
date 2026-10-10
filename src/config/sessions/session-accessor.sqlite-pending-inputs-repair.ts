@@ -1,9 +1,9 @@
-import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { UserTurnProcessingCompletion } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   ensureSessionInputCompletionsSchema,
@@ -159,15 +159,15 @@ export function copySessionInputCompletionsForRepair(
       ) {
         throw new Error("Canonical repair found conflicting input completions");
       }
-      // SAFETY: the feature-owned receipt writer persists typed terminal outcomes.
-      const existingOutcome = JSON.parse(existing.outcome_json) as AgentRunTerminalOutcome;
+      // SAFETY: the feature-owned receipt writer persists typed processing completion receipts.
+      const existingOutcome = JSON.parse(existing.outcome_json) as UserTurnProcessingCompletion;
       // A Stop is final even though it is not successful. Never replace a final
       // destination receipt with an older/retryable source attempt.
       if (isFinalInputCompletion(existingOutcome)) {
         continue;
       }
-      // SAFETY: repair preserves feature-owned typed outcomes, just like the receipt reader.
-      const outcome = JSON.parse(row.outcome_json) as AgentRunTerminalOutcome;
+      // SAFETY: repair preserves feature-owned processing receipts, just like the receipt reader.
+      const outcome = JSON.parse(row.outcome_json) as UserTurnProcessingCompletion;
       if (!isFinalInputCompletion(outcome) && existing.completed_at >= row.completed_at) {
         continue;
       }
