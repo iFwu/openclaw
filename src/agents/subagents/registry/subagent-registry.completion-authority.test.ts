@@ -16,11 +16,11 @@ import {
 } from "../../../gateway/subagent-completion-tool-handoff.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
+  bindGatewayContextResolver,
   getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -31,8 +31,10 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
-import { createAdmittedGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
@@ -85,7 +87,9 @@ describe("registered completion source custody", () => {
       context.resolveGatewayContext = () => context;
       let sourceCurrent = true;
       const source = createApprovalRequesterSource(() => {
-        if (!sourceCurrent) throw new Error("user source revoked");
+        if (!sourceCurrent) {
+          throw new Error("user source revoked");
+        }
       });
       const owner = prepareAgentRunAdmission({
         cfg: {},

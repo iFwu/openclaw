@@ -8,7 +8,7 @@ import {
 import {
   resolveSessionAgentIdStrict,
   resolveSessionAgentIdsStrict,
-} from "../agents/agent-scope.js";
+} from "../agents/session-agent-id-resolution.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 
 export {
@@ -17,7 +17,7 @@ export {
   resolveAgentDir,
   resolveDefaultAgentId,
   tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+} from "../agents/agent-scope-config.js";
 
 export { resolveSessionAgentIdStrict, resolveSessionAgentIdsStrict };
 
