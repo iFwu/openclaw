@@ -53,6 +53,21 @@ type ReplyDeliveryParams = {
   log: EmbeddedAgentSubscribeContext["log"];
 };
 
+export function sealAssistantAnswerSegment(state: EmbeddedAgentSubscribeContext["state"]): void {
+  if (
+    !state.lastAssistant ||
+    state.answerSegments.at(-1)?.messageEnd === state.assistantMessageIndex
+  ) {
+    return;
+  }
+  state.answerSegments.push({
+    textEnd: state.assistantTexts.length,
+    messageEnd: state.assistantMessageIndex,
+    finalMessageStart: state.assistantMessageStartIndex,
+    lastAssistant: state.lastAssistant,
+  });
+}
+
 export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams) {
   const assistantTexts = state.assistantTexts;
   const deferredAssistantScopes: AssistantStreamScope[] = [];

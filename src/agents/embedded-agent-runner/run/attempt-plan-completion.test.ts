@@ -187,7 +187,10 @@ it.each([
       currentAssistant: assistant ?? null,
       sessionKey: "agent:main:main",
     });
-    expect(payloads.map((payload) => payload.text)).toEqual(["Both repairs verified."]);
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Stopped: one repair remains.",
+      "Both repairs verified.",
+    ]);
     if (nonStreamedMedia) {
       const pendingMedia = prepared.subscription.getPendingToolMediaReply();
       expect(pendingMedia).toEqual(expectedPendingMedia);
@@ -200,12 +203,13 @@ it.each([
         }),
       ).toMatchObject([
         {
-          text: "Both repairs verified.",
+          text: "Stopped: one repair remains.",
           mediaUrl,
           mediaUrls: [mediaUrl],
           audioAsVoice: true,
           trustedLocalMedia: true,
         },
+        { text: "Both repairs verified." },
       ]);
     }
     expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(3);

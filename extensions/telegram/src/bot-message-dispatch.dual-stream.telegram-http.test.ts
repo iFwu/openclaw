@@ -321,6 +321,30 @@ describe("Telegram independent progress and answer streams through HTTP", () => 
       acceptedCalls.filter((call) => call.method === "sendMessage" && call.fields.text === first),
     ).toHaveLength(1);
   });
+  it("retains checkpoint and final answers when a completion check resumes", async () => {
+    const { streams, telegramDeps } = captureStreams();
+    const checkpoint = setReplyPayloadMetadata(
+      { text: "Checkpoint: the first completed explanation must not be lost." },
+      { assistantMessageIndex: 0, precedingInputAnswer: true },
+    );
+    const final = setReplyPayloadMetadata(
+      { text: "Final: the completion check identified a remaining decision." },
+      { assistantMessageIndex: 1 },
+    );
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onPartialReply?.({ text: checkpoint.text });
+        await streams[1]?.flush();
+        await options?.onAssistantMessageStart?.();
+        await options?.onPartialReply?.({ text: final.text });
+        await streams[1]?.flush();
+      },
+      { mode: "progress", toolProgress: false, telegramDeps, finalReply: [checkpoint, final] },
+    );
+    expect([...visibleMessages.values()]).toEqual([checkpoint.text, final.text]);
+    expect(new Set(visibleMessages.keys()).size).toBe(2);
+  });
+
   it("keeps indexed queued answers and the final preview distinct", async () => {
     const first = setReplyPayloadMetadata(
       { text: "First queued assistant answer." },

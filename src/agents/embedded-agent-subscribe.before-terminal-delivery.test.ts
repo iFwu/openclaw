@@ -704,32 +704,60 @@ describe("deferred reply supersession", () => {
   });
 });
 
-it.each([false, true])("keeps checkpoint delivery nonterminal (buffered=%s)", async (buffered) => {
+it.each([false, true].flatMap((buffered) => [false, true].map((block) => ({ buffered, block }))))(
+  "keeps checkpoint answers nonterminal and durable (buffered=$buffered, block=$block)",
+  async ({ buffered, block }) => {
+    const decide = vi
+      .fn()
+      .mockResolvedValueOnce({ continueCurrentTurn: true })
+      .mockResolvedValueOnce(undefined);
+    const h = setup({ onBeforeTerminalDelivery: decide, deferTerminalDelivery: buffered, block });
+    h.message(answer("Checkpoint: a repair remains."));
+    await h.drain();
+    expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
+      !buffered,
+    );
+    h.end();
+    await h.drain();
+    expect(h.lifecycleEnded()).toBe(false);
+    expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
+      true,
+    );
+    h.emit({ type: "agent_start" });
+    h.message(answer("All repairs verified."));
+    await h.drain();
+    expect(h.assistantEvents().some((data) => data.text === "All repairs verified.")).toBe(
+      !buffered,
+    );
+    h.end();
+    await h.drain();
+    expect(h.lifecycleEnded()).toBe(true);
+    expect(payloads(h.subscription).map((payload) => payload.text)).toEqual([
+      "Checkpoint: a repair remains.",
+      "All repairs verified.",
+    ]);
+  },
+);
+
+it("does not duplicate an accepted checkpoint when another user input is admitted", async () => {
   const decide = vi
     .fn()
     .mockResolvedValueOnce({ continueCurrentTurn: true })
     .mockResolvedValueOnce(undefined);
-  const h = setup({ onBeforeTerminalDelivery: decide, deferTerminalDelivery: buffered });
-  h.message(answer("Checkpoint: a repair remains."));
-  await h.drain();
-  expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
-    !buffered,
-  );
+  const h = setup({ onBeforeTerminalDelivery: decide, block: false });
+  h.message(answer("The completed checkpoint."));
   h.end();
   await h.drain();
-  expect(h.lifecycleEnded()).toBe(false);
-  expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
-    true,
-  );
+  const user = { role: "user", content: "Additional input", timestamp: 0 };
+  h.emit({ type: "message_start", message: user });
+  h.emit({ type: "message_end", message: user });
   h.emit({ type: "agent_start" });
-  h.message(answer("All repairs verified."));
-  await h.drain();
-  expect(h.assistantEvents().some((data) => data.text === "All repairs verified.")).toBe(!buffered);
+  h.message(answer("The answer to the additional input."));
   h.end();
   await h.drain();
-  expect(h.lifecycleEnded()).toBe(true);
   expect(payloads(h.subscription).map((payload) => payload.text)).toEqual([
-    "All repairs verified.",
+    "The completed checkpoint.",
+    "The answer to the additional input.",
   ]);
 });
 

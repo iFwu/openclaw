@@ -30,6 +30,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
+import { sealAssistantAnswerSegment } from "./embedded-agent-subscribe.reply-delivery.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
   createThinkingTagStreamState,
@@ -62,12 +63,7 @@ export function handleMessageEnd(
 ): void | Promise<void> {
   const msg = evt.message;
   if (msg.role === "user" && ctx.state.lastAssistant) {
-    ctx.state.answerSegments.push({
-      textEnd: ctx.state.assistantTexts.length,
-      messageEnd: ctx.state.assistantMessageIndex,
-      finalMessageStart: ctx.state.assistantMessageStartIndex,
-      lastAssistant: ctx.state.lastAssistant,
-    });
+    sealAssistantAnswerSegment(ctx.state);
     ctx.state.sourceReplyDeliveryState = "missing";
     ctx.state.messageToolOnlySourceReplyDelivered = false;
     ctx.state.deterministicApprovalPromptPending = false;

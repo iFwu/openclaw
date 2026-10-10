@@ -33,6 +33,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { finalizeToolActivity } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { sealAssistantAnswerSegment } from "./embedded-agent-subscribe.reply-delivery.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { summarizeToolValidationError } from "./tool-error-summary.js";
@@ -355,8 +356,9 @@ export function handleAgentEnd(
   };
 
   const continueCurrentTurn = () => {
-    // Publish this checkpoint normally, but keep the run and its delivery owner
-    // alive until the already-queued same-prompt follow-up settles.
+    // Preview-only channels need the accepted checkpoint in the final payload too.
+    // Seal it before callbacks can advance the message boundary; keep the run nonterminal.
+    sealAssistantAnswerSegment(ctx.state);
     ctx.releaseDeferredReplies();
     finalizeAgentEnd();
     return ctx.flushBlockReplyBuffer();

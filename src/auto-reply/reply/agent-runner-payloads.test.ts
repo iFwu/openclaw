@@ -1322,6 +1322,22 @@ describe("buildReplyPayloads media filter integration", () => {
     },
 
     {
+      name: "dedupes an accepted checkpoint without dropping its later final",
+      directBlockPayloads: [
+        setReplyPayloadMetadata({ text: "checkpoint" }, { assistantMessageIndex: 1 }),
+      ],
+      payloads: [
+        setReplyPayloadMetadata(
+          { text: "checkpoint" },
+          { assistantMessageIndex: 1, precedingInputAnswer: true },
+        ),
+        setReplyPayloadMetadata({ text: "latest" }, { assistantMessageIndex: 2 }),
+      ],
+      params: { blockStreamingEnabled: true },
+      expected: { text: "latest" },
+    },
+
+    {
       name: "keeps only final media when the text was sent as a direct block",
       directBlockPayloads: [{ text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
