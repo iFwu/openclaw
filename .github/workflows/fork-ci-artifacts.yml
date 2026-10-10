@@ -5,6 +5,10 @@ on:
     branches: [ifwu-fork]
   workflow_dispatch:
     inputs:
+      base_sha:
+        description: Exact ancestor commit for changed checks (use the task's reviewed base)
+        type: string
+        required: true
       verify_download:
         description: Verify downloaded artifacts on a fresh runner
         type: boolean
@@ -24,6 +28,56 @@ env:
   OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0"
 
 jobs:
+  checks:
+    if: github.repository == 'iFwu/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+      - name: Validate changed-check range
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ || "$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then
+            echo "::error::A concrete 40-character base SHA is required; do not infer a base from a moving branch."
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$BASE_SHA" != "$HEAD_SHA"
+          git cat-file -e "$BASE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          printf '### Changed-check source\n- Base: `%s`\n- Head: `%s`\n' "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.8.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Configure isolated verification state
+        run: |
+          echo "OPENCLAW_STATE_DIR=$RUNNER_TEMP/openclaw-ci-check-state" >> "$GITHUB_ENV"
+          echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/openclaw-ci-check-state/openclaw.json" >> "$GITHUB_ENV"
+      - name: Check tracked private keys
+        run: node scripts/detect-private-keys.mts
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run changed checks
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base }}
+          HEAD_SHA: ${{ steps.scope.outputs.head }}
+        run: node scripts/check-changed.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --timed
+
   build:
     if: github.repository == 'iFwu/openclaw'
     runs-on: ubuntu-24.04
@@ -31,6 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-node-env
         with:
