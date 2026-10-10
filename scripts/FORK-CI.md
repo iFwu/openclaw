@@ -91,7 +91,15 @@ required before deployment regardless of this option. Logs and artifacts are
 public; retain only necessary non-private material. Artifacts expire after seven
 days.
 
-Retrieve a completed run with the native GitHub CLI:
+Once `build` succeeds and its artifact upload is complete, retrieve that exact
+run's artifact with the native GitHub CLI even if `checks` is still running.
+Identity/checksum validation and extraction into a separate staging directory
+can overlap static checks, local regressions, and read-only dependency/recovery
+preflight. Do not extract into an active validation checkout or the live install.
+This is prefetching, not candidate acceptance: all required CI/local checks must
+pass before deployment, and mutable destination facts must be rechecked then.
+Keep installation and artifact-dependent closure/CLI checks after their inputs
+are ready, under the destination's existing resource and ownership rules.
 
 ```bash
 gh run list --repo iFwu/openclaw --workflow fork-ci-artifacts.yml --branch ifwu-fork
