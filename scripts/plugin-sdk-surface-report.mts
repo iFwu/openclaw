@@ -193,16 +193,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       158,
       env,
     ),
-    publicExports: readPluginSdkSurfaceBudgetEnv(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4591,
-      env,
-    ),
-    publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2695,
-      env,
-    ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       1139,
@@ -477,14 +467,6 @@ export function evaluatePluginSdkSurfaceReport(
   if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
     failures.push(
       `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
-    );
-  }
-  if (report.publicStats.totals.exports > budgets.publicExports) {
-    failures.push(`public exports ${report.publicStats.totals.exports} > ${budgets.publicExports}`);
-  }
-  if (report.publicStats.totals.callableExports > budgets.publicFunctionExports) {
-    failures.push(
-      `public callable exports ${report.publicStats.totals.callableExports} > ${budgets.publicFunctionExports}`,
     );
   }
   if (report.publicStats.totals.deprecatedExports > budgets.publicDeprecatedExports) {

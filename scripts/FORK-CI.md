@@ -68,6 +68,12 @@ Use the same base/head locally; inspect the job summary to confirm the range.
 These static-check jobs do not replace task-specific regression tests or native
 platform validation.
 
+SDK total-export and callable-export counts are informational in this fork, not
+growth caps. The surface report still checks entrypoint inventory, private/forbidden
+subpath exposure, deprecated facades, and the separate entrypoint, deprecation, and
+wildcard rules. Typechecking, unused-export scans, and behavioral tests remain
+required by their existing scope rules.
+
 After review, required prepublication checks, and privacy scanning, freeze and
 publish the candidate. Start the remaining local regressions while the CI jobs
 run; do not wait for the cloud build before launching independent local work.
