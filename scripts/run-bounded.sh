@@ -74,7 +74,7 @@ fit_available=false
 profile=shared-host
 if [[ "${1:-}" == --help || $# == 0 ]]; then
   printf '%s\n' \
-    'Usage: bash scripts/run-bounded.sh [--profile shared-host|dedicated-test|dedicated-heavy|dedicated-large] [--memory-gib 1..10] [--reserve-gib 1..4] [--large-memory-gib 24..28] [--fit-available] [--receipt path] [--] command [args...]' \
+    'Usage: bash scripts/run-bounded.sh [--profile shared-host|dedicated-test|dedicated-heavy|dedicated-large] [--memory-gib 1..11.5] [--reserve-gib 1..4] [--large-memory-gib 24..28] [--fit-available] [--receipt path] [--] command [args...]' \
     'Linux + systemd user manager + cgroup v2 required; never runs uncapped.' \
     'Default shared-host: min(10 GiB, available memory minus 4 GiB), rounded down; no swap.' \
     'Shared-host: one test worker/project and an exclusive host-user lock.' \
@@ -86,8 +86,8 @@ if [[ "${1:-}" == --help || $# == 0 ]]; then
     'All profiles retain 4 GiB headroom by default; --reserve-gib explicitly selects 1..4 GiB.' \
     '--large-memory-gib selects 24..28 GiB only for dedicated-large; its configured slice must have task budget plus 2 GiB.' \
     '--fit-available caps dedicated-large tasks at min(ceiling, available minus reserve), with a 14 GiB minimum; the slice still follows the ceiling.' \
-    'Use reduced reserve only on an operator-authorized disposable validation host; shared defaults are unchanged.' \
-    '--memory-gib applies only to shared-host.' \
+    'Use reduced reserve only on an explicitly operator-authorized host; shared defaults are unchanged.' \
+    '--memory-gib applies only to shared-host, in 0.5 GiB steps; values above 10 GiB require explicit operator authorization.' \
     'Node/Go soft limits: half the budget; Go parallelism at most 2 (4 for dedicated-large), GOGC 100.' \
     'tsdown owns its child heap budget and can override the inherited Node heap; the cgroup hard cap remains.' \
     'Examples: pnpm test:bounded src/agents/model-fallback.test.ts' \
@@ -123,7 +123,7 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --memory-gib)
       memory_gib=${2:-}
-      [[ "$memory_gib" =~ ^([1-9]|10)$ ]] || { echo '[bounded] --memory-gib must be 1..10' >&2; exit 2; }
+      [[ "$memory_gib" =~ ^([1-9]|1[01])(\.5)?$ ]] || { echo '[bounded] --memory-gib must be 1..11.5 in 0.5 GiB steps' >&2; exit 2; }
       shift 2 ;;
     --) shift; break ;;
     --*) echo "[bounded] unknown option: $1" >&2; exit 2 ;;
@@ -217,7 +217,10 @@ if [[ "$memory_gib" == auto ]]; then
     memory_gib=10
   fi
 fi
-if (( memory_gib < 1 || available_kib < (memory_gib + reserve_gib) * 1048576 )); then
+memory_mib=$((${memory_gib%%.*} * 1024))
+[[ "$memory_gib" != *.5 ]] || memory_mib=$((memory_mib + 512))
+available_mib=$((available_kib / 1024))
+if (( memory_mib < 1024 || available_mib < memory_mib + reserve_gib * 1024 )); then
   echo "[bounded] insufficient available memory for the task plus ${reserve_gib} GiB reserve; wait or narrow the workload (shared-host also accepts an explicit budget)" >&2
   admission_refused=true
   exit 75
@@ -227,10 +230,10 @@ free -h
 echo '[bounded] largest current processes (KiB RSS):' >&2
 ps -eo pid,rss,comm --sort=-rss | sed -n '1,8p'
 
-heap_mib=$((memory_gib * 512))
+heap_mib=$((memory_mib / 2))
 go_mib=$heap_mib
 go_procs=1
-if (( memory_gib >= 6 )); then
+if (( memory_mib >= 6144 )); then
   go_procs=2
 fi
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$heap_mib"
@@ -252,8 +255,9 @@ fi
 unit="openclaw-check-$(date +%s)-$$.scope"
 echo "[bounded] $unit: ${memory_gib} GiB, swap 0, workers $workers/project 1" >&2
 echo "[bounded] Node heap ${heap_mib} MiB, Go memory ${go_mib} MiB, GOMAXPROCS=$GOMAXPROCS GOGC=$GOGC" >&2
+memory_bytes=$((memory_mib * 1048576))
 systemd-run --user --scope --quiet --expand-environment=no --unit="$unit" "${slice_args[@]}" \
-  --property="MemoryMax=${memory_gib}G" --property=MemorySwapMax=0 \
+  --property="MemoryMax=$memory_bytes" --property=MemorySwapMax=0 \
   bash -euo pipefail -c '
     expected=$1
     unit=$2
@@ -286,4 +290,4 @@ systemd-run --user --scope --quiet --expand-environment=no --unit="$unit" "${sli
     echo "[bounded] verified memory.max=$actual memory.swap.max=$swap" >&2
     [[ -z "$receipt" ]] || touch "$receipt.started"
     exec "$@"
-  ' bounded "$((memory_gib * 1073741824))" "$unit" "$slice_group" "$receipt" "$slice_memory" "$slice_cpus" "$@"
+  ' bounded "$memory_bytes" "$unit" "$slice_group" "$receipt" "$slice_memory" "$slice_cpus" "$@"

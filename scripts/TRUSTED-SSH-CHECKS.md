@@ -23,12 +23,12 @@ and resolve the current checkout before each authorized run.
 
 | Purpose                          | Location                                                                                                                             |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Linux checks                     | `ssh linux-build-host`, user `build-user`, Ubuntu 24.04 / WSL2                                                                                 |
-| Windows host inspection          | `ssh windows-build-host` (Git Bash; invoke PowerShell explicitly if needed)                                                                   |
-| Persistent verification checkout | `/home/build-user/openclaw-validation` on WSL                                                                                           |
-| Editing candidate on dev         | `/path/to/openclaw-candidate`                                                                  |
+| Linux checks                     | `ssh linux-build-host`, user `build-user`, Ubuntu 24.04 / WSL2                                                                       |
+| Windows host inspection          | `ssh windows-build-host` (Git Bash; invoke PowerShell explicitly if needed)                                                          |
+| Persistent verification checkout | `/home/build-user/openclaw-validation` on WSL                                                                                        |
+| Editing candidate on dev         | `/path/to/openclaw-candidate`                                                                                                        |
 | Crabbox tooling                  | Independently prepared candidate/toolroot; see [prerequisites](REMOTE-CHECKS.md#tooling-checkout-and-package-boundary-prerequisites) |
-| Static Crabbox TCP endpoint      | Operator-owned TCP tunnel; resolve its endpoint outside this repository                                                                                           |
+| Static Crabbox TCP endpoint      | Operator-owned TCP tunnel; resolve its endpoint outside this repository                                                              |
 
 Prepare the candidate or an isolated toolroot through the maintained
 package-boundary owners linked above; do not reuse unrelated worktrees.
@@ -62,6 +62,37 @@ remote script on stdin.
 Resolve toolchain versions from the candidate's `package.json` and lockfile.
 The 9.7 preparation used Node 26.8.1 and pnpm 12.5.1; verify the target versions
 before execution. Do not install into a live Gateway checkout.
+
+## Explicit shared-host memory override
+
+The shared-host default remains `min(10 GiB, floor(MemAvailableGiB) - 4)`.
+An explicitly operator-authorized host can select `--memory-gib` from 1 to
+11.5 GiB in half-GiB steps. The wrapper compares integer MiB, passes an exact
+byte limit to systemd, and verifies that limit in the task cgroup. An 11.5 GiB
+task sets `memory.max=12348030976`, Node and Go soft budgets of 5888 MiB,
+zero task swap, and one worker/project. The host-user lock still serializes
+shared-host checks across worktrees; receipts and descendant cleanup are unchanged.
+
+On an operator-authorized host with approximately 17.1 GiB `MemTotal`, the
+11.5 GiB task cap leaves approximately 5.6 GiB total for the system and services,
+including their current allocations. `MemAvailable` already excludes memory
+currently used by those services. The operator can explicitly choose
+`--reserve-gib 1` to retain 1 GiB of additional available-memory headroom rather
+than count the existing service allocation twice. This is a host-specific
+exception, not a silent reduction of the default 4 GiB reserve. Admission still
+requires at least 12.5 GiB currently available; 12.49 GiB is refused before the
+payload starts. A default-reserve 11.5 GiB request requires 15.5 GiB available.
+Inspect current host memory and live service allocations before using the override;
+no system or service limits are changed by this option.
+
+```bash
+bash scripts/run-bounded.sh --memory-gib 11.5 --reserve-gib 1 \
+  --receipt /tmp/openclaw-check/receipt.json node scripts/run-vitest.mjs <test-file>
+```
+
+Use a new receipt path in an existing user-owned directory. A successful admission
+or a mocked invocation is not proof of the effective cap: retain the real scope's
+verified `memory.max` and `memory.swap.max` output and its cleanup receipt.
 
 ## Disposable host memory override
 
