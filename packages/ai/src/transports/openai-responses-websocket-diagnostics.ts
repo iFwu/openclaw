@@ -34,7 +34,7 @@ const diagnosticErrorCodes = new Set([
   "rate_limit_exceeded",
 ]);
 
-function summarizeWebSocketFailureCause(error: unknown): Record<string, unknown> {
+function summarizeWebSocketFailureCause(error: unknown) {
   const causes: Array<{ name: string; code?: string; status?: number }> = [];
   const seen = new Set<unknown>();
   let current = error;
