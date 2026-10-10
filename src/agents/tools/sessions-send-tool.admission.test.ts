@@ -110,18 +110,21 @@ describe("sessions_send dispatch admission", () => {
       { agentId: "main", sessionKey: key },
       { sessionId: "private-topic-session", updatedAt: 1 },
     );
-    const callGateway = vi.fn<AgentToolGatewayRequestCaller>(async (request) => {
-      if (request.method === "sessions.resolve") {
-        return { key, agentId: "main" };
-      }
-      if (request.method === "sessions.list") {
-        return { sessions: [{ key, agentId: "main", kind: "direct" }] };
-      }
-      if (request.method === "agent") {
-        return { runId, status: "accepted" };
-      }
-      throw new Error(`Unexpected Gateway method: ${request.method}`);
-    });
+    const callGateway = vi.fn();
+    callGateway.mockImplementation(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        if (request.method === "sessions.resolve") {
+          return { key, agentId: "main" };
+        }
+        if (request.method === "sessions.list") {
+          return { sessions: [{ key, agentId: "main", kind: "direct" }] };
+        }
+        if (request.method === "agent") {
+          return { runId, status: "accepted" };
+        }
+        throw new Error(`Unexpected Gateway method: ${request.method}`);
+      },
+    );
     const result = await createSessionsSendTool({
       agentSessionKey: requesterSessionKey,
       config,
