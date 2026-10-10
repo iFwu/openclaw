@@ -29,9 +29,15 @@ env:
 
 jobs:
   checks:
+    name: checks (${{ matrix.phase }})
     if: github.repository == 'iFwu/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        phase: [guards-types, lint, audits]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,7 +82,8 @@ jobs:
         env:
           BASE_SHA: ${{ steps.scope.outputs.base }}
           HEAD_SHA: ${{ steps.scope.outputs.head }}
-        run: node scripts/check-changed.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --timed
+          CHECK_PHASE: ${{ matrix.phase }}
+        run: node scripts/check-changed.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --phase "$CHECK_PHASE" --timed
 
   build:
     if: github.repository == 'iFwu/openclaw'

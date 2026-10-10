@@ -9,7 +9,6 @@ import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/f
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -62,7 +61,6 @@ const resolveAgentWorkspaceDirMock = vi.fn(
   (cfg: { agents?: { list?: Array<{ id?: string; workspace?: string }> } }, agentId: string) =>
     cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ?? "/tmp/workspace",
 );
-const resolveEffectiveModelFallbacksMock = vi.fn();
 const resolveSubagentModelFallbacksOverrideMock = vi.fn();
 export const resolveAgentModelFallbacksOverrideMock = vi.fn();
 export const resolveAgentSkillsFilterMock = vi.fn();
@@ -280,7 +278,6 @@ vi.mock("../../agents/model-fallback-runner.js", async (importOriginal) => ({
 
 vi.mock("./run-execution.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run-execution.runtime.js")>()),
-  resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSubagentModelFallbacksOverride: resolveSubagentModelFallbacksOverrideMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
   getCliSessionBinding: getCliSessionBindingMock,
@@ -473,22 +470,6 @@ function resetRunConfigMocks(): void {
     version: 42,
   });
   resolveAgentConfigMock.mockReturnValue(undefined);
-  resolveEffectiveModelFallbacksMock.mockReset();
-  resolveEffectiveModelFallbacksMock.mockImplementation(
-    ({ cfg, agentId, hasSessionModelOverride, modelOverrideSource }) => {
-      const agentFallbacksOverride = resolveAgentModelFallbacksOverrideMock(cfg, agentId) as
-        | string[]
-        | undefined;
-      if (!hasSessionModelOverride) {
-        return agentFallbacksOverride;
-      }
-      if (modelOverrideSource !== "auto") {
-        return [];
-      }
-      const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
-      return agentFallbacksOverride ?? defaultFallbacks;
-    },
-  );
   resolveSubagentModelFallbacksOverrideMock.mockReset();
   resolveSubagentModelFallbacksOverrideMock.mockImplementation((cfg, agentId) => {
     const agentConfig = resolveAgentConfigMock(cfg, agentId) as
@@ -584,6 +565,7 @@ function resetRunConfigMocks(): void {
         agentDir: params.agentDir ?? "/tmp/agent-dir",
         workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId),
         config: params.config,
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
         modelCatalog: {
           entries: await loadModelCatalogMock(params),
           routeVariants: [],

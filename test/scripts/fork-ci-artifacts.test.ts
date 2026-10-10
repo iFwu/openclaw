@@ -17,6 +17,7 @@ type Step = {
 };
 type Job = {
   needs?: string | string[];
+  strategy?: { "fail-fast": boolean; "max-parallel": number; matrix: { phase: string[] } };
   steps: Step[];
   "continue-on-error"?: boolean;
 };
@@ -33,13 +34,17 @@ it("runs static checks independently of build and retains artifact-dependent ver
     expect(checkout?.with?.ref).toBe("${{ github.sha }}");
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
   }
+  expect(checks.strategy?.matrix.phase).toEqual(["guards-types", "lint", "audits"]);
+  expect(checks.strategy?.["fail-fast"]).toBe(false);
+  expect(checks.strategy?.["max-parallel"]).toBe(3);
   expect(workflow.jobs["verify-download"].needs).toBe("build");
   const setup = checks.steps.find((step) => step.uses === "./.github/actions/setup-node-env");
   expect(setup?.with?.["semantic-checks"]).toBe("true");
   const check = checks.steps.find((step) => step.name === "Run changed checks");
   expect(check?.["continue-on-error"]).not.toBe(true);
+  expect(check?.env?.CHECK_PHASE).toBe("${{ matrix.phase }}");
   expect(check?.run).toBe(
-    'node scripts/check-changed.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --timed',
+    'node scripts/check-changed.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --phase "$CHECK_PHASE" --timed',
   );
 });
 

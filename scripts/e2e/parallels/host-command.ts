@@ -583,7 +583,3 @@ function runPosixTimedCommandSync(
   });
   return { controlPrefix, result };
 }
-
-export function sh(script: string, options: RunOptions = {}): CommandResult {
-  return run("bash", ["-lc", script], options);
-}

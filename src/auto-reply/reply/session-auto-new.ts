@@ -21,7 +21,7 @@ const MAX_STATE_CHARS = 16_000;
 // Diagnostics are emitted only for opted-in sessions.
 const log = createSubsystemLogger("session-auto-new");
 
-export type JevLogger = {
+type JevLogger = {
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -59,7 +59,7 @@ export type JevCorrelation = {
   agentId?: string;
 };
 
-export type SessionAutoNewDecision = "continue" | "new" | "uncertain";
+type SessionAutoNewDecision = "continue" | "new" | "uncertain";
 
 export type SessionAutoNewCandidate = {
   sessionKey: string;
@@ -321,7 +321,7 @@ function classifyTransportFailure(params: {
   return "network_error";
 }
 
-export async function evaluateJevSessionDependency(params: {
+async function evaluateJevSessionDependency(params: {
   apiKey: string;
   signal?: AbortSignal;
   state: string;
@@ -513,11 +513,17 @@ const defaultDependencies: SessionAutoNewDependencies = {
 
 let runtimeDependencies = defaultDependencies;
 
-export const testing = {
-  setDependencies(overrides?: Partial<SessionAutoNewDependencies>): void {
-    runtimeDependencies = { ...defaultDependencies, ...overrides };
-  },
-};
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  // SAFETY: this test-only symbol stores this module's own API on the extensible global object.
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionAutoNewTestApi")] = {
+    evaluateJevSessionDependency,
+    testing: {
+      setDependencies(overrides?: Partial<SessionAutoNewDependencies>): void {
+        runtimeDependencies = { ...defaultDependencies, ...overrides };
+      },
+    },
+  };
+}
 
 async function checkPendingInteraction(
   dependencies: SessionAutoNewDependencies,

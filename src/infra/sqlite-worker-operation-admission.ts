@@ -46,7 +46,7 @@ export type SqliteWorkerAdmissionRequest = {
   facts: unknown;
 };
 
-export type SqliteWorkerEffectAttempt = {
+type SqliteWorkerEffectAttempt = {
   status: "started" | "completed" | "unknown";
   outcome?: unknown;
   error?: unknown;

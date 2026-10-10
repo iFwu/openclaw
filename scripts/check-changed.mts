@@ -65,7 +65,10 @@ type CiLintSelection = {
   central: boolean;
 };
 
+type ChangedCheckPhase = "all" | "guards-types" | "lint" | "audits";
+
 type ChangedCheckPlanOptions = {
+  phase?: ChangedCheckPhase;
   typecheckResult?: ChangedLaneResult;
   lintOnly?: boolean;
   lintSelection?: CiLintSelection;
@@ -476,6 +479,9 @@ export function createChangedCheckPlan(
   result: ChangedLaneResult,
   options: ChangedCheckPlanOptions = {},
 ) {
+  if (options.lintOnly && options.phase && options.phase !== "all") {
+    throw new Error("CI lint selection cannot be combined with a changed-check phase");
+  }
   const commands: ChangedCheckCommand[] = [];
   const broadAudits = new Set<ChangedCheckCommand>();
   const typechecks = new Set<ChangedCheckCommand>();
@@ -580,12 +586,20 @@ export function createChangedCheckPlan(
     const prefix = commands.slice(0, end);
     // These audits produce diagnostics, not compiler inputs. Defer them without
     // moving compiler prerequisites or overlapping their resource-heavy processes.
+    const ordered = [
+      ...prefix.filter((command) => !broadAudits.has(command)),
+      ...prefix.filter((command) => broadAudits.has(command)),
+      ...commands.slice(end),
+    ];
     return {
-      commands: [
-        ...prefix.filter((command) => !broadAudits.has(command)),
-        ...prefix.filter((command) => broadAudits.has(command)),
-        ...commands.slice(end),
-      ],
+      commands: ordered.filter((command) => {
+        const phase = broadAudits.has(command)
+          ? "audits"
+          : lintChecks.has(command)
+            ? "lint"
+            : "guards-types";
+        return !options.phase || options.phase === "all" || options.phase === phase;
+      }),
       summary,
     };
   };
@@ -1646,6 +1660,7 @@ function parseArgs(argv: string[]) {
   const args: {
     base?: string;
     head: string;
+    phase: string;
     staged: boolean;
     dryRun: boolean;
     timed: boolean;
@@ -1654,6 +1669,7 @@ function parseArgs(argv: string[]) {
     paths: string[];
   } = {
     head: "HEAD",
+    phase: "all",
     staged: false,
     dryRun: false,
     timed: false,
@@ -1667,6 +1683,7 @@ function parseArgs(argv: string[]) {
     [
       stringFlag("--base", "base"),
       stringFlag("--head", "head"),
+      stringFlag("--phase", "phase"),
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
@@ -1688,7 +1705,11 @@ function parseArgs(argv: string[]) {
   if (!preservePathTokens) {
     parsed.paths = parsed.paths.map((changedPath) => normalizeChangedPath(changedPath));
   }
-  return parsed;
+  const phase = parsed.phase;
+  if (phase !== "all" && phase !== "guards-types" && phase !== "lint" && phase !== "audits") {
+    throw new Error("--phase must be all, guards-types, lint, or audits");
+  }
+  return { ...parsed, phase } satisfies { phase: ChangedCheckPhase };
 }
 
 function printUsage() {
@@ -1699,6 +1720,7 @@ function printUsage() {
       "Options:",
       "  --base <ref>     Base ref (default: HEAD with --staged, otherwise origin/main)",
       "  --head <ref>     Head ref for changed paths (default: HEAD)",
+      "  --phase <name>   all (default), guards-types, lint, or audits; combine every phase for full coverage",
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
