@@ -187,16 +187,37 @@ export async function executePreparedReplyAgentRun(
 
   replyOperation.setPhase("running");
   const runStartedAt = Date.now();
-  const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+  const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder, {
+    deferLocalUntilExecution: true,
+  });
   if (userTurnAdmission === "duplicate-source") {
     return returnWithQueuedFollowupDrain(undefined);
   }
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
   // Suppressed delivery persists only the user transcript; crashed suppressed runs die
   // silently. Deliverable turns atomically persist transcript plus recovery ownership.
-  await turnAdoptionLifecycle?.onAdopted();
+  if (userTurnAdmission === "admitted") {
+    await turnAdoptionLifecycle?.onAdopted();
+  }
+  const runId = opts?.runId ?? crypto.randomUUID();
+  let duplicateSource = false;
   const runOutcome = await withBeforeAgentReplyObserver(
     {
+      runId,
+      beforeExecution: async () => {
+        if (userTurnAdmission !== "deferred") {
+          return undefined;
+        }
+        replyOperation.abortSignal.throwIfAborted();
+        // The runtime owns the session lane now. Queued sources stay durable
+        // without becoming another turn's current transcript leaf.
+        if ((await admitUserTurn(followupRun.userTurnTranscriptRecorder)) === "duplicate-source") {
+          duplicateSource = true;
+          return { handled: true, reply: { text: SILENT_REPLY_TOKEN } };
+        }
+        await turnAdoptionLifecycle?.onAdopted();
+        return undefined;
+      },
       beforeDispatch: async () => {
         return await beginBeforeAgentReply();
       },
@@ -266,11 +287,15 @@ export async function executePreparedReplyAgentRun(
       traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           ...context,
+          opts: { ...opts, runId },
           resolveVisibleReplyDelivery: input.resolveVisibleReplyDelivery,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         }),
       ),
   );
+  if (duplicateSource) {
+    return returnWithQueuedFollowupDrain(undefined);
+  }
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(
     followupRun.replyOperationRunStates,

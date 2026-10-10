@@ -194,6 +194,42 @@ function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
 }
 
 describe("embedded run detached session metadata", () => {
+  it("retains a permanent run failure when its owned terminal transcript cannot settle", async () => {
+    const { params, scope } = await createRun("main", "durable");
+    await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: 1 });
+    const originalError = new Error(
+      "Session transcript keyed user is outside the current turn: stale-user",
+    );
+    const { isPermanentAnnounceDeliveryError } =
+      await import("../subagents/announce/subagent-announce-delivery-retry.js");
+    runAttempt.mockImplementationOnce(async (attempt) => {
+      if (!attempt.assistantErrorTranscript) {
+        throw new Error("Expected the logical run's terminal transcript owner");
+      }
+      attempt.assistantErrorTranscript.record(
+        buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage: originalError.message }),
+        { ...scope, sessionId: params.sessionId },
+      );
+      await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 2 });
+      throw originalError;
+    });
+
+    const error = await runEmbeddedAgent(params).catch((caught: unknown) => caught);
+    expect(isPermanentAnnounceDeliveryError(error)).toBe(true);
+    expect(error).toMatchObject({
+      cause: originalError,
+      errors: [
+        originalError,
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "Failed to persist terminal assistant error: session rebound",
+          ),
+        }),
+      ],
+    });
+    expect(runAttempt).toHaveBeenCalledOnce();
+  });
+
   it("suspends the canonical agent selected during prepared-runtime acquisition", async () => {
     const { params, scope } = await createRun("main");
     // Global keys have an explicit owner but no agent prefix to contradict a rebind.

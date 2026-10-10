@@ -14,16 +14,16 @@ import { isPluginHookAgentTrigger } from "./hook-types.js";
 const BEFORE_AGENT_REPLY_OBSERVER_KEY = Symbol.for("openclaw.beforeAgentReply.observer");
 
 type BeforeAgentReplyObserver = {
+  runId?: string;
+  beforeExecution?: () => Promise<PluginHookBeforeAgentReplyResult | undefined>;
   beforeDispatch: () => Promise<boolean | void>;
   afterDispatch: (
     result: PluginHookBeforeAgentReplyResult | undefined,
   ) => Promise<PluginHookBeforeAgentReplyResult | undefined>;
 };
 
-type BeforeAgentReplyObserverScope = BeforeAgentReplyObserver & { runId?: string };
-
 const beforeAgentReplyObserver = resolveGlobalSingleton<
-  AsyncLocalStorage<BeforeAgentReplyObserverScope>
+  AsyncLocalStorage<BeforeAgentReplyObserver>
 >(BEFORE_AGENT_REPLY_OBSERVER_KEY, () => new AsyncLocalStorage());
 
 /** Attaches durable admission bookkeeping without moving hook ownership out of the runner. */
@@ -37,6 +37,13 @@ export function withBeforeAgentReplyObserver<T>(
 /** Preserves the full plugin reply contract, including private payload metadata. */
 export function buildHandledBeforeAgentReplyPayloads(reply?: ReplyPayload): ReplyPayload[] {
   return [reply ?? { text: SILENT_REPLY_TOKEN }];
+}
+
+/** The session-lane owner admits input before local or worker execution can publish start. */
+export function getBeforeAgentReplyAdmission(runId: string) {
+  const observer = beforeAgentReplyObserver.getStore();
+  const admit = observer?.runId === runId ? observer.beforeExecution : undefined;
+  return admit ? () => runOncePerAgentRun(runId, "reply_input_admission", admit) : undefined;
 }
 
 /** Runs the reply claim hook once for one admitted turn, across model fallbacks. */
@@ -54,10 +61,6 @@ export function runBeforeAgentReplyForTurn(params: {
   }
   const context = { ...params.context, trigger };
   return runOncePerAgentRun(params.runId, "before_agent_reply", async () => {
-    const hookRunner = getGlobalHookRunner();
-    if (!hookRunner?.hasHooks("before_agent_reply", context)) {
-      return undefined;
-    }
     const observerScope = beforeAgentReplyObserver.getStore();
     // Nested agent runs inherit async context. Bind recovery to the first runner
     // so a hook-spawned child cannot checkpoint its parent's admitted turn.
@@ -67,6 +70,14 @@ export function runBeforeAgentReplyForTurn(params: {
         : undefined;
     if (observer && !observer.runId) {
       observer.runId = params.runId;
+    }
+    const admitted = await getBeforeAgentReplyAdmission(params.runId)?.();
+    if (admitted?.handled) {
+      return admitted;
+    }
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("before_agent_reply", context)) {
+      return undefined;
     }
     if ((await observer?.beforeDispatch()) === false) {
       return undefined;

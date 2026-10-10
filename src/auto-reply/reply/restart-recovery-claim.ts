@@ -36,7 +36,8 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
-  ) => Promise<"admitted" | "duplicate-source">;
+    options?: { deferLocalUntilExecution: boolean },
+  ) => Promise<"admitted" | "duplicate-source" | "deferred">;
   beginBeforeAgentReply: () => Promise<boolean>;
   checkpointBeforeAgentReply: (params: {
     state?: RestartRecoveryBeforeAgentReplyState;
@@ -200,8 +201,14 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
   };
 
-  const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
+  const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (
+    recorder,
+    options,
+  ) => {
     if (!params.sessionKey || !params.storePath) {
+      if (options?.deferLocalUntilExecution) {
+        return "deferred";
+      }
       await recorder?.persistApproved();
       return "admitted";
     }
@@ -239,10 +246,13 @@ export function createReplyRestartRecoveryClaimController(params: {
         return "duplicate-source";
       }
     }
+    const placement = resolveSessionWorkerPlacementContext()
+      .workerSessionPlacementService?.getMany([sessionId])
+      .get(sessionId);
+    if (options?.deferLocalUntilExecution && (!placement || placement.state === "local")) {
+      return "deferred";
+    }
     if (recorder?.getPendingInputMessage?.() && !recorder.hasPersisted()) {
-      const placement = resolveSessionWorkerPlacementContext()
-        .workerSessionPlacementService?.getMany([sessionId])
-        .get(sessionId);
       // A staged worker input belongs to placement admission, not local restart
       // recovery. Its runtime writer consumes it only after setup and sync finish.
       if (placement && placement.state !== "local") {

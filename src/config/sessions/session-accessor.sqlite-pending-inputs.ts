@@ -28,6 +28,7 @@ import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type { CapturedSessionEntryReadSource } from "./session-accessor.types.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
 export type SessionPendingInput = {
@@ -58,6 +59,7 @@ export type SessionPendingInputOwner = {
   assertCurrent: () => void;
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
+  consumedTranscriptInputId?: string;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
   retainCancelled?: () => boolean;
   restartRecovered?: true;
@@ -184,6 +186,29 @@ function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
   assertPendingInputOwnerCurrent(owner);
   return owners.current.run(owner, run);
+}
+
+/** Promotion does not release execution custody to a different turn's orphan repair. */
+export function assertSessionPendingInputTranscriptRepairAllowed(
+  database: Pick<PendingInputDatabase, "path">,
+  scope: Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey">,
+  entryId: string,
+): void {
+  const current = owners.current.getStore();
+  const sessionKey = normalizeStoreSessionKey(scope.sessionKey);
+  for (const owner of owners.live.values()) {
+    if (
+      owner.databasePath === database.path &&
+      owner.sessionId === scope.sessionId &&
+      owner.sessionKey === sessionKey &&
+      owner.consumedTranscriptInputId === entryId &&
+      isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) &&
+      current !== owner &&
+      !current?.sources?.includes(owner)
+    ) {
+      throw new Error(`Session transcript keyed user is outside the current turn: ${entryId}`);
+    }
+  }
 }
 
 /** Persistence alone may mirror a closed turn; the append owner proves exact committed bytes. */
@@ -492,6 +517,9 @@ export function resolveSessionPendingInputAppend(
               },
               commit: () => {
                 owner.transcriptInputId = destinationInputId;
+                for (const source of owner.sources ?? [owner]) {
+                  source.consumedTranscriptInputId = destinationInputId;
+                }
                 if (staged?.get(owner) === destinationInputId) {
                   staged.delete(owner);
                 }
@@ -614,6 +642,7 @@ export function consumeSessionPendingInput(
     commit: () => {
       for (const consumedOwner of consumedOwners) {
         consumedOwner.consumed = true;
+        consumedOwner.consumedTranscriptInputId = pending.inputId;
       }
     },
   });

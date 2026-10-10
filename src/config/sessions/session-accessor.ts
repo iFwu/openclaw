@@ -5,6 +5,7 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export { assertSessionPendingInputTranscriptRepairAllowed } from "./session-accessor.sqlite-pending-inputs.js";
 export { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 export {
   bindSessionPendingInputSources,

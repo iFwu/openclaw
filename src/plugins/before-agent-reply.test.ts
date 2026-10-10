@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
+import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
   withBeforeAgentReplyObserver,
@@ -88,5 +92,61 @@ describe("before_agent_reply runner boundary", () => {
     expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
     expect(beforeDispatch).toHaveBeenCalledOnce();
     expect(afterDispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "admits the foreground turn once even without hooks (hooks=%s)",
+    async (hooks) => {
+      hookRunner.hasHooks.mockReturnValue(hooks);
+      const beforeExecution = vi.fn(async () => undefined);
+      const beforeDispatch = vi.fn(async () => undefined);
+      const afterDispatch = vi.fn(async (result) => result);
+      await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), () =>
+        withBeforeAgentReplyObserver(
+          { beforeExecution, beforeDispatch, afterDispatch },
+          async () => {
+            await runHook(`admit-${hooks}`);
+            await runHook(`admit-${hooks}`);
+          },
+        ),
+      );
+      expect(beforeExecution).toHaveBeenCalledOnce();
+      expect(beforeDispatch).toHaveBeenCalledTimes(hooks ? 1 : 0);
+    },
+  );
+
+  it("does not dispatch a plugin or model for an already handled input", async () => {
+    const beforeDispatch = vi.fn(async () => undefined);
+    const afterDispatch = vi.fn(async (result) => result);
+    const result = await withBeforeAgentReplyObserver(
+      {
+        beforeExecution: async () => ({ handled: true, reply: { text: "NO_REPLY" } }),
+        beforeDispatch,
+        afterDispatch,
+      },
+      () => runHook("already-handled"),
+    );
+    expect(result).toEqual({ handled: true, reply: { text: "NO_REPLY" } });
+    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+  });
+
+  it("does not let an earlier nested run consume the foreground admission", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const beforeExecution = vi.fn(async () => undefined);
+    await withBeforeAgentReplyObserver(
+      {
+        runId: "foreground-admission",
+        beforeExecution,
+        beforeDispatch: async () => undefined,
+        afterDispatch: async (result) => result,
+      },
+      async () => {
+        await runHook("nested-before-foreground");
+        expect(beforeExecution).not.toHaveBeenCalled();
+        await runHook("foreground-admission");
+        expect(beforeExecution).toHaveBeenCalledOnce();
+      },
+    );
   });
 });

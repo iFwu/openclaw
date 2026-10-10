@@ -18,7 +18,14 @@ describe.skipIf(process.platform !== "linux")("bounded resource ownership", () =
     { available: 12, requested: "10", budget: undefined, code: 75 },
     { available: 14, requested: "10", budget: 10, code: 0 },
     { available: 12, requested: "4", budget: 4, code: 0 },
-    { available: 16, requested: "11", budget: undefined, code: 2 },
+    { available: 16, requested: "11", budget: 11, code: 0 },
+    { available: 5.5, requested: "1.5", budget: 1.5, code: 0 },
+    { available: 16, requested: "11.5", budget: 11.5, code: 0 },
+    { available: 12.5, requested: "11.5", reserve: "1", budget: 11.5, code: 0 },
+    { available: 12.49, requested: "11.5", reserve: "1", budget: undefined, code: 75 },
+    ...["0", "0.5", "12", "11.6", "11.50", "1.25", "1e1", "NaN", "Infinity", "-1"].map(
+      (requested) => ({ available: 16, requested, budget: undefined, code: 2 }),
+    ),
     { available: 12, requested: "10", reserve: "1", budget: 10, code: 0 },
     { available: 10.9, requested: "10", reserve: "1", budget: undefined, code: 75 },
     { available: 16, requested: "10", reserve: "0", budget: undefined, code: 2 },
@@ -152,13 +159,16 @@ process.exit(Number(process.env.BOUNDED_TEST_COMMAND_EXIT));
       });
     }
     const invocation = JSON.parse(result.stdout);
-    expect(invocation.args).toContain(`--property=MemoryMax=${scenario.budget}G`);
+    const budgetBytes = scenario.budget === 11.5 ? 12348030976 : scenario.budget * 1073741824;
+    const softBudgetMiB = scenario.budget === 11.5 ? 5888 : scenario.budget * 512;
+    expect(invocation.args).toContain(`--property=MemoryMax=${budgetBytes}`);
+    expect(invocation.args).toContain(String(budgetBytes));
     expect(invocation.args).toContain("--property=MemorySwapMax=0");
     expect(invocation).toMatchObject({
-      goMemory: `${scenario.budget * 512}MiB`,
+      goMemory: `${softBudgetMiB}MiB`,
       goProcs: scenario.budget >= 6 ? "2" : "1",
       goGc: "100",
-      nodeOptions: `--max-old-space-size=${scenario.budget * 512}`,
+      nodeOptions: `--max-old-space-size=${softBudgetMiB}`,
       workers: "1",
     });
   });
