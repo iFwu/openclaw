@@ -1162,7 +1162,7 @@ export async function createChangedCiLintPlan(
     commands.some(({ args }) =>
       ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
     );
-  if (fullFallback && materializeFullFallback !== true) {
+  if (fullFallback && !materializeFullFallback) {
     return null;
   }
   const { createOxlintShards, selectCoreOxlintStripe, selectExtensionOxlintStripe } =
@@ -1173,7 +1173,7 @@ export async function createChangedCiLintPlan(
   const extensionShards = shards.filter((shard) => shard.name.startsWith("extensions:"));
   const buildPlan = (fileScope: Awaited<ReturnType<typeof resolveChangedOxlintFileScope>>) => {
     const fullScope = !fileScope;
-    if (fullScope && materializeFullFallback !== true) {
+    if (fullScope && !materializeFullFallback) {
       return null;
     }
     const selected = fileScope
