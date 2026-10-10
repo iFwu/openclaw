@@ -31,7 +31,7 @@ describe("ordinary steering into automatic model fallback", () => {
     "policy-fallback",
     "explicit-redirect",
     "new-selection",
-    "pinned-selection",
+    "same-primary-user-selection",
     "locked-selection",
     "changed-tools",
     "hook-route",
@@ -101,8 +101,12 @@ describe("ordinary steering into automatic model fallback", () => {
     operation.setPhase("running");
     const delivered: string[] = [];
     const candidates: string[] = [];
+    const liveSwitch = new LiveSessionModelSwitchError({
+      provider: "test-alias",
+      model: "test-model",
+    });
     try {
-      await runWithModelFallback({
+      const fallback = runWithModelFallback({
         cfg: run.run.config,
         provider: run.run.provider,
         model: run.run.model,
@@ -122,10 +126,7 @@ describe("ordinary steering into automatic model fallback", () => {
           });
           if (provider === "openai") {
             if (scenario === "explicit-redirect") {
-              throw new LiveSessionModelSwitchError({
-                provider: "test-alias",
-                model: "test-model",
-              });
+              throw liveSwitch;
             }
             throw new FailoverError("Test primary is unavailable", {
               provider,
@@ -185,11 +186,19 @@ describe("ordinary steering into automatic model fallback", () => {
           return "active candidate";
         },
       });
+      if (scenario === "explicit-redirect") {
+        await expect(fallback).rejects.toBe(liveSwitch);
+        expect(candidates).toEqual(["openai/gpt-test"]);
+        expect(operation.automaticFallbackRoute).toBeUndefined();
+        expect(delivered).toEqual([]);
+        return;
+      }
+      await fallback;
       expect(candidates).toEqual(["openai/gpt-test", "test-alias/test-model"]);
       if (scenario === "new-selection") {
         run.run.provider = "test-provider";
         run.run.model = "test-model";
-      } else if (scenario === "pinned-selection") {
+      } else if (scenario === "same-primary-user-selection") {
         run.run.hasSessionModelOverride = true;
         run.run.modelOverrideSource = "user";
       } else if (scenario === "locked-selection" || scenario === "cross-profile-pending") {
@@ -199,7 +208,10 @@ describe("ordinary steering into automatic model fallback", () => {
       }
       const resultState: ReplyOperationRunState = {};
       const shouldSteer =
-        scenario === "automatic" || scenario === "policy-fallback" || crossProfile;
+        scenario === "automatic" ||
+        scenario === "policy-fallback" ||
+        scenario === "same-primary-user-selection" ||
+        crossProfile;
       if (crossProfile) {
         run.operatorAuthority = operator("bob");
         Object.assign(run.run, {

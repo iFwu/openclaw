@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
+  getSessionEntry,
   listSessionEntries,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
@@ -40,6 +41,7 @@ import {
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createDirectDispatchContext } from "./bot.direct-dispatch.test-support.js";
 import { registerTelegramModelPickerCases } from "./bot.model-picker.test-support.js";
+import { registerTelegramSpooledMediaAbortCases } from "./bot.spooled-media-abort.test-support.js";
 import {
   createReplyPhotoMessage,
   createTelegramCallbackContext,
@@ -757,6 +759,7 @@ describe("createTelegramBot", () => {
     createTelegramBot = (opts) => {
       const telegramDeps = {
         ...telegramBotDepsForTest,
+        ...opts.telegramDeps,
       };
       return createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
@@ -1338,14 +1341,9 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       1234,
       24,
-      [
-        "ℹ️ Approval already resolved",
-        "Canonical result: Allowed once",
-        "ID: plugin:id-owned-by-exec",
-        "",
-        "Command:",
-        "echo canonical",
-      ].join("\n"),
+      expect.stringMatching(
+        /^✅ Already resolved: Allowed once · echo canonical\n\d{2}:\d{2} · plugin:id-owned-by-exec$/,
+      ),
       { reply_markup: { inline_keyboard: [] } },
     );
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
@@ -1386,14 +1384,9 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    const terminalText = [
-      "✅ Approval resolved here",
-      "Canonical result: Denied",
-      "ID: fallback-receipt-id",
-      "",
-      "Command:",
-      "echo denied",
-    ].join("\n");
+    const terminalText = expect.stringMatching(
+      /^❌ Denied · echo denied\n\d{2}:\d{2} · fallback-receipt-id$/,
+    );
     expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 25, terminalText, {
       reply_markup: { inline_keyboard: [] },
     });
@@ -1456,7 +1449,8 @@ describe("createTelegramBot", () => {
           false,
         ),
       },
-      expectedTerminalText: "Canonical result: Denied",
+      expectedTerminalText:
+        /^❌ Already resolved: Denied · echo denied\n\d{2}:\d{2} · stale-legacy-id$/,
       assertDistinctResult: () => {
         expect(execApprovalCall(0)).toMatchObject({
           approvalId: "stale-legacy-id",
@@ -1479,7 +1473,7 @@ describe("createTelegramBot", () => {
         value: new Error("unknown or expired approval id"),
       },
       expectedTerminalText:
-        "It was already resolved or expired; the canonical decision is unavailable here.",
+        /^ℹ️ No longer pending · already resolved or expired\n\d{2}:\d{2} · stale-neutral-id$/,
       assertDistinctResult: undefined,
     },
   ])(
@@ -1521,7 +1515,7 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy).toHaveBeenCalledWith(
         1234,
         messageId,
-        expect.stringContaining(expectedTerminalText),
+        expect.stringMatching(expectedTerminalText),
         { reply_markup: { inline_keyboard: [] } },
       );
       expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
@@ -1596,7 +1590,7 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       1234,
       24,
-      expect.stringContaining("✅ Approval resolved here"),
+      expect.stringMatching(/^✅ Allowed once\n\d{2}:\d{2} · opaque-plugin-approval-id$/),
       { reply_markup: { inline_keyboard: [] } },
     );
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
@@ -1702,7 +1696,7 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       1234,
       23,
-      expect.stringContaining("✅ Approval resolved here"),
+      expect.stringMatching(/^✅ Allowed once\n\d{2}:\d{2} · plugin:misleading-exec-id$/),
       { reply_markup: { inline_keyboard: [] } },
     );
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
@@ -1776,7 +1770,9 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       1234,
       26,
-      expect.stringContaining("ℹ️ Approval no longer pending"),
+      expect.stringMatching(
+        /^ℹ️ No longer pending · already resolved or expired\n\d{2}:\d{2} · 138e9b8c$/,
+      ),
       { reply_markup: { inline_keyboard: [] } },
     );
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
@@ -2182,98 +2178,16 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("continue after polling restart");
   });
 
-  it("durably retries a spooled reply when its claim owner aborts reply media", async () => {
-    const claimOwner = new AbortController();
-    let replyMediaAborted: boolean | undefined;
-    getFileSpy.mockImplementationOnce(async (_fileId, signal) => {
-      claimOwner.abort(new Error("claim adoption stalled"));
-      replyMediaAborted = signal instanceof AbortSignal ? signal.aborted : undefined;
-      throw new Error("Bad Request: file is too big");
-    });
-
-    const handler = await createMessageHandler();
-    const update = { update_id: 98081, message: createReplyPhotoMessage("keep the old image") };
-
-    const { result } = await runWithTelegramUpdateProcessingFrame(() =>
-      runWithTelegramSpooledReplayUpdate(
-        update,
-        () =>
-          handler({
-            update,
-            message: update.message,
-            me: { username: "openclaw_bot" },
-            getFile: async () => ({}),
-          }),
-        {
-          abortSignal: claimOwner.signal,
-          onAdopted: vi.fn(),
-          onDeferred: vi.fn(),
-          onAdoptionFinalizing: vi.fn(),
-          onAbandoned: vi.fn(),
-        },
-      ),
-    );
-
-    expect(replyMediaAborted).toBe(true);
-    expect(result).toEqual({ kind: "failed-retryable", error: expect.any(Error) });
-    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
-    expect(replySpy).not.toHaveBeenCalled();
-  });
-
-  it("durably retries when primary media hydration outlives its claim owner", async () => {
-    const claimOwner = new AbortController();
-    const timeoutError = new Error("claim adoption stalled");
-    let mediaAborted: boolean | undefined;
-    const mediaFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      claimOwner.abort(timeoutError);
-      mediaAborted = init?.signal?.aborted;
-      return pngResponse();
-    });
-    const ssrfMock = mockPinnedHostnameResolution();
-
-    try {
-      const handler = await createMessageHandler({
-        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
-      });
-      const update = {
-        update_id: 98083,
-        message: {
-          chat: { id: 7, type: "private" },
-          message_id: 9002,
-          caption: "inspect this image",
-          date: 1_736_380_800,
-          from: { id: 42, first_name: "Ada" },
-          photo: [{ file_id: "primary-photo-1" }],
-        },
-      };
-
-      const { result } = await runWithTelegramUpdateProcessingFrame(() =>
-        runWithTelegramSpooledReplayUpdate(
-          update,
-          () =>
-            handler({
-              update,
-              message: update.message,
-              me: { username: "openclaw_bot" },
-              getFile: async () => ({ file_path: "media/primary-photo.jpg" }),
-            }),
-          {
-            abortSignal: claimOwner.signal,
-            onAdopted: vi.fn(),
-            onDeferred: vi.fn(),
-            onAdoptionFinalizing: vi.fn(),
-            onAbandoned: vi.fn(),
-          },
-        ),
-      );
-
-      expect(mediaAborted).toBe(true);
-      expect(result).toEqual({ kind: "failed-retryable", error: timeoutError });
-      expect(mediaFetch).toHaveBeenCalledTimes(1);
-      expect(replySpy).not.toHaveBeenCalled();
-    } finally {
-      ssrfMock.mockRestore();
-    }
+  registerTelegramSpooledMediaAbortCases({
+    createMessageHandler,
+    createTelegramTestStorePath,
+    loadConfig,
+    telegramBotDepsForTest,
+    getSessionEntry,
+    getFileSpy,
+    replySpy,
+    makeTelegramTransport,
+    pngResponse,
   });
 
   it.each([

@@ -113,9 +113,12 @@ require a followup.
 
 Automatic credential rotation and model fallback also retain the active turn.
 New input can steer that turn while the selected model remains unchanged, fallback
-is still allowed, and the current permissions match. Selecting or locking a model,
-pinning a different account, or changing tool permissions can require a followup
-turn. Answers to a pending question still go to the question's original owner.
+is still allowed, and the current permissions match. Manually selecting the same
+primary does not disable its fallback chain. Changing the selected model, locking
+it, pinning a different account, or changing tool permissions can require a
+followup turn. A live model switch returns to the outer retry owner to rebuild the
+new selection's chain; it is not an automatic fallback. Answers to a pending
+question still go to the question's original owner.
 
 [Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
 follows the session's assigned human owner, otherwise its authenticated human
