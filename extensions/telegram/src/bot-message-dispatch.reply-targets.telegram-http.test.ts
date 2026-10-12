@@ -570,10 +570,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
               });
               try {
                 await held.arrived.promise;
-                await waitForBotApiCall(
-                  (call) =>
-                    call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
-                );
+                await waitForBotApiCall((call) => String(call.fields.text).includes("Exec"));
                 expect([...visibleMessages.values()]).toEqual([expect.stringContaining("Exec")]);
               } finally {
                 held.release.resolve();

@@ -128,9 +128,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
             toolCallId: "exec-1",
             args: { command: "echo fixture-private-token" },
           });
-          await waitForBotApiCall(
-            (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
-          );
+          await waitForBotApiCall((call) => String(call.fields.text).includes("Exec"));
           expect(
             await channelOptions?.onToolResult?.({
               text: "Formatted summary must not replace the command",
@@ -196,9 +194,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         toolCallId: "exec-1",
         args: { command: "false" },
       });
-      await waitForBotApiCall(
-        (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
-      );
+      await waitForBotApiCall((call) => String(call.fields.text).includes("Exec"));
       await options?.onItemEvent?.({
         itemId: "tool:exec-1",
         kind: "tool",
@@ -265,17 +261,18 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     });
 
     // Intermediate item revisions may coalesce under the edit throttle, so the
-    // sequence is checked by shape: the progress message opens with the running
-    // command line, every edit targets that message and keeps the command text,
-    // the last edit carries the exit status, and the final answer is separate.
-    expect(revisions[0]).toEqual([
-      "sendMessage",
-      null,
-      "<b>Working</b>\n<b>🛠️ Exec</b> false <i>running</i>",
-    ]);
+    // sequence is checked by shape: the status card opens with its label, the
+    // first edit adds the running command line, every edit targets that card
+    // and keeps the command text, the last edit carries the exit status, and
+    // the final answer is separate.
+    expect(revisions[0]).toEqual(["sendMessage", null, "<b>Working</b>"]);
     expect(revisions.at(-1)).toEqual(["sendMessage", null, "The command failed."]);
     const edits = revisions.filter(([method]) => method === "editMessageText");
-    expect(edits.length).toBeGreaterThan(0);
+    expect(edits[0]).toEqual([
+      "editMessageText",
+      1,
+      "<b>Working</b>\n<b>🛠️ Exec</b> false <i>running</i>",
+    ]);
     for (const [, messageId, text] of edits) {
       expect(messageId).toBe(1);
       expect(text).toContain("<b>🛠️ Exec</b> false");
