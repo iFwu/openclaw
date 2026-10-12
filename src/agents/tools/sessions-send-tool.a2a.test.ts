@@ -588,7 +588,11 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
         sourceTool: "sessions_send",
       });
       const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-      expect(stepInput.message).toContain("sessions_send target run for");
+      expect(stepInput.message).toContain(
+        `sessions_send target run for agent:worker:discord:group:dev ${
+          wait.status === "timeout" ? "timed out" : "failed"
+        }: `,
+      );
       expect(stepInput.message).toContain(wait.error);
       expect(stepInput.message).toContain("Do not resend");
       expect(stepInput.message).not.toContain("may not have received");
