@@ -230,6 +230,97 @@ async function resolveLastTarget(cfg: OpenClawConfig) {
   return resolveDeliveryTarget(cfg, AGENT_ID, { channel: "last", to: undefined });
 }
 
+describe("Telegram explicit recipient thread ownership", () => {
+  it.each(["1234567890", "1234567890:topic:77"])(
+    "does not attach a remembered DM topic from %s to an explicit parent recipient",
+    async (lastTo) => {
+      setLastSessionEntry({
+        sessionId: "dm-source",
+        lastChannel: "telegram",
+        lastTo,
+        lastThreadId: "77",
+      });
+      const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+        channel: "telegram",
+        to: "telegram:1234567890",
+        sessionTarget: "isolated",
+      });
+      expect(result).toMatchObject({ ok: true, to: "1234567890" });
+      expect(result.threadId).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { to: "1234567890:topic:88", threadId: undefined, expected: 88 },
+    { to: "1234567890", threadId: "88", expected: "88" },
+  ])("preserves an explicitly selected DM topic: $to / $threadId", async (target) => {
+    setLastSessionEntry({
+      sessionId: "dm-source",
+      lastChannel: "telegram",
+      lastTo: "1234567890",
+      lastThreadId: "77",
+    });
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "telegram",
+      to: target.to,
+      threadId: target.threadId,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.threadId).toBe(target.expected);
+  });
+
+  it("preserves implicit delivery into the source DM topic", async () => {
+    const sessionKey = "agent:agent-b:telegram:direct:1234567890";
+    setSessionStore({
+      [sessionKey]: {
+        sessionId: "dm-source",
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "1234567890", threadId: "77" },
+        }),
+      },
+    });
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "telegram",
+      sessionKey,
+      sessionTarget: "current",
+    });
+    expect(result).toMatchObject({ ok: true, threadId: "77" });
+  });
+
+  it("preserves a topic proven by the channel route rather than delivery history", async () => {
+    const routeResolver = telegramMessagingForTest.resolveOutboundSessionRoute!;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createStubOutbound("Telegram"),
+            messaging: {
+              ...telegramMessagingForTest,
+              resolveOutboundSessionRoute: (params) =>
+                routeResolver({ ...params, threadId: params.threadId ?? "88" }),
+            },
+          }),
+        },
+      ]),
+    );
+    setLastSessionEntry({
+      sessionId: "dm-source",
+      lastChannel: "telegram",
+      lastTo: "1234567890",
+      lastThreadId: "77",
+    });
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "telegram",
+      to: "1234567890",
+    });
+    expect(result).toMatchObject({ ok: true, threadId: "88" });
+  });
+});
+
 // regression: #91613
 describe("resolveDeliveryTarget — issue #91613 cross-room drain fix", () => {
   it("REFUSES implicit/keyless isolated-cron delivery inherited from the SHARED agent-main bucket's last recipient", async () => {

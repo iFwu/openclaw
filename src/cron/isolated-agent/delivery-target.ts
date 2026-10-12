@@ -108,6 +108,7 @@ function routesSharePeer(left?: OutboundSessionRoute | null, right?: OutboundSes
 
 function shouldCarrySessionThread(params: {
   resolved: ReturnType<typeof resolveSessionDeliveryTarget>;
+  channel: string;
   explicitTo?: string;
   route?: OutboundSessionRoute | null;
   lastRoute?: OutboundSessionRoute | null;
@@ -120,6 +121,11 @@ function shouldCarrySessionThread(params: {
       params.resolved.channel === params.resolved.lastChannel &&
       params.resolved.to === params.resolved.lastTo
     );
+  }
+  // Telegram DM topics share their parent's peer identity. Explicit recipients
+  // use their channel route, not a topic remembered from previous delivery.
+  if (params.channel === "telegram") {
+    return false;
   }
   // Explicit targets may reuse a stored thread only when both targets resolve
   // to the same channel peer; otherwise cron could reply into a stale thread.
@@ -410,6 +416,7 @@ export async function resolveDeliveryTarget(
     options?.inheritSessionThread !== false &&
     shouldCarrySessionThread({
       resolved,
+      channel,
       explicitTo,
       route,
       lastRoute,
