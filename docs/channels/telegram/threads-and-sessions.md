@@ -95,15 +95,19 @@ feature. DM evaluation is not enabled by group settings.
 
 Jev evaluates the current message, quote/reply context, bounded room context,
 and the six most recent user/assistant transcript messages before the main model
-loads its conversation. Quoted notifications can define self-contained new tasks;
-shared vocabulary or a long time gap alone does not imply a new task.
+loads its conversation. Needing the quoted or replied-to message does not count as
+depending on the task history, so a short instruction aimed at a quoted
+notification can start a new task. Shared vocabulary or a long time gap alone
+does not imply a new task.
 
 The evaluator uses `https://api.typesafe.ai/v1/systemone`, model `jev-1.13.0`,
 and `TYPESAFE_API_KEY_FILE` (preferred) or `TYPESAFE_API_KEY`. Opt-in sends this
-bounded conversation data to TypeSafe. A dependency probability at or below 0.2
+bounded conversation data to TypeSafe. A dependency probability at or below 0.35
 starts a clear-context reset boundary; at or above 0.8 continues the task;
 intermediate scores keep the existing context. HTTP failure, malformed responses,
 missing credentials, and the four-second evaluator timeout keep the existing context.
+Diagnostic log lines repeat the decision, probability, latency, time gap, and
+whether reply/quote context was present, without message text.
 
 Commands, internal turns, bot messages, locked/native model sessions, active work,
 pending approvals/questions, and unsettled child work are protected. A decision

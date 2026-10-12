@@ -25,6 +25,8 @@ describe("evaluateJevSessionDependency", () => {
     { probability: 0.1, expected: "new" },
     { probability: 0.8, expected: "continue" },
     { probability: 0.2, expected: "new" },
+    { probability: 0.35, expected: "new" },
+    { probability: 0.36, expected: "uncertain" },
   ] as const)("maps probability $probability to $expected", async ({ probability, expected }) => {
     const fetchFn = vi.fn<typeof globalThis.fetch>(async () =>
       response({
@@ -326,6 +328,15 @@ describe("prepareSessionAutoNewCandidate", () => {
       ],
     });
     expect(request.questions.dependsOnPreviousTask.instructions).toContain("not a rule");
+    expect(request.questions.dependsOnPreviousTask.instructions).toContain("replyOrQuote");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("decision=new probability=0.1"),
+      expect.anything(),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(`hasReplyOrQuote=false priorInteractionGapMs=${gap}`),
+      expect.objectContaining({ hasReplyOrQuote: false, priorInteractionGapMs: gap }),
+    );
     expect(logger.info).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
