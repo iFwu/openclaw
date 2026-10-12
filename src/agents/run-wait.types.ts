@@ -5,6 +5,8 @@ import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.t
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
   error?: string;
+  /** Observation failed; this is not a terminal outcome of the accepted target run. */
+  waitRpcError?: true;
   /** Set locally when the wait RPC fails; terminal run text is never retry evidence. */
   retryableTransportError?: true;
   startedAt?: number;

@@ -222,6 +222,12 @@ An accepted result keeps target admission separate from announcement delivery.
 `targetDisposition` is `queued` for a new turn or `steered` for an active turn, including default sends with no reply wait to your own running child;
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
 Neither field is a target-completion receipt.
+If an accepted target run later fails, its notification reports the run failure
+and preserves the specific terminal error. That failure does not prove the input
+was undelivered: the target may already have performed work. A failed wait RPC
+instead reports an observation failure with an unknown target outcome. Inspect
+the accepted run before recovery; neither notification requests replay of the
+same message. A final-reply delivery receipt is separate from input acceptance.
 Default zero-wait sends to your own running child acknowledge queue admission,
 like `mode: "steer"`; they do not confirm transcript persistence or model consumption
 and are not restart-durable. They produce no separate completion turn. Use

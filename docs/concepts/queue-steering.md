@@ -74,9 +74,13 @@ If four users send messages while the agent is executing a tool call:
 Steering always targets the current active session run. It does not create a new session, change the active run's tool policy, or split messages by sender. In multi-user channels, inbound prompts already include sender and route context, so the next model call can see who sent each message.
 
 Visible user turns started through the `agent` RPC can also receive compatible
-steering. Channel input, including Telegram, resolves the same admitted direct-run
-owner as Control UI input. The captured owner supplies its original source identity;
-unrelated terminal receipts do not make a current turn unsteerable.
+Control UI steering. Channel input, including Telegram, resolves the same admitted
+direct-run owner, but retains a separate queued reply when that owner has no channel
+reply dispatcher. Matching permissions alone do not transfer the incoming message's
+reply target, progress card, or commentary callbacks to a direct command. The queued
+turn keeps those delivery bindings; ordinary channel-to-channel steering continues
+through its existing reply dispatcher. The captured owner supplies its original
+source identity; unrelated terminal receipts do not make a current turn unsteerable.
 
 A direct peer continuation started by `sessions_send` can yield to authenticated
 human input that cannot share its permissions or reply contract. This is an ordered

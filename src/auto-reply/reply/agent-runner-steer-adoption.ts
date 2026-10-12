@@ -5,6 +5,7 @@ import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel-normalize.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -207,8 +208,17 @@ export async function runActiveReplySteer(
     if (!isCurrentFallback()) {
       return await fallback("automatic model fallback changed during steering admission");
     }
+    const isInboundUserMessage =
+      followupRun.currentInboundEventKind !== "room_event" &&
+      (followupRun.run.inputProvenance?.kind === undefined ||
+        followupRun.run.inputProvenance.kind === "external_user");
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
       currentInboundContext: followupRun.currentInboundContext,
+      requiresReplyDispatcher:
+        isInboundUserMessage &&
+        isDeliverableMessageChannel(
+          followupRun.originatingChannel ?? followupRun.run.messageProvider ?? "",
+        ),
       inboundAudio: followupRun.currentInboundAudio === true,
       assertCurrent: automaticFallbackRoute
         ? () => {
@@ -219,10 +229,7 @@ export async function runActiveReplySteer(
           }
         : followupRun.operatorAuthority?.assertCurrent,
       steeringMode: "all",
-      isInboundUserMessage:
-        followupRun.currentInboundEventKind !== "room_event" &&
-        (followupRun.run.inputProvenance?.kind === undefined ||
-          followupRun.run.inputProvenance.kind === "external_user"),
+      isInboundUserMessage,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       ...(!activeReplyOperation

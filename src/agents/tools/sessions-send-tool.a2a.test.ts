@@ -560,31 +560,42 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       status: "error",
       error: "target run failed after delivery acceptance\nstderr: socket hang up",
     },
-  ] as const)("notifies the requester when accepted delivery ends with $status", async (wait) => {
-    agentWaitMock.mockResolvedValueOnce(wait);
+    {
+      status: "error",
+      error: "context_overflow: Input exceeds the available context window",
+      endedAt: 600_000,
+    },
+  ] as const)(
+    "reports the accepted target run's $status without requesting replay",
+    async (wait) => {
+      agentWaitMock.mockResolvedValueOnce(wait);
 
-    await runSessionsSendA2AFlow({
-      targetAgentId: "worker",
-      targetSessionKey: "agent:worker:discord:group:dev",
-      displayKey: "agent:worker:discord:group:dev",
-      replyTimeoutMs: 10_000,
-      requesterSessionKey: "agent:main:discord:group:req",
-      requesterChannel: "discord",
-      notifyRequesterOnWaitFailure: true,
-      runId: "run-lock-timeout",
-    });
+      await runSessionsSendA2AFlow({
+        targetAgentId: "worker",
+        targetSessionKey: "agent:worker:discord:group:dev",
+        displayKey: "agent:worker:discord:group:dev",
+        replyTimeoutMs: 10_000,
+        requesterSessionKey: "agent:main:discord:group:req",
+        requesterChannel: "discord",
+        notifyRequesterOnWaitFailure: true,
+        runId: "run-lock-timeout",
+      });
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
-      sessionKey: "agent:main:discord:group:req",
-      sourceSessionKey: "agent:worker:discord:group:dev",
-      sourceTool: "sessions_send",
-    });
-    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-    expect(stepInput.message).toContain("sessions_send delivery to");
-    expect(stepInput.message).toContain("target run failed after delivery acceptance");
-    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
-  });
+      expect(runAgentStep).toHaveBeenCalledOnce();
+      expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
+        sessionKey: "agent:main:discord:group:req",
+        sourceSessionKey: "agent:worker:discord:group:dev",
+        sourceTool: "sessions_send",
+      });
+      const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+      expect(stepInput.message).toContain("sessions_send target run for");
+      expect(stepInput.message).toContain(wait.error);
+      expect(stepInput.message).toContain("Do not resend");
+      expect(stepInput.message).not.toContain("may not have received");
+      expect(stepInput.extraSystemPrompt).toContain("not evidence that input delivery failed");
+      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    },
+  );
 
   it.each([
     { status: "error", error: "backend exited after sending" },
@@ -658,6 +669,30 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
 
     expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("reports a rejected wait as an observation failure, not a target-run failure", async () => {
+    agentWaitMock.mockRejectedValueOnce(new Error("agent run was not found"));
+
+    await runSessionsSendA2AFlow({
+      targetAgentId: "worker",
+      targetSessionKey: "agent:worker:discord:group:dev",
+      displayKey: "agent:worker:discord:group:dev",
+      replyTimeoutMs: 10_000,
+      requesterSessionKey: "agent:main:discord:group:req",
+      notifyRequesterOnWaitFailure: true,
+      runId: "run-wait-refused",
+    });
+
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.message).toContain("completion could not be observed");
+    expect(stepInput.message).toContain("agent run was not found");
+    expect(stepInput.message).toContain("Do not resend");
+    expect(stepInput.message).not.toContain("target run for");
+    expect(stepInput.message).not.toContain("delivery to");
+    expect(stepInput.extraSystemPrompt).toContain("target outcome is unknown");
+    expect(gatewayCalls).toEqual([]);
   });
 
   it("keeps recoverable delayed wait errors silent", async () => {

@@ -283,6 +283,9 @@ export function dispatchAgentRunFromGateway(params: {
             : responseStatus === "error"
               ? "failed"
               : "completed",
+        ...(responseStatus !== "ok" && terminalOutcome.error
+          ? { error: terminalOutcome.error }
+          : {}),
         ...(responseStatus !== "ok" && terminalOutcome.stopReason
           ? { stopReason: terminalOutcome.stopReason }
           : {}),

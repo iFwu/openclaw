@@ -148,6 +148,10 @@ export function captureDirectEmbeddedMessageInjectionTarget(
           sessionId,
           backend,
           canInject,
+          // Direct commands cannot adopt the channel's reply/progress dispatcher.
+          ordinaryInputMismatch: params.requiresReplyDispatcher
+            ? "source_reply_delivery_mode_mismatch"
+            : undefined,
           options:
             params.options?.isInboundUserMessage && params.allowPendingUserInputAnswer !== false
               ? { ...params.options, terminalReplyExpectation: "required" }

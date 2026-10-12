@@ -222,6 +222,7 @@ export async function waitForAgentRun(params: {
           ? "timeout"
           : "error",
       error,
+      waitRpcError: true,
       ...(isRecoverableAgentWaitError(error) ? { retryableTransportError: true as const } : {}),
     };
   }

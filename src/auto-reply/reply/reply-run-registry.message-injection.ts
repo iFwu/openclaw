@@ -39,6 +39,13 @@ import {
   replyRunState,
 } from "./reply-run-registry.state.js";
 
+/** A question-only probe proved that this input still belongs to its source turn. */
+class OrdinaryInputRejectedError extends Error {
+  constructor(readonly reason: ReplyBackendQueueMessageMismatch) {
+    super(`Ordinary input requires its own reply owner: ${reason}`);
+  }
+}
+
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
     ReplyBackendHandle,
@@ -192,6 +199,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   backend: ReplyBackendHandle | undefined;
   canInject: () => boolean;
   toolAuthorityFingerprint?: string;
+  /** Owner-only refusal for ordinary input; a current question can still claim its answer. */
+  ordinaryInputMismatch?: ReplyBackendQueueMessageMismatch;
   options?: ReplyBackendQueueMessageOptions;
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
@@ -215,7 +224,9 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   } catch (error) {
     return { reason: "injection_unavailable", errorMessage: String(error) };
   }
-  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, params);
+  const mismatch =
+    resolveReplyBackendQueueMessageMismatch(backend, params.options, params) ??
+    params.ordinaryInputMismatch;
   const activeFingerprint = normalizeOptionalString(
     backend.toolAuthorityFingerprint ?? params.toolAuthorityFingerprint,
   );
@@ -225,17 +236,18 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   const pendingInputAuthorityProven =
     activeFingerprint !== undefined &&
     normalizeOptionalString(params.options?.pendingInputAuthorityFingerprint) === activeFingerprint;
-  // Hidden coordination can settle its own question, but cannot own the visible
-  // answer to a new human turn through ordinary steering.
-  const hiddenPendingInputAuthorized =
-    mismatch === "input_visibility_mismatch" &&
+  // A hidden or dispatcher-less owner can settle its own question, but cannot
+  // acquire a new visible answer through ordinary steering.
+  const pendingAnswerAuthorized =
+    (mismatch === "input_visibility_mismatch" ||
+      (params.ordinaryInputMismatch !== undefined && mismatch === params.ordinaryInputMismatch)) &&
     params.options?.isInboundUserMessage === true &&
     backend.messageInjectionV2?.version === 2 &&
     activeFingerprint !== undefined &&
     (pendingInputAuthorityProven || toolAuthorityMatched);
   if (
     ((mismatch === "tool_authority_mismatch" && pendingInputAuthorityProven) ||
-      hiddenPendingInputAuthorized) &&
+      pendingAnswerAuthorized) &&
     params.allowPendingUserInputAnswer !== false &&
     !hasPromptImageInput(params.options) &&
     injection.claimPendingUserInputAnswer
@@ -246,6 +258,9 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
         isAvailable: () => true,
         queueMessage: async (text, options) => {
           if (!(await injection.claimPendingUserInputAnswer?.(text, options))) {
+            if (params.ordinaryInputMismatch) {
+              throw new OrdinaryInputRejectedError(params.ordinaryInputMismatch);
+            }
             throw new Error("pending user input was not accepted");
           }
         },
@@ -257,7 +272,7 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
         reason: mismatch,
         backend,
         cancelPendingUserInput:
-          mismatch !== "input_visibility_mismatch" || hiddenPendingInputAuthorized
+          mismatch !== "input_visibility_mismatch" || pendingAnswerAuthorized
             ? injection.cancelPendingUserInput
             : undefined,
       }
@@ -270,6 +285,12 @@ function resolveReplyMessageInjectionFailure(
 ): ReplyMessageInjectionOutcome | undefined {
   const { assertCurrent, accepted } = params;
   const candidates = collectErrorGraphCandidates(error, (current) => [current.cause]);
+  const ordinaryInputRejected = candidates.findLast(
+    (candidate) => candidate instanceof OrdinaryInputRejectedError,
+  );
+  if (ordinaryInputRejected && !accepted) {
+    return { status: "rejected", reason: ordinaryInputRejected.reason };
+  }
   const unsupported = candidates.findLast(
     (candidate) => candidate instanceof QuestionDispatchUnsupportedError,
   );
@@ -330,6 +351,7 @@ export function beginReplyMessageInjectionTarget(
     assertCurrent,
     allowPendingUserInputAnswer,
     inboundAudio,
+    requiresReplyDispatcher,
     ...backendOptions
   } = options ?? {};
   const projectedToolAuthorityFingerprint = toolAuthorityOverlay
@@ -345,10 +367,48 @@ export function beginReplyMessageInjectionTarget(
     : undefined;
   const resolved = owner.resolve({
     options: queueOptions,
+    requiresReplyDispatcher,
     inboundAudio,
     allowPendingUserInputAnswer,
     assertCurrent,
   });
+  const requestVisibleTurnHandoff = (
+    result: ReplyMessageInjectionOutcome,
+  ): ReplyMessageInjectionOutcome => {
+    const operatorAuthority =
+      toolAuthorityOverlay?.operatorAuthority ?? personalToolParticipant?.operatorAuthority;
+    if (
+      result.status !== "rejected" ||
+      ![
+        "tool_authority_mismatch",
+        "reply_expectation_mismatch",
+        "source_reply_delivery_mode_mismatch",
+      ].includes(result.reason) ||
+      !queueOptions?.isInboundUserMessage ||
+      allowPendingUserInputAnswer === false ||
+      !owner.requestYieldToVisibleTurn ||
+      !operatorAuthority ||
+      !operatorScopeSatisfied("operator.write", operatorAuthority.scopes)
+    ) {
+      return result;
+    }
+    const isSourceCurrent = () => {
+      try {
+        queueOptions.abortSignal?.throwIfAborted();
+        assertCurrent?.();
+        assertAdmittedRunOperatorAuthority(operatorAuthority);
+        operatorAuthority.assertCurrent();
+        return operatorScopeSatisfied("operator.write", operatorAuthority.scopes);
+      } catch {
+        return false;
+      }
+    };
+    // Only proven rejection retains FIFO custody; the old tool bindings never change.
+    if (isSourceCurrent()) {
+      owner.requestYieldToVisibleTurn(isSourceCurrent);
+    }
+    return result;
+  };
   if (!("injection" in resolved)) {
     const immediateRejection = {
       status: "rejected" as const,
@@ -384,40 +444,7 @@ export function beginReplyMessageInjectionTarget(
         outcome = Promise.resolve(onCancellationError(error));
       }
     }
-    const operatorAuthority =
-      toolAuthorityOverlay?.operatorAuthority ?? personalToolParticipant?.operatorAuthority;
-    if (
-      queueOptions?.isInboundUserMessage &&
-      allowPendingUserInputAnswer !== false &&
-      owner.requestYieldToVisibleTurn &&
-      operatorAuthority &&
-      operatorScopeSatisfied("operator.write", operatorAuthority.scopes)
-    ) {
-      const isSourceCurrent = () => {
-        try {
-          queueOptions.abortSignal?.throwIfAborted();
-          assertCurrent?.();
-          assertAdmittedRunOperatorAuthority(operatorAuthority);
-          operatorAuthority.assertCurrent();
-          return operatorScopeSatisfied("operator.write", operatorAuthority.scopes);
-        } catch {
-          return false;
-        }
-      };
-      outcome = outcome.then((result) => {
-        if (
-          result.status === "rejected" &&
-          (result.reason === "tool_authority_mismatch" ||
-            result.reason === "reply_expectation_mismatch" ||
-            result.reason === "source_reply_delivery_mode_mismatch") &&
-          isSourceCurrent()
-        ) {
-          // Only proven rejection retains FIFO custody; the old tool bindings never change.
-          owner.requestYieldToVisibleTurn?.(isSourceCurrent);
-        }
-        return result;
-      });
-    }
+    outcome = outcome.then(requestVisibleTurnHandoff);
     return {
       targetRunId: target.runId,
       acceptance: outcome.then(
@@ -486,18 +513,20 @@ export function beginReplyMessageInjectionTarget(
       outcome: Promise.resolve(failed(error)),
     };
   }
-  const outcome = queued.then(async (result): Promise<ReplyMessageInjectionOutcome> => {
-    recordParticipant();
-    settleAcceptance(true);
-    if (
-      targetRunId &&
-      queueOptions?.waitForTranscriptCommit === true &&
-      result?.transcriptCommit !== "unconfirmed"
-    ) {
-      await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
-    }
-    return result ? { status: "accepted", result } : { status: "accepted" };
-  }, failed);
+  const outcome = queued
+    .then(async (result): Promise<ReplyMessageInjectionOutcome> => {
+      recordParticipant();
+      settleAcceptance(true);
+      if (
+        targetRunId &&
+        queueOptions?.waitForTranscriptCommit === true &&
+        result?.transcriptCommit !== "unconfirmed"
+      ) {
+        await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+      }
+      return result ? { status: "accepted", result } : { status: "accepted" };
+    }, failed)
+    .then(requestVisibleTurnHandoff);
   return {
     targetRunId,
     acceptance: acceptance.promise,

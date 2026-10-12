@@ -60,6 +60,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Channel replies retain their dispatcher-owned quoting and progress callbacks. */
+  requiresReplyDispatcher?: boolean;
   /** Host-observed audio fact; an owner must preserve its dynamic tool context before accepting. */
   inboundAudio?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
@@ -228,6 +230,7 @@ type ReplyMessageInjectionOwner = {
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   resolve(params: {
     options?: ReplyBackendQueueMessageOptions;
+    requiresReplyDispatcher?: boolean;
     inboundAudio?: boolean;
     allowPendingUserInputAnswer?: false;
     assertCurrent?: () => void;

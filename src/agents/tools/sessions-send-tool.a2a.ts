@@ -40,7 +40,7 @@ function sameOwnedSession(params: {
     leftAgentId && rightAgentId && normalizeAgentId(leftAgentId) === normalizeAgentId(rightAgentId),
   );
 }
-function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
+function shouldNotifyWaitFailure(wait: AgentWaitResult): boolean {
   return (
     (wait.status === "error" && !wait.retryableTransportError) || isTerminalAgentWaitTimeout(wait)
   );
@@ -128,19 +128,19 @@ export async function runSessionsSendA2AFlow(params: {
       if (
         params.notifyRequesterOnWaitFailure === true &&
         params.requesterSessionKey &&
-        isDeliveryFailureWait(wait)
+        shouldNotifyWaitFailure(wait)
       ) {
         const error =
           typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
         await runAgentStep({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,
-          message: wait.sourceReplyDelivered
-            ? `sessions_send target run for ${params.displayKey} failed${error}. The target's final reply was already delivered to its source conversation. Do not resend; report the run failure.`
-            : `sessions_send delivery to ${params.displayKey} failed${error}. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.`,
-          extraSystemPrompt: wait.sourceReplyDelivered
-            ? "The target run failed after its final source reply was delivered. Preserve the run error diagnosis. Do not resend the message or the reply."
-            : "A previous sessions_send delivery failed after it was accepted. Inspect the accepted operation before retrying, or report the failure. Preserve attributed session-tool delivery; do not replace it with an operator CLI request. Do not assume the target received the message.",
+          message: wait.waitRpcError
+            ? `sessions_send completion could not be observed for ${params.displayKey}${error}. The message was already accepted; the target outcome is unknown. Do not resend the same message; inspect the accepted run or report the observation failure.`
+            : `sessions_send target run for ${params.displayKey} failed${error}. The message was already accepted.${wait.sourceReplyDelivered ? " The target's final reply was already delivered to its source conversation." : ""} Do not resend the same message; inspect the target run and report the run failure.`,
+          extraSystemPrompt: wait.waitRpcError
+            ? "The wait RPC failed after sessions_send acceptance; the target outcome is unknown. Do not infer input delivery failure or replay the accepted message. Preserve the observation error diagnosis and inspect the accepted run. Do not replace session-tool delivery with an operator CLI request."
+            : `The accepted target run failed; this is not evidence that input delivery failed. Preserve the run error diagnosis. Do not resend the message${wait.sourceReplyDelivered ? " or the already delivered reply" : ""}. Inspect the target run before deciding on recovery. Do not replace session-tool delivery with an operator CLI request.`,
           sourceTool: params.replyMode === "one-way" ? "subagent_announce" : "sessions_send",
           ...(params.replyMode === "one-way" ? { sourceRole: "subagent" as const } : {}),
         });

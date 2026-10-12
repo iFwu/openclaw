@@ -215,6 +215,7 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({
       status: "timeout",
       error: "gateway timeout while waiting",
+      waitRpcError: true,
     });
   });
 
@@ -226,6 +227,7 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({
       status: "error",
       error: "gateway closed (1006): transport close",
+      waitRpcError: true,
       retryableTransportError: true,
     });
   });
@@ -244,16 +246,19 @@ describe("waitForAgentRun", () => {
     callGatewayMock.mockResolvedValueOnce({
       status: "error",
       error,
+      waitRpcError: true,
       retryableTransportError: true,
     });
     const terminal = await waitForAgentRun({ runId: "run-terminal", timeoutMs: 500 });
     expect(terminal).toMatchObject({ status: "error", error });
     expect(terminal).not.toHaveProperty("retryableTransportError");
+    expect(terminal).not.toHaveProperty("waitRpcError");
 
     callGatewayMock.mockRejectedValueOnce(new Error(error));
     await expect(waitForAgentRun({ runId: "run-disconnected", timeoutMs: 500 })).resolves.toEqual({
       status: "error",
       error,
+      waitRpcError: true,
       retryableTransportError: true,
     });
   });
@@ -266,6 +271,7 @@ describe("waitForAgentRun", () => {
     callGatewayMock.mockRejectedValueOnce(new Error(error));
     const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
     expect(result).not.toHaveProperty("retryableTransportError");
+    expect(result.waitRpcError).toBe(true);
   });
 
   it("preserves pending error diagnostics on wait timeouts", async () => {

@@ -15,9 +15,11 @@ import {
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { clearSessionQueues } from "./queue.js";
+import { clearSessionQueues, FollowupRunDeferredError, parkSteerCandidate } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -27,7 +29,13 @@ import { testing as replyTesting } from "./reply-run-registry.test-support.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import { createMockTypingController } from "./test-helpers.js";
 
-vi.mock("./followup-runner.js", () => ({ createFollowupRunner: () => vi.fn(async () => {}) }));
+vi.mock("./followup-runner.js", () => ({
+  // The admitted direct owner still holds the lane; a real followup defers here.
+  createFollowupRunner: () =>
+    vi.fn(async () => {
+      throw new FollowupRunDeferredError();
+    }),
+}));
 
 const keys: string[] = [];
 
@@ -39,13 +47,30 @@ afterEach(() => {
 });
 
 describe("channel steering into an admitted direct command", () => {
-  it.each([
+  it.each<{
+    terminalHistory: boolean;
+    authenticated: boolean;
+    writable: boolean;
+    uncertain: boolean;
+    expiredTarget: boolean;
+    channel?: "webchat" | "telegram";
+    lateQuestion?: "answered" | "unconfirmed";
+  }>([
     {
       terminalHistory: false,
       authenticated: false,
       writable: false,
       uncertain: false,
       expiredTarget: false,
+      channel: "webchat" as const,
+    },
+    {
+      terminalHistory: false,
+      authenticated: false,
+      writable: false,
+      uncertain: false,
+      expiredTarget: false,
+      channel: "telegram" as const,
     },
     {
       terminalHistory: true,
@@ -82,23 +107,42 @@ describe("channel steering into an admitted direct command", () => {
       uncertain: false,
       expiredTarget: true,
     },
+    ...(["answered", "unconfirmed"] as const).map((lateQuestion) => ({
+      terminalHistory: false,
+      authenticated: false,
+      writable: false,
+      uncertain: false,
+      expiredTarget: false,
+      channel: "telegram" as const,
+      lateQuestion,
+    })),
   ])(
-    "admits Telegram input to a direct command (terminal=$terminalHistory, authenticated=$authenticated, writable=$writable, uncertain=$uncertain, expiredTarget=$expiredTarget)",
-    async ({ terminalHistory, authenticated, writable, uncertain, expiredTarget }) => {
-      const key = `agent:main:telegram:group:direct-steering-${terminalHistory}-${authenticated}-${writable}-${uncertain}-${expiredTarget}`;
+    "admits channel input to a direct command (terminal=$terminalHistory, authenticated=$authenticated, writable=$writable, uncertain=$uncertain, expiredTarget=$expiredTarget, lateQuestion=$lateQuestion)",
+    async ({
+      terminalHistory,
+      authenticated,
+      writable,
+      uncertain,
+      expiredTarget,
+      channel = "telegram",
+      lateQuestion,
+    }) => {
+      const key = `agent:main:telegram:group:direct-steering-${terminalHistory}-${authenticated}-${writable}-${uncertain}-${expiredTarget}-${lateQuestion ?? "none"}`;
       keys.push(key);
       const run = createQueueTestRun({
         prompt: "Use the corrected requirements.",
         messageId: `telegram-correction-${terminalHistory}-${authenticated}-${writable}`,
-        originatingChannel: "telegram",
+        originatingChannel: channel,
         originatingTo: "synthetic-group",
+        originatingReplyToId: "synthetic-user-message",
+        originatingReplyToMode: "all",
         currentInboundEventKind: "user_request",
       });
       Object.assign(run.run, {
         agentId: "main",
         sessionId: `direct-steering-session-${terminalHistory}-${authenticated}-${writable}`,
         sessionKey: key,
-        messageProvider: "telegram",
+        messageProvider: channel,
         senderId: "synthetic-owner",
         senderIsOwner: true,
         inputProvenance: { kind: "external_user" },
@@ -142,6 +186,16 @@ describe("channel steering into an admitted direct command", () => {
           undefined,
           async (prepared) => {
             const delivered: string[] = [];
+            let questionRegistered = false;
+            const claimQuestion = vi.fn(
+              async (_text: string, _options: unknown, assertCurrent: () => void) => {
+                assertCurrent();
+                if (questionRegistered && lateQuestion === "unconfirmed") {
+                  throw new QuestionAnswerUnconfirmedError("Synthetic late question receipt lost");
+                }
+                return questionRegistered;
+              },
+            );
             const requestYield = vi.fn((_isSourceCurrent: () => boolean) => true);
             const handle = {
               requestYieldToVisibleTurn: requestYield,
@@ -154,6 +208,7 @@ describe("channel steering into an admitted direct command", () => {
               messageInjectionV2: {
                 version: 2 as const,
                 isAvailable: () => true,
+                claimPendingUserInputAnswer: claimQuestion,
                 cancelPendingUserInput: async () => {
                   if (uncertain) {
                     throw new QuestionAnswerUnconfirmedError(
@@ -213,7 +268,24 @@ describe("channel steering into an admitted direct command", () => {
                 await expect(statusControl.outcome).resolves.toMatchObject({ status: "rejected" });
                 expect(requestYield).not.toHaveBeenCalled();
               }
-              await runReplyAgent({
+              const parked = createDeferredCore();
+              const predecessor = lateQuestion
+                ? parkSteerCandidate(
+                    key,
+                    { ...run, prompt: "preceding input", messageId: "preceding-input" },
+                    { mode: "steer", debounceMs: 0 },
+                    async () => {},
+                  )
+                : undefined;
+              if (lateQuestion) {
+                run.turnAdoptionLifecycle = {
+                  onAdopted: async () => {},
+                  onDeferred: () => {
+                    parked.resolve();
+                  },
+                };
+              }
+              const reply = runReplyAgent({
                 commandBody: run.prompt,
                 followupRun: run,
                 opts: { runId: run.messageId, [REPLY_OPERATION_RUN_STATE]: state },
@@ -224,8 +296,8 @@ describe("channel steering into an admitted direct command", () => {
                 isActive: true,
                 typing: createMockTypingController(),
                 sessionCtx: {
-                  Provider: "telegram",
-                  OriginatingChannel: "telegram",
+                  Provider: channel,
+                  OriginatingChannel: channel,
                   SenderId: run.run.senderId,
                   MessageSid: run.messageId,
                 },
@@ -246,12 +318,56 @@ describe("channel steering into an admitted direct command", () => {
                 shouldInjectGroupIntro: false,
                 typingMode: "never",
               });
+              try {
+                if (lateQuestion) {
+                  // The initial question check has passed; the source now waits on admission.
+                  await Promise.race([
+                    parked.promise,
+                    reply.then(() => {
+                      throw new Error("Expected deferred steering admission");
+                    }),
+                  ]);
+                  expect(claimQuestion).not.toHaveBeenCalled();
+                  questionRegistered = true;
+                  expectDefined(predecessor, "parked predecessor").consume();
+                }
+                await reply;
+              } finally {
+                predecessor?.consume();
+                await reply;
+              }
               expect(state.admission).toEqual(
-                uncertain
+                uncertain || lateQuestion === "unconfirmed"
                   ? { status: "skipped", reason: "question-response-indeterminate" }
-                  : { status: "accepted", mode: authenticated ? "followup" : "steer" },
+                  : {
+                      status: "accepted",
+                      mode:
+                        lateQuestion === "answered"
+                          ? "steer"
+                          : authenticated || channel === "telegram"
+                            ? "followup"
+                            : "steer",
+                    },
               );
-              expect(delivered).toEqual(authenticated ? [] : [run.prompt]);
+              expect(delivered).toEqual(
+                authenticated || channel === "telegram" ? [] : [run.prompt],
+              );
+              if (lateQuestion) {
+                expect(claimQuestion).toHaveBeenCalledOnce();
+                expect(getExistingFollowupQueue(key)?.items ?? []).toEqual([]);
+              }
+              if (channel === "telegram" && !uncertain && !lateQuestion) {
+                expect(getExistingFollowupQueue(key)?.items).toEqual([
+                  expect.objectContaining({
+                    prompt: run.prompt,
+                    messageId: run.messageId,
+                    originatingChannel: "telegram",
+                    originatingTo: "synthetic-group",
+                    originatingReplyToId: "synthetic-user-message",
+                    originatingReplyToMode: "all",
+                  }),
+                ]);
+              }
               expect(requestYield).toHaveBeenCalledTimes(
                 authenticated && writable && !uncertain ? 1 : 0,
               );
