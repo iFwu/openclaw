@@ -1,5 +1,6 @@
 // Plugin Boundary Report tests cover plugin boundary report script behavior.
-import { beforeAll, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createPluginBoundaryReport,
   isPluginCompatEligibleForRemoval,
@@ -90,6 +91,38 @@ describe("plugin-boundary-report", () => {
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
     );
+  });
+
+  it("does not make fork CI fail solely because a compatibility date has passed", () => {
+    // SAFETY: The repository-owned manifest defines string scripts; the selected command is checked below.
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { scripts: Record<string, string> };
+    const script = packageJson.scripts["plugins:boundary-report:ci"];
+    if (!script) {
+      throw new Error("Missing plugin boundary CI script");
+    }
+    const command = script.split(/\s+/u);
+    const scriptIndex = command.indexOf("scripts/plugin-boundary-report.ts");
+    expect(scriptIndex).toBeGreaterThanOrEqual(0);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2100-01-01T00:00:00.000Z"));
+      const result = createPluginBoundaryReport([...command.slice(scriptIndex + 1), "--json"]);
+      // SAFETY: createPluginBoundaryReport owns this JSON shape; assertions below verify the relevant fields.
+      const summary = JSON.parse(result.stdout) as {
+        compat: { eligibleForRemovalCount: number };
+      };
+      expect(summary.compat.eligibleForRemovalCount).toBeGreaterThan(0);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(createPluginBoundaryReport(["--summary"]).stdout).toContain("review-due");
+      expect(createPluginBoundaryReport(["--summary", "--fail-on-eligible-compat"]).exitCode).toBe(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("treats removeAfter as the final compatibility day", () => {

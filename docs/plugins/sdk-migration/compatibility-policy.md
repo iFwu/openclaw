@@ -354,8 +354,15 @@ Audit the current migration queue with `pnpm plugins:boundary-report`:
 | `--owner <id>`                                          | Filter to one compatibility owner.                                                                 |
 | `--fail-on-eligible-compat`                             | Exit non-zero for dated `deprecated` records starting at 00:00 UTC on the day after `removeAfter`. |
 
-`pnpm plugins:boundary-report:ci` runs with the compatibility fail flag.
-For dated `deprecated` records, `removeAfter` is the final compatibility day:
+In this fork, `pnpm plugins:boundary-report:ci` reports compatibility dates without
+using the fail flag. Expired records appear as `review-due` reminders; a calendar
+change alone does not invalidate an otherwise unchanged build. Retirement requires
+an explicit compatibility decision and verified consumer migration. Deprecated
+imports and other structural boundary checks remain enforced separately.
+`--fail-on-eligible-compat` remains available for an explicitly requested migration
+audit, not the default CI path.
+
+For dated `deprecated` records, `removeAfter` is the final scheduled compatibility day:
 `2026-09-01` becomes eligible at `2026-09-02T00:00:00Z`, not at the start of
 September 1. `removal-pending` records are separate: they become due for review
 at 00:00 UTC on their `removeAfter` date and are reported with blockers, but do

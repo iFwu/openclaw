@@ -208,6 +208,17 @@ describe("plugin compatibility registry", () => {
     );
   });
 
+  it("keeps the retired beta.5 session-store API as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "deprecated-session-store-beta5-api",
+    );
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement: expect.stringContaining("getSessionEntry"),
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
   it("keeps the removed context-engine host-param default as a migration tombstone", () => {
     const record = listPluginCompatRecords().find(
       (candidate) => candidate.code === "context-engine-legacy-host-param-default",

@@ -7,7 +7,12 @@ title: "Removal timeline"
 sidebarTitle: "Removal timeline"
 ---
 
-The dates and gates that govern when deprecated surfaces become removable. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
+The dates and gates used to review deprecated surfaces. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
+
+This fork treats calendar deadlines as review reminders, not automatic API removal
+or default CI failures. A supported compatibility contract changes only through an
+explicit, verified retirement. The opt-in failure flag below is for migration
+audits; `plugins:boundary-report:ci` leaves it off.
 
 ## Removal timeline
 

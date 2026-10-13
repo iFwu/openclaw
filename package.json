@@ -1920,7 +1920,7 @@
     "plugin-sdk:usage": "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/analyze-plugin-sdk-usage.ts",
     "policy:config-coverage": "node --import ./scripts/tsx.mjs scripts/check-policy-config-coverage.ts",
     "plugins:boundary-report": "node --import ./scripts/tsx.mjs scripts/plugin-boundary-report.ts",
-    "plugins:boundary-report:ci": "node --import ./scripts/tsx.mjs scripts/plugin-boundary-report.ts --summary --fail-on-eligible-compat",
+    "plugins:boundary-report:ci": "node --import ./scripts/tsx.mjs scripts/plugin-boundary-report.ts --summary",
     "plugins:boundary-report:json": "node --import ./scripts/tsx.mjs scripts/plugin-boundary-report.ts --json",
     "plugins:boundary-report:summary": "node --import ./scripts/tsx.mjs scripts/plugin-boundary-report.ts --summary",
     "plugins:assets:build": "node --import ./scripts/tsx.mjs scripts/bundled-plugin-assets.mts --phase build",

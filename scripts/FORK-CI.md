@@ -70,6 +70,11 @@ type graph or lint Program at a time. Fail-fast is disabled, and `check-gate`
 requires the plan and every admitted row to succeed, refusing failed/cancelled
 plans and unexpectedly skipped checks. No failed result is converted to success.
 
+Compatibility calendar dates are advisory in this fork. The plugin boundary report
+lists expired records for review but does not fail CI solely because time passed.
+API retirement is an explicit change with consumer verification; deprecated-import,
+SDK export, authority, and data-boundary checks retain their independent gates.
+
 The local `--phase all` default and `guards-types` entrypoint remain unchanged.
 The additional `guards` and `types` partitions split that phase without dropping
 commands; `types` keeps its boundary/typecheck pair when run directly. Use separate
