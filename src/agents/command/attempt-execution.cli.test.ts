@@ -70,6 +70,7 @@ import {
 } from "./attempt-execution.announce.test-support.js";
 import {
   createCliImageCapabilityPlugins,
+  createCliModelSelectionFixture,
   resetCliAttemptFixtureDatabases,
 } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
@@ -1007,27 +1008,7 @@ describe("CLI attempt execution", () => {
             suppressVisibleSessionEffects: false,
             runContext: {},
           })
-        : {
-            sessionEntry: params.sessionEntry,
-            provider: "claude-cli",
-            model: "sonnet",
-            requestedRouteResolution: "resolved",
-            defaultProvider: "claude-cli",
-            defaultModel: "sonnet",
-            configuredDefaultAuthProfileId: undefined,
-            providerForAuthProfileValidation: "claude-cli",
-            hasExplicitRunOverride: false,
-            storedProviderOverride: undefined,
-            storedModelOverride: undefined,
-            storedModelOverrideSource: undefined,
-            hasStoredAutoFallbackProvenance: false,
-            autoFallbackPrimaryProbe: undefined,
-            sessionEntryForAttempt: params.sessionEntry,
-            thinkingCatalog: [],
-            immutableThinkLevel: "off",
-            effectiveTurnThinkLevel: "off",
-            sessionFile: path.join(tmpDir, "session.jsonl"),
-          };
+        : createCliModelSelectionFixture(params.sessionEntry, tmpDir);
     const selectedPrepared = {
       ...prepared,
       sessionEntry: modelSelection.sessionEntry,

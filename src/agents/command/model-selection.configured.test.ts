@@ -250,8 +250,9 @@ describe("command selection with configured model facts", () => {
         immutableThinkLevel: "high",
       });
       expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
-      if (kind !== "restart")
+      if (kind !== "restart") {
         expect(handoff).toMatchObject({ provider: "custom", model: "manual" });
+      }
       expect(await fixture.select({ opts: { message: "Normal new message" } })).toMatchObject({
         provider: "custom",
         model: "base",

@@ -289,7 +289,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         getLifecycleGeneration: () => lifecycleGeneration,
         onSaved: (saved) => {
           sessionEntry = saved;
-          if (sessionStore && sessionKey) sessionStore[sessionKey] = saved;
+          if (sessionStore && sessionKey) {
+            sessionStore[sessionKey] = saved;
+          }
         },
       });
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};

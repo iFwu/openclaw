@@ -59,6 +59,7 @@ export function registerDormantCompletionRequesterBudgetTests(params: {
         loadSessionEntry: () => ({ sessionId: "requester-session-local", updatedAt: 1 }),
       });
 
+      // SAFETY: The mock dispatcher only compares resolver identity; it never reads context fields.
       const ownerContext = { owner: "gateway-a" } as never;
       const resolveGatewayContext = () => ownerContext;
       const signal = new AbortController().signal;

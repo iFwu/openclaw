@@ -23,13 +23,16 @@ export async function refreshReplyLiveModelSelection(
       },
       assertCurrent,
       async (read) => {
-        if (!read.ok) throw read.error;
+        if (!read.ok) {
+          throw read.error;
+        }
         return read.value;
       },
     );
     if (fresh) {
-      if (fresh.sessionId !== params.followupRun.run.sessionId)
+      if (fresh.sessionId !== params.followupRun.run.sessionId) {
         throw new Error("Live model switch session changed");
+      }
       params.activeSessionStore ??= {};
       params.activeSessionStore[params.sessionKey] = fresh;
       params.followupRun.run.fastMode = fresh.fastMode ?? params.followupRun.run.fastMode;

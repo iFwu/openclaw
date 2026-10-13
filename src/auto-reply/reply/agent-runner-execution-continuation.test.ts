@@ -60,7 +60,9 @@ describe("reply continuation selection lifecycle", () => {
         return delegate(run);
       });
       state.runEmbeddedAgentMock.mockImplementation(async () => {
-        if (restart) throw createAgentRunRestartAbortError();
+        if (restart) {
+          throw createAgentRunRestartAbortError();
+        }
         return {
           payloads: [{ text: "done" }],
           meta: {
@@ -71,7 +73,7 @@ describe("reply continuation selection lifecycle", () => {
       const execute = await getExecuteAgentTurnForTest();
       const result = await execute(params);
       expect(state.runEmbeddedAgentEntryMock, JSON.stringify(result)).toHaveBeenCalled();
-      if (admissionError) throw admissionError;
+      expect(admissionError).toBeUndefined();
       expect(captured?.continuationModelSelection).toMatchObject({
         provider: "anthropic",
         model: "claude",
@@ -81,8 +83,11 @@ describe("reply continuation selection lifecycle", () => {
       });
       const retained = (loadSessionEntry(target) as InternalSessionEntry)
         .continuationModelSelection;
-      if (restart) expect(retained).toEqual(captured?.continuationModelSelection);
-      else expect(retained).toBeUndefined();
+      if (restart) {
+        expect(retained).toEqual(captured?.continuationModelSelection);
+      } else {
+        expect(retained).toBeUndefined();
+      }
     },
   );
 });

@@ -76,7 +76,9 @@ export async function resolveCommandModelParent(
         params.opts.operatorAuthority?.assertCurrent();
       },
       async (read) => {
-        if (!read.ok) throw read.error;
+        if (!read.ok) {
+          throw read.error;
+        }
         return read.value;
       },
     );
@@ -123,13 +125,15 @@ export function resolveCommandContinuationSelection(params: {
     if (
       isModelSelectionLocked(params.entry) &&
       (selection.provider !== params.provider || selection.model !== params.model)
-    )
+    ) {
       throw new ModelSelectionLockedError();
+    }
     assertOperatorModelAllowed(params.opts.operatorAuthority, selection);
-    if (!params.visibilityPolicy.allows(selection))
+    if (!params.visibilityPolicy.allows(selection)) {
       throw new Error(
         "The interrupted turn's model is no longer allowed. Select a permitted model to continue.",
       );
+    }
     // Keep the redeemed object and its private approval/source owner bound to the validated primary.
     if (nativeCompletion && handoff) {
       handoff.provider = selection.provider;
@@ -161,8 +165,9 @@ export function prepareCommandContinuationAdmission(
     (command.preserveUserFacingSessionModelState &&
       !command.modelSelection.continuationSelection) ||
     isHeartbeatLifecycleRunKind(command.opts.bootstrapContextRunKind)
-  )
+  ) {
     return command.preparedRunAdmission;
+  }
   const params = {
     ...state,
     entry,
@@ -182,7 +187,7 @@ export function prepareCommandContinuationAdmission(
     },
   };
   return withContinuationModelSelectionAdmission(params.admission, async () => {
-    const { selection, entry, parent } = params;
+    const { selection, parent } = params;
     const saved = await persistContinuationModelSelection({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -222,7 +227,9 @@ export function prepareCommandContinuationAdmission(
       },
       assertCurrent: params.assertCurrent,
     });
-    if (saved) params.onSaved(saved);
+    if (saved) {
+      params.onSaved(saved);
+    }
   });
 }
 
@@ -249,7 +256,9 @@ export async function refreshCommandLiveModelSelection(
     defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
     ...params.modelManifestContext,
   });
-  if (!visibility.allows(params)) throw new Error("The selected model is no longer allowed.");
+  if (!visibility.allows(params)) {
+    throw new Error("The selected model is no longer allowed.");
+  }
   const handoff = params.opts.trustedInternalHandoff;
   if (
     handoff &&
@@ -266,7 +275,9 @@ export async function refreshCommandLiveModelSelection(
     handoff.provider = params.provider;
     handoff.model = params.model;
   }
-  if (!params.sessionKey || !params.sessionEntry) return params.sessionEntry;
+  if (!params.sessionKey || !params.sessionEntry) {
+    return params.sessionEntry;
+  }
   const fresh = await withSessionEntryReadOnlyInWorker(
     { agentId: params.sessionAgentId, sessionKey: params.sessionKey, storePath: params.storePath },
     () => {
@@ -275,13 +286,18 @@ export async function refreshCommandLiveModelSelection(
       params.opts.operatorAuthority?.assertCurrent();
     },
     async (read) => {
-      if (!read.ok) throw read.error;
+      if (!read.ok) {
+        throw read.error;
+      }
       return read.value;
     },
   );
-  if (!fresh || fresh.sessionId !== params.sessionEntry.sessionId)
+  if (!fresh || fresh.sessionId !== params.sessionEntry.sessionId) {
     throw new Error("Live model switch session changed");
-  if (params.sessionStore) params.sessionStore[params.sessionKey] = fresh;
+  }
+  if (params.sessionStore) {
+    params.sessionStore[params.sessionKey] = fresh;
+  }
   const next = { ...fresh };
   applyModelRuntimeDirective(
     next,

@@ -128,7 +128,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               },
               assertSelectionCurrent,
               async (read) => {
-                if (!read.ok) throw read.error;
+                if (!read.ok) {
+                  throw read.error;
+                }
                 return read.value;
               },
             );
@@ -167,7 +169,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
                   },
             assertCurrent: assertSelectionCurrent,
           });
-          if (saved && turn.activeSessionStore) turn.activeSessionStore[sessionKey] = saved;
+          if (saved && turn.activeSessionStore) {
+            turn.activeSessionStore[sessionKey] = saved;
+          }
         })
       : params.preparedRunAdmission;
   const resolveCandidateRuntime = (
