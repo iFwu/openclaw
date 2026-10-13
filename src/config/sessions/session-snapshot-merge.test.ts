@@ -14,6 +14,49 @@ const initial: SessionEntry = {
 };
 
 describe("session snapshot merge", () => {
+  it("keeps model revision and retained primary atomic across concurrent explicit selections", () => {
+    const selection = {
+      runId: "old",
+      sessionId: initial.sessionId,
+      provider: "openai",
+      model: "temporary",
+    };
+    const before: SessionEntry = {
+      ...initial,
+      modelSelectionRevision: "old",
+      continuationModelSelection: selection,
+    };
+    const next: SessionEntry = {
+      ...before,
+      modelSelectionRevision: "new",
+      providerOverride: "openai",
+      modelOverride: "chosen",
+      continuationModelSelection: undefined,
+    };
+    const current: SessionEntry = {
+      ...before,
+      continuationModelSelection: { ...selection, ownerRunId: "successor" },
+      model: "fallback",
+    };
+    const merged = mergeSessionSnapshotChanges({ initial: before, next, current });
+    expect(merged).toMatchObject({
+      modelSelectionRevision: "new",
+      providerOverride: "openai",
+      modelOverride: "chosen",
+    });
+    expect(merged.continuationModelSelection).toBeUndefined();
+    expect(
+      mergeSessionSnapshotChanges({
+        initial: before,
+        next,
+        current: { ...current, modelSelectionRevision: "latest", modelOverride: "latest" },
+      }),
+    ).toMatchObject({
+      modelSelectionRevision: "latest",
+      modelOverride: "latest",
+      continuationModelSelection: current.continuationModelSelection,
+    });
+  });
   it("projects same-provider model changes as an atomic pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const patch = projectSessionSnapshotChanges({ initial, next, current: initial });

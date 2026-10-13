@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { readSharedBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import {
   consumeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
+import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import {
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
@@ -56,6 +58,32 @@ function settleRuns(
 }
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it("freezes the requester primary into a rearmed cohort before releasing turn ownership", () => {
+    const alpha = makeRun("alpha");
+    const beta = makeRun("beta");
+    const selection = {
+      runId: REQUESTER_TURN,
+      sessionId: "requester-session",
+      provider: "selected-provider",
+      model: "selected-primary",
+      fallbacks: ["fallback-provider/fallback-model"],
+    };
+    alpha.model = "child-provider/child-model";
+    alpha.requesterModelSelection = selection;
+    markRequesterSettleWakePending(alpha);
+    const expected = structuredClone(selection);
+    expect(settleRuns([alpha, beta])).toBe(true);
+    expect(alpha.requesterTurnRunId).toBeUndefined();
+    selection.model = "later-primary";
+    selection.fallbacks.push("other/fallback");
+    expect(alpha.requesterSettleWake?.requesterModelSelection).toEqual(expected);
+    expect(beta.requesterSettleWake?.requesterModelSelection).toEqual(expected);
+    const state = readSharedBatchState([alpha, beta]);
+    expect(state.requesterModelSelection).toEqual(expected);
+    state.requesterModelSelection?.fallbacks?.push("mutated/read");
+    expect(alpha.requesterSettleWake?.requesterModelSelection).toEqual(expected);
+  });
+
   it.each([false, true])(
     "publishes a nested requester's pause with its wake batch (persistence failure: %s)",
     (failPersistence) => {

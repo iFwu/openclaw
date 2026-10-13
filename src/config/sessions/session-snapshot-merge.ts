@@ -14,6 +14,7 @@ export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
+  "modelSelectionRevision",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 
 const MODEL_ROUTE_OVERRIDE_FIELDS = [
@@ -37,6 +38,7 @@ const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
   "liveModelSwitchPending",
   "contextWindow",
   "thinkingLevel",
+  "continuationModelSelection",
 ]);
 
 const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["contextWindow", "thinkingLevel"] as const;

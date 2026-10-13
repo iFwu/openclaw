@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
+import type { ContinuationModelSelection } from "../../../sessions/continuation-model-selection.js";
 import { listAgentIds } from "../../agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
@@ -120,6 +121,7 @@ export async function resolveSubagentSpawnRequest(
   // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
   let completionRequesterLifecycleRevision: string | undefined;
+  let requesterModelSelection: ContinuationModelSelection | undefined;
   const captureRequester = async () => {
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
@@ -132,6 +134,16 @@ export async function resolveSubagentSpawnRequest(
       const requesterEntry = target.store[target.canonicalKey];
       completionRequesterSessionId = requesterEntry?.sessionId;
       completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
+      const selection = requesterEntry?.continuationModelSelection;
+      if (
+        selection &&
+        (selection.ownerRunId ?? selection.runId) === ctx.requesterTurnRunId &&
+        selection.sessionId === requesterEntry?.sessionId &&
+        selection.lifecycleRevision === requesterEntry?.lifecycleRevision &&
+        selection.modelSelectionRevision === requesterEntry?.modelSelectionRevision
+      ) {
+        requesterModelSelection = structuredClone(selection);
+      }
     } catch (error) {
       return rejectSubagentSpawnRequest(
         "error",
@@ -341,6 +353,7 @@ export async function resolveSubagentSpawnRequest(
         expectsCompletionMessage,
         completionRequesterSessionId,
         completionRequesterLifecycleRevision,
+        requesterModelSelection,
       },
       runtime: {
         hookRunner,

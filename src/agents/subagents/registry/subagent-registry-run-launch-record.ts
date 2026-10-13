@@ -5,6 +5,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
+  requesterModelSelection?: SubagentRunRecord["requesterModelSelection"];
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -58,6 +59,14 @@ export function createSubagentRegistrationRecord(
   const childSessionKey = registerParams.childSessionKey.trim();
   const requesterSessionKey = registerParams.requesterSessionKey.trim();
   const requesterTurnRunId = registerParams.requesterTurnRunId?.trim();
+  const selection = registerParams.requesterModelSelection;
+  const requesterModelSelection =
+    selection &&
+    (selection.ownerRunId ?? selection.runId) === requesterTurnRunId &&
+    selection.sessionId === registerParams.completionRequesterSessionId &&
+    selection.lifecycleRevision === registerParams.completionRequesterLifecycleRevision
+      ? structuredClone(selection)
+      : undefined;
   const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
   const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
   const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
@@ -66,6 +75,7 @@ export function createSubagentRegistrationRecord(
     runId,
     taskRunId: runId,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
+    ...(requesterModelSelection ? { requesterModelSelection } : {}),
     childSessionKey,
     controllerSessionKey,
     requesterSessionKey,

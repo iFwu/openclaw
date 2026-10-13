@@ -1,3 +1,4 @@
+import type { ContinuationModelSelection } from "../../../sessions/continuation-model-selection.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
@@ -17,6 +18,7 @@ export type TrustedSubagentCompletionHandoff = {
   targetSessionId: string;
   provider: string;
   model: string;
+  modelSelection?: ContinuationModelSelection;
   settleBatch?: SubagentSettleToolPolicyBatch;
 };
 
@@ -26,6 +28,7 @@ export type SubagentCompletionToolHandoffRegistration = {
   targetSessionKey: string;
   targetSessionId: string;
   idempotencyKey: string;
+  modelSelection?: ContinuationModelSelection;
   /** Original native producer liveness; never transported as agent JSON. */
   isCurrent?: () => boolean;
   settleBatch?: SubagentSettleToolPolicyBatch;

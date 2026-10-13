@@ -123,6 +123,31 @@ metadata during database repair or drop acknowledged notices while rewriting
 session records, even when the schema version is unchanged.
 See [Database schemas](/reference/database-schemas) for downgrade precautions.
 
+## Model selection during automatic continuation
+
+An admitted embedded turn retains its selected primary model and turn options in
+private session metadata. Gateway restart recovery and native subagent completion
+continuations reuse that selection, including one-turn overrides. They also resolve
+persisted parent model overrides when the thread has no local selection.
+
+The snapshot records the selected primary, not the model that happened to execute
+as a fallback. It does not create a persistent session override. A newer explicit
+model selection or Default takes precedence, and a new ordinary turn invalidates
+older child-result snapshots. Session replacement, parent replacement, and stale
+writer ownership also prevent an old selection from being reused. Model locks,
+current model policies, and permitted fallback rules still apply.
+
+Normal completion, cancellation, and failure clear the exact turn's private
+snapshot. Restart interruption retains it for its successor. Native completion
+turns can retain this private recovery custody without changing the session's
+public model state. Heartbeat and isolated model-only runs do not borrow it.
+
+This applies to newly captured turns. Older interrupted turns without a snapshot
+still use current persisted model selection; the Gateway does not infer a primary
+from historical execution or fallback metadata. Older builds can discard these
+additive fields during session rewrites, so finish pending continuation before
+downgrading.
+
 ## Graceful restarts drain first
 
 Startup migration warnings do not prevent the Gateway from starting. It logs the

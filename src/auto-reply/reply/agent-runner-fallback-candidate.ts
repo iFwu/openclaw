@@ -6,13 +6,23 @@ import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  emitAgentEvent,
+} from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import {
+  persistContinuationModelSelection,
+  withContinuationModelSelectionAdmission,
+} from "../../sessions/continuation-model-selection.js";
+import { resolveStoredModelParentSessionKey } from "../../sessions/stored-model-overrides.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
@@ -90,6 +100,76 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     milestone: "before_model_fallback",
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
+  const selectedEntry: InternalSessionEntry | undefined =
+    turn.activeSessionStore?.[turn.sessionKey ?? ""] ?? turn.getActiveSessionEntry();
+  const sessionKey = turn.sessionKey;
+  const assertSelectionCurrent = () => {
+    params.runAbortSignal?.throwIfAborted();
+    params.preparedRunAdmission.assertSourceCurrent();
+    turn.followupRun.operatorAuthority?.assertCurrent();
+    assertAgentRunLifecycleGenerationCurrent(params.state.lifecycleGeneration);
+  };
+  const selectionAdmission =
+    !turn.isHeartbeat && sessionKey && turn.storePath && selectedEntry
+      ? withContinuationModelSelectionAdmission(params.preparedRunAdmission, async () => {
+          const parentKey = resolveStoredModelParentSessionKey({
+            sessionKey,
+            parentSessionKey: selectedEntry.parentSessionKey,
+          });
+          let parentEntry: InternalSessionEntry | undefined = parentKey
+            ? turn.activeSessionStore?.[parentKey]
+            : undefined;
+          if (parentKey && !parentEntry) {
+            parentEntry = await withSessionEntryReadOnlyInWorker(
+              {
+                agentId: turn.followupRun.run.agentId,
+                sessionKey: parentKey,
+                storePath: turn.storePath,
+              },
+              assertSelectionCurrent,
+              async (read) => {
+                if (!read.ok) throw read.error;
+                return read.value;
+              },
+            );
+          }
+          const retained = selectedEntry.continuationModelSelection;
+          const sameRun = (retained?.ownerRunId ?? retained?.runId) === params.runId;
+          const saved = await persistContinuationModelSelection({
+            agentId: turn.followupRun.run.agentId,
+            sessionKey,
+            storePath: turn.storePath,
+            expectedWriterRunId: params.runId,
+            continuation: sameRun,
+            selection:
+              sameRun && retained
+                ? retained
+                : {
+                    runId: params.runId,
+                    ownerRunId: params.runId,
+                    sourceTurnId: selectedEntry.restartRecoveryDeliverySourceRunId,
+                    sessionId: selectedEntry.sessionId,
+                    lifecycleRevision: selectedEntry.lifecycleRevision,
+                    modelSelectionRevision: selectedEntry.modelSelectionRevision,
+                    ...(parentKey && parentEntry
+                      ? {
+                          parentSessionKey: parentKey,
+                          parentSessionId: parentEntry.sessionId,
+                          parentLifecycleRevision: parentEntry.lifecycleRevision,
+                          parentModelSelectionRevision: parentEntry.modelSelectionRevision,
+                        }
+                      : {}),
+                    provider: selection.provider,
+                    model: selection.model,
+                    thinking: turn.followupRun.run.thinkLevel,
+                    fastMode: turn.followupRun.run.fastMode,
+                    fallbacks: selection.fallbacksOverride,
+                  },
+            assertCurrent: assertSelectionCurrent,
+          });
+          if (saved && turn.activeSessionStore) turn.activeSessionStore[sessionKey] = saved;
+        })
+      : params.preparedRunAdmission;
   const resolveCandidateRuntime = (
     provider: string,
     model: string,
@@ -132,7 +212,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   };
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
-      preparedRunAdmission: params.preparedRunAdmission,
+      preparedRunAdmission: selectionAdmission,
       selection: {
         cfg: selection.cfg,
         provider: selection.provider,
@@ -290,7 +370,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         );
         try {
           const common = {
-            preparedRunAdmission: params.preparedRunAdmission,
+            preparedRunAdmission: selectionAdmission,
             messageActionTurnCapability,
             turn,
             candidateRun,

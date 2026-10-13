@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 export type ModelOverrideSelection = {
@@ -57,6 +58,8 @@ export function applyModelOverrideToSessionEntry(params: {
   selectionSource?: "auto" | "user";
   explicitDefaultSelection?: boolean;
   markLiveSwitchPending?: boolean;
+  /** Normalization preserves the admitted turn's choice; explicit selections invalidate it. */
+  invalidateContinuationSelection?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
   assertModelSelectionUnlocked(entry);
@@ -175,6 +178,15 @@ export function applyModelOverrideToSessionEntry(params: {
     updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
   }
 
+  if (
+    params.invalidateContinuationSelection !== false &&
+    selectionSource === "user" &&
+    (updated || entry.continuationModelSelection || entry.continuationTurnRevision)
+  ) {
+    entry.modelSelectionRevision = randomUUID();
+    delete entry.continuationModelSelection;
+    updated = true;
+  }
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
     if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
@@ -215,6 +227,7 @@ export function repairProviderWrappedModelOverride(params: {
           runtimeProvider === params.defaultProvider && runtimeModel === params.defaultModel,
       },
       selectionSource: params.entry.modelOverrideSource === "auto" ? "auto" : "user",
+      invalidateContinuationSelection: false,
     });
   }
 
@@ -226,6 +239,7 @@ export function repairProviderWrappedModelOverride(params: {
         model: params.defaultModel,
         isDefault: true,
       },
+      invalidateContinuationSelection: false,
     });
   }
 

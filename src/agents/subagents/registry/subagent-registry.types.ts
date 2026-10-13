@@ -1,4 +1,5 @@
 import type { SubagentEndReason } from "../../../context-engine/types.js";
+import type { ContinuationModelSelection } from "../../../sessions/continuation-model-selection.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -102,6 +103,8 @@ type SwarmQueuedLaunch = {
 
 /** Durable outbox state for the top-level requester settle wake. */
 export type RequesterSettleWakeState = {
+  /** Selected requester primary frozen with the cohort, not its admitted fallback. */
+  requesterModelSelection?: ContinuationModelSelection;
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
@@ -150,6 +153,8 @@ type SubagentKillIntent = {
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
+  /** Requester's selected primary at spawn admission, independent of the child's model. */
+  requesterModelSelection?: ContinuationModelSelection;
   /** Durable proof that this requester attempt invoked sessions_yield. */
   requesterTurnYielded?: true;
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */

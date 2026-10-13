@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -61,6 +61,16 @@ test.each(["origin", "notice"])(
       const entry: SessionEntry = {
         sessionId: "heartbeat",
         updatedAt: 1,
+        modelSelectionRevision: "selected-turn",
+        continuationTurnRevision: "logical-turn",
+        continuationModelSelection: {
+          runId: "original",
+          sessionId: "heartbeat",
+          provider: "custom",
+          model: "retained-primary",
+          modelSelectionRevision: "selected-turn",
+          turnRevision: "logical-turn",
+        },
         providerOverride: "custom",
         modelOverride: "fallback",
         modelOverrideSource: "auto",
@@ -99,6 +109,8 @@ test.each(["origin", "notice"])(
         resetModelOverrideReason: "stale",
       });
       expect(entry.modelOverride).toBeUndefined();
+      expect(entry.modelSelectionRevision).toBe("selected-turn");
+      expect(entry.continuationModelSelection?.model).toBe("retained-primary");
     });
   },
 );

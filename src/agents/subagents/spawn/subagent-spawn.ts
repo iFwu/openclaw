@@ -85,6 +85,7 @@ export async function spawnSubagentDirect(
       expectsCompletionMessage,
       completionRequesterSessionId,
       completionRequesterLifecycleRevision,
+      requesterModelSelection,
     },
     runtime: {
       hookRunner,
@@ -556,6 +557,7 @@ export async function spawnSubagentDirect(
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          requesterModelSelection,
           childSessionKey,
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,

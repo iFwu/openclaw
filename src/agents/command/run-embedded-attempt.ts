@@ -1,5 +1,4 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -58,6 +57,10 @@ import {
 } from "./attempt-callbacks.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
+import {
+  prepareCommandContinuationAdmission,
+  refreshCommandLiveModelSelection,
+} from "./continuation-model.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
@@ -96,7 +99,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     storedProviderOverride,
     hasStoredAutoFallbackProvenance,
     autoFallbackPrimaryProbe,
-    immutableThinkLevel,
     sessionFile,
   } = params.modelSelection;
   let {
@@ -109,6 +111,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     effectiveTurnThinkLevel,
   } = params.modelSelection;
   const thinkingCatalog = params.modelSelection.thinkingCatalog;
+  let immutableThinkLevel = params.modelSelection.immutableThinkLevel;
+  let continuationSelection = params.modelSelection.continuationSelection;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -253,6 +257,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         ? getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId)
         : new Set<string>();
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
+      const modelFallbacksOverride =
+        params.opts.modelFallbacksOverride ?? continuationSelection?.fallbacks;
       const modelFallbackAvailability = resolveModelFallbackAvailability({
         ...captureModelFallbackPolicyContext({ cfg }),
         cfg,
@@ -261,16 +267,31 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         model,
         sessionKey,
         hasSessionModelOverride:
-          hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
-        modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+          hasExplicitRunOverride ||
+          Boolean(continuationSelection || storedProviderOverride || storedModelOverride),
+        modelOverrideSource:
+          hasExplicitRunOverride || continuationSelection ? "user" : storedModelOverrideSource,
         subagentSpawnLineage: (sessionEntry?.spawnDepth ?? 0) > 0,
         hasAutoFallbackProvenance: hasExplicitRunOverride ? false : hasStoredAutoFallbackProvenance,
         modelSelectionLocked: isModelSelectionLocked(sessionEntry),
-        modelFallbacksOverride: params.opts.modelFallbacksOverride,
+        modelFallbacksOverride,
       });
       const effectiveFallbacksOverride =
         modelFallbackOverrideFromAvailability(modelFallbackAvailability);
 
+      const selectionAdmission = prepareCommandContinuationAdmission(params, {
+        entry: sessionEntry,
+        provider,
+        model,
+        getThinking: () => effectiveTurnThinkLevel,
+        fallbacks: modelFallbacksOverride,
+        selection: continuationSelection,
+        getLifecycleGeneration: () => lifecycleGeneration,
+        onSaved: (saved) => {
+          sessionEntry = saved;
+          if (sessionStore && sessionKey) sessionStore[sessionKey] = saved;
+        },
+      });
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;
       let attemptMediaTaskIds = liveSwitchMediaTaskIds;
@@ -280,7 +301,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds, sessionAgentId),
         );
       const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
-        preparedRunAdmission: params.preparedRunAdmission,
+        preparedRunAdmission: selectionAdmission,
         selection: {
           cfg,
           provider,
@@ -393,7 +414,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             agentId: sessionAgentId,
             sessionEntry,
           });
-          const fastMode = params.opts.fastMode ?? fastModeState.mode;
+          const fastMode =
+            params.opts.fastMode ?? continuationSelection?.fastMode ?? fastModeState.mode;
           const configuredAuthProfileId =
             providerOverride === defaultProvider && modelOverride === defaultModel
               ? configuredDefaultAuthProfileId
@@ -470,7 +492,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           effectiveTurnThinkLevel = candidateThinkLevel;
           try {
             return await attemptExecutionRuntime.runAgentAttempt({
-              preparedRunAdmission: params.preparedRunAdmission,
+              preparedRunAdmission: selectionAdmission,
               providerOverride,
               modelOverride,
               ...prepareModelRunCapabilities(
@@ -624,24 +646,18 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         if (autoFallbackPrimaryProbe) {
           autoFallbackPrimaryProbeInterruptedByLiveSwitch = true;
         }
+        sessionEntry = await refreshCommandLiveModelSelection(params, sessionEntry, err);
         provider = err.provider;
         model = err.model;
         providerForAuthProfileValidation = err.provider;
-        if (sessionEntry) {
-          sessionEntry = { ...sessionEntry };
-          applyModelRuntimeDirective(
-            sessionEntry,
-            err.agentRuntimeOverride
-              ? { kind: "set", runtime: err.agentRuntimeOverride }
-              : { kind: "clear" },
-          );
-          sessionEntry.authProfileOverride = err.authProfileId;
-          sessionEntry.authProfileOverrideSource = err.authProfileId
-            ? err.authProfileIdSource
-            : undefined;
-          sessionEntry.authProfileOverrideCompactionCount = undefined;
-          sessionEntryForAttempt = sessionEntry;
-        }
+        continuationSelection = undefined;
+        immutableThinkLevel = params.prepared.thinkOnce ?? params.prepared.thinkOverride;
+        effectiveTurnThinkLevel =
+          immutableThinkLevel ??
+          resolveConfiguredThinkingDefault({ cfg, agentId: sessionAgentId, provider, model }) ??
+          "off";
+        params.modelSelection.modelSelectionParent = undefined;
+        sessionEntryForAttempt = sessionEntry;
         attemptLifecycleState.lifecycleEnded = false;
         log.info(
           `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,

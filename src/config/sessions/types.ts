@@ -624,6 +624,12 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Invalidates retained turn choices when an operator explicitly selects a model or Default. */
+  modelSelectionRevision?: string;
+  /** New ordinary turns invalidate carriers retained by earlier child runs. */
+  continuationTurnRevision?: string;
+  /** Bounded recovery selection; ordinary new user turns never consume it. */
+  continuationModelSelection?: import("../../sessions/continuation-model-selection.js").ContinuationModelSelection;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */

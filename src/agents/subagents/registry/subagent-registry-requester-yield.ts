@@ -236,6 +236,9 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       ? structuredClone(requester)
       : undefined;
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
+  const requesterModelSelection = entries.find(
+    (entry) => entry.requesterModelSelection,
+  )?.requesterModelSelection;
   const previousStates = entries.map((entry) => ({
     delivery: structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
@@ -282,6 +285,9 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
         status: "pending",
         attemptCount: 0,
         batchRunIds,
+        ...(requesterModelSelection
+          ? { requesterModelSelection: structuredClone(requesterModelSelection) }
+          : {}),
         requesterYieldBatch: true,
         ...(completionEnded ? { afterRequesterYield: true } : {}),
         rearmGeneration,

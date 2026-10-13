@@ -28,6 +28,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
+import type { ContinuationModelSelection } from "../../../sessions/continuation-model-selection.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
@@ -184,6 +185,20 @@ it.each([
       ? "original-requester-lifecycle"
       : undefined;
     const replacementLifecycleRevision = "replacement-requester-lifecycle";
+    const requesterTurnRunId = "original-requester-turn";
+    const requesterModelSelection: ContinuationModelSelection | undefined =
+      backend === "native" && originalSessionId
+        ? {
+            runId: "retained-original-requester-turn",
+            ownerRunId: requesterTurnRunId,
+            sessionId: originalSessionId,
+            lifecycleRevision: originalLifecycleRevision,
+            provider: "selected-provider",
+            model: "selected-primary",
+            thinking: "high",
+            fallbacks: ["fallback-provider/fallback-model"],
+          }
+        : undefined;
     if (globalRequester) {
       const cfg = getRuntimeConfig();
       await writeFile(
@@ -257,6 +272,19 @@ it.each([
       };
       registerAcpRuntimeBackend({ id: backendId, runtime });
     }
+    if (requesterModelSelection) {
+      replaceSessionEntrySync(
+        { sessionKey: requesterSessionKey, agentId: "main" },
+        {
+          sessionId: requesterModelSelection.sessionId,
+          lifecycleRevision: originalLifecycleRevision,
+          updatedAt: 1,
+          continuationModelSelection: requesterModelSelection,
+          modelProvider: "fallback-provider",
+          model: "fallback-model",
+        },
+      );
+    }
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       resolveContextEngine: async () => new LegacyContextEngine(),
@@ -286,6 +314,7 @@ it.each([
       agentSessionKey: fixture.parentSessionKey,
       completionOwnerKey: requesterSessionKey,
       onSpawnEffectsStart: rotateRequester,
+      requesterTurnRunId,
       ...(globalRequester ? { requesterAgentIdOverride: "main" } : {}),
     };
     try {
@@ -343,6 +372,7 @@ it.each([
       });
       expect(restored?.completionRequesterSessionId).toBe(originalSessionId);
       expect(restored?.completionRequesterLifecycleRevision).toBe(originalLifecycleRevision);
+      expect(restored?.requesterModelSelection).toEqual(requesterModelSelection);
       expect(
         loadSessionEntryReadOnly({ sessionKey: requesterSessionKey, agentId: "main" }),
       ).toMatchObject({

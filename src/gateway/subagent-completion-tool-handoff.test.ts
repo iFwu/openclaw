@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isNativeCompletionOwnerForRun } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { ContinuationModelSelection } from "../sessions/continuation-model-selection.js";
 import {
   captureContinuationApprovalOrigin,
   withContinuationApprovalOrigin,
@@ -31,6 +32,98 @@ function consume(handoffId: string | undefined, overrides: Record<string, unknow
 }
 
 describe("subagent completion tool handoff", () => {
+  it.each(["subagent_announce", "subagent_settle"])(
+    "round-trips the selected requester primary separately from the admitted fallback for %s",
+    (sourceTool) => {
+      const modelSelection: ContinuationModelSelection = {
+        runId: "original-requester-turn",
+        sessionId: registration.targetSessionId,
+        lifecycleRevision: "requester-lifecycle",
+        modelSelectionRevision: "selection-revision",
+        provider: "selected-provider",
+        model: "selected-primary",
+        thinking: "high",
+        fastMode: true,
+        fallbacks: ["openai/glm-4.5"],
+      };
+      const expected = structuredClone(modelSelection);
+      let current = true;
+      const handoffId = registerSubagentCompletionToolHandoff({
+        ...registration,
+        modelSelection,
+        isCurrent: () => current,
+        ...(sourceTool === "subagent_settle"
+          ? {
+              settleBatch: {
+                sourceSessionKeys: [registration.sourceSessionKey],
+                isCurrent: () => current,
+              },
+            }
+          : {}),
+      });
+      modelSelection.model = "later-primary";
+      modelSelection.fallbacks?.push("other/fallback");
+      const handoff = consume(handoffId, { sourceTool });
+      expect(handoff?.modelSelection).toEqual(expected);
+      expect(handoff).toMatchObject({ provider: "openai", model: "glm-4.5" });
+      const run = {
+        handoff,
+        inputProvenance: {
+          kind: "inter_session" as const,
+          sourceTool,
+          sourceSessionKey: registration.sourceSessionKey,
+        },
+        sessionKey: registration.targetSessionKey,
+        sessionId: registration.targetSessionId,
+        provider: "openai",
+        model: "glm-4.5",
+      };
+      expect(isNativeCompletionOwnerForRun(run)).toBe(true);
+      expect(
+        isNativeCompletionOwnerForRun({ ...run, handoff: handoff ? { ...handoff } : undefined }),
+      ).toBe(false);
+      current = false;
+      expect(isNativeCompletionOwnerForRun(run)).toBe(false);
+      expect(consume(handoffId, { sourceTool })).toBeUndefined();
+    },
+  );
+
+  it.each(["no-native-owner", "revoked", "replaced-requester"])(
+    "rejects a model-selection grant with %s authority",
+    (kind) => {
+      expect(
+        registerSubagentCompletionToolHandoff({
+          ...registration,
+          modelSelection: {
+            runId: "requester-turn",
+            sessionId: kind === "replaced-requester" ? "replacement" : registration.targetSessionId,
+            provider: "selected-provider",
+            model: "selected-primary",
+          },
+          ...(kind !== "no-native-owner" ? { isCurrent: () => kind !== "revoked" } : {}),
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("rejects a selected primary when its source is revoked before consumption", () => {
+    let current = true;
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      modelSelection: {
+        runId: "requester-turn",
+        sessionId: registration.targetSessionId,
+        provider: "selected-provider",
+        model: "selected-primary",
+      },
+      isCurrent: () => current,
+    });
+    expect(handoffId).toBeDefined();
+    current = false;
+    expect(consume(handoffId)).toBeUndefined();
+    cancelSubagentCompletionToolHandoff(handoffId);
+  });
+
   it("retains only frozen parent source on the exact redeemed object", () => {
     const caller = {
       sessionKey: registration.targetSessionKey,

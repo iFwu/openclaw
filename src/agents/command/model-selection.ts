@@ -1,10 +1,6 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import {
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  type ThinkLevel,
-} from "../../auto-reply/thinking.js";
+import { formatThinkingLevels, type ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -38,7 +34,6 @@ import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   resolveAutoFallbackPrimaryProbe,
-  resolveAgentConfig,
   resolveAgentDir,
   resolveNativeModelPrimary,
 } from "../agent-scope.js";
@@ -69,6 +64,11 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
+import {
+  resolveCommandModelParent,
+  resolveCommandContinuationThinking,
+  resolveCommandContinuationSelection,
+} from "./continuation-model.js";
 import { normalizeAgentCommandModelRef, parseAgentCommandModelRef } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
 import { normalizeExplicitOverrideInput } from "./prepare.js";
@@ -176,6 +176,7 @@ export async function resolveEmbeddedModelSelection(params: {
       const { updated } = applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        invalidateContinuationSelection: false,
       });
       if (updated) {
         storedModelOverrideSource = undefined;
@@ -199,6 +200,7 @@ export async function resolveEmbeddedModelSelection(params: {
         const { updated } = applyModelOverrideToSessionEntry({
           entry,
           selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+          invalidateContinuationSelection: false,
         });
         entryUpdated ||= updated;
       }
@@ -234,9 +236,16 @@ export async function resolveEmbeddedModelSelection(params: {
     hasLegacyAutoFallbackOverrideWithoutOrigin = false;
   }
 
+  const { key: parentKey, entry: parentEntry } = await resolveCommandModelParent({
+    ...params,
+    sessionEntry,
+    defaultProvider,
+    hasLegacyAutoFallbackOverrideWithoutOrigin,
+  });
   const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? null
     : resolveStoredModelOverrideCore({
+        loadSessionEntry: (key) => (key === parentKey ? parentEntry : undefined),
         sessionEntry,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
@@ -333,7 +342,21 @@ export async function resolveEmbeddedModelSelection(params: {
       model = normalizedStored.model;
     }
   }
+  const continuationSelection = resolveCommandContinuationSelection({
+    ...params,
+    entry: sessionEntry,
+    parentEntry,
+    hasExplicitRunOverride,
+    provider,
+    model,
+    visibilityPolicy,
+  });
+  if (continuationSelection) {
+    provider = continuationSelection.provider;
+    model = continuationSelection.model;
+  }
   const autoFallbackPrimaryProbe =
+    !continuationSelection &&
     !hasExplicitRunOverride &&
     !isModelSelectionLocked(sessionEntry) &&
     (operatorAuthority?.modelPolicy?.allows({ provider: primaryProvider, model: primaryModel }) ??
@@ -530,10 +553,7 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
 
-  const configuredThinkLevel = normalizeThinkLevel(
-    resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
-  );
-  const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
+  const immutableThinkLevel = resolveCommandContinuationThinking(params, continuationSelection);
   const primaryConfiguredThinkLevel =
     immutableThinkLevel ??
     resolveConfiguredThinkingDefault({
@@ -668,6 +688,8 @@ export async function resolveEmbeddedModelSelection(params: {
     configuredDefaultAuthProfileId,
     providerForAuthProfileValidation,
     hasExplicitRunOverride,
+    continuationSelection,
+    modelSelectionParent: parentKey ? { key: parentKey, entry: parentEntry } : undefined,
     storedProviderOverride,
     storedModelOverride,
     storedModelOverrideSource,

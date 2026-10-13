@@ -72,7 +72,7 @@ export function resolveDirectStoredModelOverride(
   });
 }
 
-function resolveParentSessionKeyCandidate(params: {
+export function resolveStoredModelParentSessionKey(params: {
   sessionKey?: string;
   parentSessionKey?: string;
 }): string | null {
@@ -132,7 +132,7 @@ export function resolveStoredModelOverrideCore(
   if (direct) {
     return direct;
   }
-  const parentKey = resolveParentSessionKeyCandidate({
+  const parentKey = resolveStoredModelParentSessionKey({
     sessionKey: params.sessionKey,
     parentSessionKey: params.parentSessionKey,
   });

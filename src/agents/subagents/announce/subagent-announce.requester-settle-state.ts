@@ -27,7 +27,14 @@ export function readSharedBatchState(
     .filter((state): state is RequesterSettleWakeState => Boolean(state));
   const dispatching = states.find((state) => state.status === "dispatching");
   const source = dispatching ?? states[0];
+  const requesterModelSelection =
+    source?.requesterModelSelection ??
+    states.find((state) => state.requesterModelSelection)?.requesterModelSelection ??
+    batch.find((entry) => entry.requesterModelSelection)?.requesterModelSelection;
   return {
+    ...(requesterModelSelection
+      ? { requesterModelSelection: structuredClone(requesterModelSelection) }
+      : {}),
     status: source?.status ?? "pending",
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount)),
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),

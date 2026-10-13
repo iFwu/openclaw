@@ -337,6 +337,7 @@ export async function createModelSelectionState(params: {
         entry: nextSessionEntry,
         selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
         preserveAuthProfileOverride: staleDirectStoredOverride,
+        invalidateContinuationSelection: false,
       });
       let resetApplied = updated;
       if (updated) {

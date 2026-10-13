@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionTranscriptFile } from "../../config/sessions/transcript-file-resolve.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -16,6 +16,7 @@ import { loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { bindNativeCompletionOwner } from "../subagents/announce/subagent-announce-handoff.js";
 import * as sessionPersistence from "./attempt-execution.shared.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import * as runtimeLoaders from "./runtime-loaders.js";
@@ -174,6 +175,157 @@ function createRestrictedFixture() {
 }
 
 describe("command selection with configured model facts", () => {
+  it.each(["restart", "subagent_announce", "subagent_settle"])(
+    "retains a temporary primary with its turn options for %s",
+    async (kind) => {
+      const fixture = createFixture();
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      fixture.inventory.mockReturnValue([
+        catalogEntry("custom", "base"),
+        catalogEntry("custom", "manual"),
+      ]);
+      const selection = {
+        runId: "original",
+        ownerRunId: "original",
+        sourceTurnId: "source",
+        sessionId: "configured-child",
+        lifecycleRevision: "generation",
+        modelSelectionRevision: "choice",
+        turnRevision: "turn",
+        provider: "custom",
+        model: "manual",
+        thinking: "high" as const,
+        fastMode: true,
+        fallbacks: ["custom/base"],
+      };
+      fixture.store[sessionKey] = {
+        sessionId: selection.sessionId,
+        lifecycleRevision: "generation",
+        updatedAt: 1,
+        modelSelectionRevision: "choice",
+        continuationTurnRevision: "turn",
+        continuationModelSelection: selection,
+        restartRecoveryDeliverySourceRunId: "source",
+        modelProvider: "custom",
+        model: "base",
+      };
+      const handoff = bindNativeCompletionOwner(
+        {
+          kind: "subagent-completion",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceSessionId: "child",
+          targetSessionKey: sessionKey,
+          targetSessionId: selection.sessionId,
+          provider: "custom",
+          model: "base",
+          modelSelection: selection,
+          ...(kind === "subagent_settle"
+            ? {
+                settleBatch: {
+                  sourceSessionKeys: ["agent:main:subagent:child"],
+                  isCurrent: () => true,
+                },
+              }
+            : {}),
+        },
+        () => true,
+      );
+      const opts =
+        kind === "restart"
+          ? { message: "Resume", mainRestartRecoveryAdmitted: true }
+          : {
+              message: "Resume",
+              trustedInternalHandoff: handoff,
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: kind,
+                sourceSessionKey: handoff.sourceSessionKey,
+              },
+            };
+      const selected = await fixture.select({ opts });
+      expect(selected).toMatchObject({
+        provider: "custom",
+        model: "manual",
+        continuationSelection: selection,
+        immutableThinkLevel: "high",
+      });
+      expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
+      if (kind !== "restart")
+        expect(handoff).toMatchObject({ provider: "custom", model: "manual" });
+      expect(await fixture.select({ opts: { message: "Normal new message" } })).toMatchObject({
+        provider: "custom",
+        model: "base",
+        continuationSelection: undefined,
+      });
+      expect(
+        await fixture.select({
+          opts: { ...opts, provider: "custom", model: "base", allowModelOverride: true },
+        }),
+      ).toMatchObject({ provider: "custom", model: "base", continuationSelection: undefined });
+      fixture.entry().modelSelectionRevision = "new-choice";
+      expect(await fixture.select({ opts })).toMatchObject({
+        provider: "custom",
+        model: "base",
+        continuationSelection: undefined,
+      });
+    },
+  );
+
+  it("does not use a revoked native completion carrier or bypass current model policy", async () => {
+    const fixture = createRestrictedFixture();
+    const selection = {
+      runId: "original",
+      sessionId: "configured-child",
+      provider: "custom",
+      model: "child",
+    };
+    fixture.store[sessionKey] = {
+      sessionId: selection.sessionId,
+      updatedAt: 1,
+      continuationModelSelection: selection,
+    };
+    const handoff = bindNativeCompletionOwner(
+      {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:main:subagent:child",
+        targetSessionKey: sessionKey,
+        targetSessionId: selection.sessionId,
+        provider: "custom",
+        model: "base",
+        modelSelection: selection,
+      },
+      () => false,
+    );
+    expect(
+      (
+        await fixture.select({
+          opts: {
+            message: "Resume",
+            trustedInternalHandoff: handoff,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "subagent_announce",
+              sourceSessionKey: handoff.sourceSessionKey,
+            },
+          },
+        })
+      ).continuationSelection,
+    ).toBeUndefined();
+    fixture.entry().restartRecoveryDeliverySourceRunId = "original";
+    await expect(
+      fixture.select({
+        opts: {
+          message: "Resume",
+          mainRestartRecoveryAdmitted: true,
+          operatorAuthority: fixture.operatorAuthority,
+        },
+      }),
+    ).rejects.toThrow("Your operator role cannot use this model");
+    fixture.defaults.modelPolicy = { allow: ["custom/base"] };
+    await expect(
+      fixture.select({ opts: { message: "Resume", mainRestartRecoveryAdmitted: true } }),
+    ).rejects.toThrow("no longer allowed");
+  });
   it("does not probe a primary excluded by the original operator policy", async () => {
     const fixture = createRestrictedFixture();
     fixture.store[sessionKey] = {

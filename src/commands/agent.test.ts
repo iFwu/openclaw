@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
 import "./agent-command-attempt.test-mocks.js";
-import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store-runtime.js";
@@ -77,6 +77,7 @@ import {
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
+import { registerContinuationModelCommandTests } from "./agent-continuation.test-support.js";
 import {
   createDefaultAgentResult,
   expectOwnedCommandSession,
@@ -1825,38 +1826,11 @@ describe("agentCommand", () => {
     });
   });
 
-  it("borrows session lookup data without returning cached mutable store objects", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionKey = "agent:main:cache-borrow";
-      await writeSessionStoreSeed(store, {
-        [sessionKey]: {
-          sessionId: "session-cache-borrow",
-          updatedAt: Date.now(),
-          thinkingLevel: "low",
-        },
-        "agent:main:other": {
-          sessionId: "session-other",
-          updatedAt: Date.now(),
-        },
-      });
-      mockConfig(home, store, { models: {} });
-
-      const prepared = await prepareAgentCommandExecution(
-        {
-          message: "prepare only",
-          sessionKey,
-        },
-        runtime,
-      );
-      const cached = loadSessionEntry({ storePath: store, sessionKey, clone: false });
-
-      expect(prepared.sessionStore).not.toBe(cached);
-      expect(prepared.sessionEntry).not.toBe(cached);
-      expect(prepared).not.toHaveProperty("recoveryCandidateEntry");
-      expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
-      expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
-    });
+  registerContinuationModelCommandTests({
+    withTempHome,
+    mockConfig,
+    runtime,
+    expectLastRunProviderModel,
   });
 
   it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {

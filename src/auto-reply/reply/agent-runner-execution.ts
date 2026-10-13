@@ -27,7 +27,7 @@ import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-conte
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -51,8 +51,11 @@ import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-auto-fallback.js";
+import {
+  executeAgentTurnWithCleanup,
+  refreshReplyLiveModelSelection,
+} from "./agent-runner-continuation-lifecycle.js";
 import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
-import { recordAgentTurnExecutionOutcome } from "./agent-runner-execution-outcome.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -84,10 +87,7 @@ import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
-import {
-  markReplyOperationExecutionStarted,
-  retainReplyOperationUntilComplete,
-} from "./reply-run-registry.js";
+import { markReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
 async function executeAgentTurnInternalLoop(
@@ -389,6 +389,10 @@ async function executeAgentTurnInternalLoop(
       }
       if (action.liveModelSwitchError) {
         const switchError = action.liveModelSwitchError;
+        await refreshReplyLiveModelSelection(params, () => {
+          deferredLifecycle.signal.throwIfAborted();
+          preparedRunAdmission.assertSourceCurrent();
+        });
         applyLiveModelSwitchToRun(params.followupRun.run, switchError);
         if (runnableRun !== params.followupRun.run) {
           applyLiveModelSwitchToRun(runnableRun, switchError);
@@ -709,23 +713,5 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
 
 /** Runs the agent turn and records its execution and message-tool delivery outcomes. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
-  params.opts?.onRunVerbosityResolved?.({
-    verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
-    resolvedVerboseLevel: params.resolvedVerboseLevel,
-  });
-  if (params.replyOperation) {
-    // Cancellation stops execution, but the exact owner must finish committed accounting first.
-    retainReplyOperationUntilComplete(params.replyOperation);
-  }
-  const runId = params.opts?.runId ?? crypto.randomUUID();
-  const executionParams =
-    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  try {
-    const result = await executeAgentTurnOutcome(executionParams);
-    recordAgentTurnExecutionOutcome(executionParams, result);
-    return result;
-  } catch (error) {
-    recordAgentTurnExecutionOutcome(executionParams, undefined);
-    throw error;
-  }
+  return executeAgentTurnWithCleanup(params, executeAgentTurnOutcome);
 }

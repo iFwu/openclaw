@@ -49,6 +49,17 @@ function normalizeRegistration(
   if (!sourceSessionKey || !targetSessionKey || !targetSessionId || !idempotencyKey) {
     return undefined;
   }
+  const modelSelection = params.modelSelection;
+  if (
+    modelSelection &&
+    (!params.isCurrent?.() ||
+      modelSelection.sessionId !== targetSessionId ||
+      !modelSelection.runId.trim() ||
+      !modelSelection.provider.trim() ||
+      !modelSelection.model.trim())
+  ) {
+    return undefined;
+  }
   const settleBatch = params.settleBatch;
   if (
     settleBatch &&
@@ -64,6 +75,7 @@ function normalizeRegistration(
     targetSessionKey,
     targetSessionId,
     idempotencyKey,
+    ...(modelSelection ? { modelSelection: structuredClone(modelSelection) } : {}),
     ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
     ...(settleBatch
       ? { settleBatch: { ...settleBatch, sourceSessionKeys: [...settleBatch.sourceSessionKeys] } }
@@ -164,6 +176,12 @@ export function consumeSubagentCompletionToolHandoff(params: {
   ) {
     return undefined;
   }
+  if (
+    entry.modelSelection &&
+    (!entry.isCurrent?.() || entry.modelSelection.sessionId !== targetSessionId)
+  ) {
+    return undefined;
+  }
   try {
     entry.approvalOrigin?.assertCurrent();
   } catch {
@@ -180,6 +198,7 @@ export function consumeSubagentCompletionToolHandoff(params: {
       targetSessionId,
       provider,
       model,
+      ...(entry.modelSelection ? { modelSelection: structuredClone(entry.modelSelection) } : {}),
       ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
     },
     isCurrent,

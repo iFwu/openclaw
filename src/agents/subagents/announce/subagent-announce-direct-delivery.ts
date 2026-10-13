@@ -7,6 +7,7 @@ import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
+import type { ContinuationModelSelection } from "../../../sessions/continuation-model-selection.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
@@ -90,6 +91,7 @@ export type SubagentAnnounceDirectParams = {
   sourceSessionKey?: string;
   sourceTool?: string;
   settleWakeSourceSessionKeys?: readonly string[];
+  requesterModelSelection?: ContinuationModelSelection;
   isSourceSessionEffectsAllowed?: () => boolean;
   /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
@@ -468,6 +470,14 @@ export async function sendSubagentAnnounceDirectly(
                         targetSessionKey: canonicalRequesterSessionKey,
                         targetSessionId: requesterActivity.sessionId,
                         idempotencyKey: params.directIdempotencyKey,
+                        ...(params.requesterModelSelection &&
+                        params.requesterModelSelection.sessionId === requesterActivity.sessionId &&
+                        params.requesterModelSelection.lifecycleRevision ===
+                          requesterLifecycleRevision &&
+                        params.requesterModelSelection.modelSelectionRevision ===
+                          requesterEntry?.modelSelectionRevision
+                          ? { modelSelection: params.requesterModelSelection }
+                          : {}),
                         isCurrent: isCompletionDeliveryAllowed,
                         ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
                           ? {

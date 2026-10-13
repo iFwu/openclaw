@@ -72,6 +72,9 @@ const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
 
 function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
   return {
+    ...(state.requesterModelSelection
+      ? { requesterModelSelection: structuredClone(state.requesterModelSelection) }
+      : {}),
     ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true as const } : {}),
     ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
     ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
@@ -607,6 +610,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 directOrigin,
                 sourceSessionKey: batchSessionKeys[0],
                 settleWakeSourceSessionKeys: batchSessionKeys,
+                requesterModelSelection: state.requesterModelSelection,
                 sourceTool: "subagent_settle",
                 targetRequesterSessionKey: requesterSessionKey,
                 requesterIsSubagent: requesterDepth >= 1,

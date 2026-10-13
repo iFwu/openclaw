@@ -17,6 +17,7 @@ import {
   listedRequesterRuns,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
+import { registerPrivateRequesterSettleCompletionTests } from "./subagent-announce.requester-settle-private.test-helper.js";
 import {
   REQUESTER,
   requesterSettleKey,
@@ -31,54 +32,7 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
-  it.each([
-    { name: "delivered private pair", mixed: false, yielded: false, single: false },
-    { name: "delivered mixed pair", mixed: true, yielded: false, single: false },
-    { name: "yielded private child", mixed: false, yielded: true, single: true },
-    { name: "yielded mixed pair", mixed: true, yielded: true, single: false },
-  ])("keeps settled private results internal: $name", async ({ mixed, yielded, single }) => {
-    const children = (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
-      makeSettledChild({
-        runId,
-        ...(!mixed || index === 0
-          ? { completionTarget: "parent" as const, completionRequesterSessionId: "sess-main" }
-          : {}),
-        completion: {
-          required: true,
-          resultText: index === 0 ? "private marker" : "public sibling",
-        },
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          ...(yielded
-            ? { afterRequesterYield: true, requesterYieldBatch: true, rearmGeneration: 1 }
-            : {}),
-        },
-      }),
-    );
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg()).toMatchObject({
-      completionTarget: "parent",
-      completionRequesterSessionId: "sess-main",
-      requireDirectDelivery: true,
-    });
-    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
-    expect(String(deliveredCallArg().triggerMessage)).toContain("private marker");
-    expect(String(deliveredCallArg().triggerMessage)).toContain(
-      "send it through an available, permitted messaging tool",
-    );
-    expect(String(deliveredCallArg().triggerMessage)).toContain(
-      "briefly record the reviewed outcome and any remaining work",
-    );
-    expect(String(deliveredCallArg().triggerMessage)).not.toContain("NO_REPLY");
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
-      "requesterVisibleFinalDelivered",
-    );
-  });
+  registerPrivateRequesterSettleCompletionTests(maybeWakeRequesterAfterAllChildrenSettled);
 
   it("does not pass private findings to a replacement requester incarnation", async () => {
     setSessionStore({
