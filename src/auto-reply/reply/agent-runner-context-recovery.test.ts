@@ -28,6 +28,8 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
     expect(text).toContain("kept this conversation mapped to the current session");
     expect(text).not.toContain("reset our conversation");
+    expect(text).toContain("This turn could not continue within the context limit");
+    expect(text).not.toContain("Auto-compaction could not recover");
   });
 
   it("does not use stale heartbeat hints for a different explicit runtime model", () => {

@@ -128,6 +128,9 @@ export async function recoverEmbeddedRunAttempt(input: {
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  const isMidTurnPrecheck =
+    promptErrorSource === "precheck" && attempt.preflightRecovery?.source === "mid-turn";
+  const recoveryEvidence = resolveSettledToolBatchEvidence(attempt, undefined, "current-attempt");
   // Project decisions at their existing return points; diagnostics never decide
   // replay safety or imply that recorded tool results prove settled side effects.
   const recordRecoveryDecision = (
@@ -159,6 +162,9 @@ export async function recoverEmbeddedRunAttempt(input: {
           allToolsProvenSettled: settledEvidence.allToolsProvenSettled,
           parkedCodeModeRun: settledEvidence.parkedCodeModeRun,
           intentionalTermination: settledEvidence.intentionalTermination,
+          recoveryAllToolCallsRecorded: recoveryEvidence.allToolCallsRecorded,
+          recoveryAllToolsProvenSettled: recoveryEvidence.allToolsProvenSettled,
+          recoveryParkedCodeModeRun: recoveryEvidence.parkedCodeModeRun,
         },
       },
       { config: params.config },
@@ -191,13 +197,12 @@ export async function recoverEmbeddedRunAttempt(input: {
   // continue with lifecycle items active — the nested call stays owned by the
   // code-mode run registry and resumes through `wait`, exactly as across turns.
   const midTurnBatchSettled =
-    settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
+    recoveryEvidence.allToolsProvenSettled || recoveryEvidence.parkedCodeModeRun;
   // A returned background exec is owned by the process registry, not this
   // attempt. Its recorded handle survives transcript compaction; unknown
   // asynchronous work still cannot be resumed through the process tool.
   const canContinueSettledMidTurnOverflow =
-    promptErrorSource === "precheck" &&
-    attempt.preflightRecovery?.source === "mid-turn" &&
+    isMidTurnPrecheck &&
     midTurnBatchSettled &&
     !attempt.toolMetas.some((entry) => entry.asyncStarted === true && !entry.asyncExec);
   // A provider can reject the next prompt after writes have settled. Compact
@@ -206,7 +211,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !runtime.pluginHarnessOwnsTransport &&
     !terminalInterrupted &&
     (!promptError || promptErrorSource === "prompt") &&
-    settledEvidence.allToolsProvenSettled &&
+    recoveryEvidence.allToolsProvenSettled &&
     toolsAllowContinuation &&
     !attempt.yieldDetected &&
     !attempt.clientToolCalls;
@@ -467,6 +472,15 @@ export async function recoverEmbeddedRunAttempt(input: {
     !canRecoverSettledToolResults
   ) {
     recordRecoveryDecision("rejected", "replay_unsafe");
+    if (isMidTurnPrecheck) {
+      log.warn(
+        `[context-recovery-blocked] runId=${params.runId} reason=replay_unsafe action=not_attempted priorCompactions=${attemptCompactionCount} ` +
+          `recorded=${recoveryEvidence.allToolCallsRecorded} settled=${recoveryEvidence.allToolsProvenSettled} ` +
+          `parked=${recoveryEvidence.parkedCodeModeRun} started=${attempt.itemLifecycle.startedCount} ` +
+          `completed=${attempt.itemLifecycle.completedCount} active=${attempt.itemLifecycle.activeCount} ` +
+          `unknownAsync=${attempt.toolMetas.some((entry) => entry.asyncStarted === true && !entry.asyncExec)}`,
+      );
+    }
     return { action: "proceed" };
   }
 

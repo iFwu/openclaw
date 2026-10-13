@@ -134,7 +134,7 @@ export function buildContextOverflowRecoveryText(params: {
   activeSessionEntry?: SessionEntry;
 }): string {
   const prefix =
-    "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.";
+    "⚠️ This turn could not continue within the context limit. I kept this conversation mapped to the current session. Use /compact to reduce the context, or /new to start a fresh session.";
   const explicitRuntimeMatchesSession =
     !params.runtimeProvider ||
     !params.runtimeModel ||
