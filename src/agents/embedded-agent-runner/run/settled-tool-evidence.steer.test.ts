@@ -80,7 +80,7 @@ async function runSteeredToolBatch(source: "precheck" | "provider" = "precheck")
       removeTrailingMidTurnPrecheckAssistantError({ activeSession: session, sessionManager });
     }
     const messagesSnapshot = session.messages.slice();
-    expect(messagesSnapshot.filter((message) => message.role === "user").at(-1)).toMatchObject({
+    expect(messagesSnapshot.findLast((message) => message.role === "user")).toMatchObject({
       content: expect.arrayContaining([expect.objectContaining({ text: "also check the result" })]),
     });
     const attempt = makeEmbeddedRunnerAttempt({
