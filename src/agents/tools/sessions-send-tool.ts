@@ -27,7 +27,7 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -536,7 +536,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           }
 
           const requesterChannel = opts?.agentChannel;
-          const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+          const isIsolatedCronRequester = isCronSessionKey(requesterSessionKey);
           const targetSession = resolveGatewaySessionStoreTargetWithStore({
             cfg,
             key: resolvedKey,

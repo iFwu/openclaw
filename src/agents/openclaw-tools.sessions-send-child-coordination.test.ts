@@ -209,6 +209,65 @@ describe("sessions_send child coordination", () => {
   });
 
   it.each([
+    { name: "scheduled run", requesterKey: "agent:main:cron:report:run:run-1" },
+    { name: "script trigger", requesterKey: "agent:main:cron:report:trigger" },
+    { name: "scheduled session", requesterKey: "agent:main:cron:report" },
+  ])("does not start an automatic reply turn for a $name", async ({ requesterKey }) => {
+    const targetKey = "agent:peer:main";
+    await writeEntry(requesterKey, { sessionId: "scheduled-session", updatedAt: 1 });
+    await writeEntry(targetKey, { sessionId: "peer-session", updatedAt: 1 });
+
+    const result = await send(requesterKey, targetKey, 0);
+    await settleSessionWork();
+
+    expect.soft(result.details).toMatchObject({
+      status: "accepted",
+      delivery: { status: "skipped" },
+    });
+    expect.soft(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect.soft(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);
+    expect(finalAnnounce).not.toHaveBeenCalled();
+  });
+
+  it("keeps automatic replies for a peer with cron tokens outside the scheduled namespace", async () => {
+    const requesterKey = "agent:main:dashboard:cron:report:trigger";
+    const targetKey = "agent:peer:main";
+    await writeEntry(requesterKey, { sessionId: "requester-session", updatedAt: 1 });
+    await writeEntry(targetKey, { sessionId: "peer-session", updatedAt: 1 });
+
+    const result = await send(requesterKey, targetKey, 0);
+    await settleSessionWork();
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      delivery: { status: "pending" },
+    });
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(agentCalls).toHaveLength(2);
+    expect(agentCalls[1]?.params).toMatchObject({
+      sessionKey: requesterKey,
+      inputProvenance: { sourceSessionKey: targetKey, sourceTool: "sessions_send" },
+    });
+    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(2);
+  });
+
+  it("does not turn a script trigger's waited failure into an automatic reply", async () => {
+    const requesterKey = "agent:main:cron:report:trigger";
+    const targetKey = "agent:peer:main";
+    await writeEntry(requesterKey, { sessionId: "script-session", updatedAt: 1 });
+    await writeEntry(targetKey, { sessionId: "peer-session", updatedAt: 1 });
+    mockGatewayReply({ status: "error", error: "Target run failed" });
+
+    const result = await send(requesterKey, targetKey);
+    await settleSessionWork();
+
+    expect(result.details).toMatchObject({ status: "error", error: "Target run failed" });
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(1);
+    expect(finalAnnounce).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { direction: "requester", child: true },
     { direction: "target", child: false },
   ])(
