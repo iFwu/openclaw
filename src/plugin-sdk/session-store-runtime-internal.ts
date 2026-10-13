@@ -59,6 +59,15 @@ export function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.modelSelectionRevision !== undefined
+      ? { modelSelectionRevision: existingEntry.modelSelectionRevision }
+      : {}),
+    ...(existingEntry.continuationTurnRevision !== undefined
+      ? { continuationTurnRevision: existingEntry.continuationTurnRevision }
+      : {}),
+    ...(existingEntry.continuationModelSelection
+      ? { continuationModelSelection: existingEntry.continuationModelSelection }
+      : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
       : {}),

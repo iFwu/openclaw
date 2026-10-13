@@ -142,6 +142,10 @@ describe("continuation model selection", () => {
       assertCurrent,
     });
     expect(f.read().continuationModelSelection).toBeUndefined();
+    expect(f.read().continuationTurnRevision).not.toBe(carrier.turnRevision);
+    expect(
+      resolveContinuationModelSelection({ selection: carrier, entry: f.read() }),
+    ).toBeUndefined();
   });
 
   it.each([false, true])(

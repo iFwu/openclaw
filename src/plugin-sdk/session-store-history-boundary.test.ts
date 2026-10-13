@@ -21,7 +21,7 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each(["upsert", "patch"] as const)(
-  "preserves private history provenance across a public %s without accepting injected ownership",
+  "preserves private history and continuation state across a public %s without accepting injection",
   async (operation) => {
     const storePath = path.join(tempDirs.make("sdk-cli-history-"), "openclaw-agent.sqlite");
     databases.add(storePath);
@@ -29,7 +29,19 @@ it.each(["upsert", "patch"] as const)(
     const scope = { sessionKey, storePath };
     const initial: InternalSessionEntry = {
       sessionId: "history-session",
+      lifecycleRevision: "history-lifecycle",
       updatedAt: 1,
+      modelSelectionRevision: "model-revision",
+      continuationTurnRevision: "turn-revision",
+      continuationModelSelection: {
+        runId: "selection-owner",
+        sessionId: "history-session",
+        lifecycleRevision: "history-lifecycle",
+        modelSelectionRevision: "model-revision",
+        turnRevision: "turn-revision",
+        provider: "custom",
+        model: "selected",
+      },
       cliHistoryBoundary: {
         version: 1,
         sessionId: "history-session",
@@ -49,12 +61,23 @@ it.each(["upsert", "patch"] as const)(
     if (!publicEntry) {
       throw new Error("Missing seeded session");
     }
-    expect(publicEntry).not.toHaveProperty("cliHistoryBoundary");
-    expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty("cliHistoryBoundary");
+    const privateKeys = [
+      "cliHistoryBoundary",
+      "modelSelectionRevision",
+      "continuationTurnRevision",
+      "continuationModelSelection",
+    ] as const;
+    for (const key of privateKeys) {
+      expect(publicEntry).not.toHaveProperty(key);
+      expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty(key);
+    }
     const candidate = {
       ...publicEntry,
       label: "updated",
       cliHistoryBoundary: { ...initial.cliHistoryBoundary, authFingerprint: "2".repeat(64) },
+      modelSelectionRevision: "injected-revision",
+      continuationTurnRevision: "injected-turn",
+      continuationModelSelection: { ...initial.continuationModelSelection, model: "injected" },
     };
     if (operation === "upsert") {
       await upsertSessionEntry({ ...scope, entry: candidate });
@@ -62,8 +85,23 @@ it.each(["upsert", "patch"] as const)(
       await patchSessionEntry({ ...scope, update: () => candidate });
     }
     expect(getSessionEntry(scope)?.label).toBe("updated");
-    expect(getSessionEntry(scope)).not.toHaveProperty("cliHistoryBoundary");
     const persisted: InternalSessionEntry | undefined = loadSessionEntry(scope);
-    expect(persisted?.cliHistoryBoundary).toEqual(initial.cliHistoryBoundary);
+    for (const key of privateKeys) {
+      expect(getSessionEntry(scope)).not.toHaveProperty(key);
+      expect.soft(persisted?.[key]).toEqual(initial[key]);
+    }
+
+    if (operation === "upsert") {
+      await upsertSessionEntry({ ...scope, entry: { ...candidate, sessionId: "rotated-session" } });
+    } else {
+      await patchSessionEntry({
+        ...scope,
+        update: () => ({ ...candidate, lifecycleRevision: "rotated-lifecycle" }),
+      });
+    }
+    const rotated: InternalSessionEntry | undefined = loadSessionEntry(scope);
+    for (const key of privateKeys.slice(1)) {
+      expect(rotated?.[key]).toBeUndefined();
+    }
   },
 );
