@@ -114,11 +114,9 @@ export function registerReplyAdmissionCases({
       });
       try {
         await expect(run()).resolves.toMatchObject({
-          text:
-            stage === "backend"
-              ? SILENT_REPLY_TOKEN
-              : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: SILENT_REPLY_TOKEN,
         });
+        expect(operation?.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
         expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(stage === "backend" ? 1 : 0);
         expect(scheduleFollowupDrain).toHaveBeenCalledOnce();
         expect(loadSessionEntry({ storePath, sessionKey: "main" })).toMatchObject({

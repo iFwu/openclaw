@@ -39,10 +39,6 @@ import {
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../../plugins/before-agent-reply.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -54,7 +50,11 @@ import { createReplyAgentRestartRecoveryController } from "./agent-runner-execut
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
-import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
+import {
+  createReplyAgentSessionFixture,
+  runHookBackedEmbeddedAgent,
+  runReplyFixtureEmbeddedAgent,
+} from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -271,7 +271,8 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   compactEmbeddedAgentSession: (params: unknown) => state.compactEmbeddedAgentSessionMock(params),
-  runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
+  runEmbeddedAgent: (params: Parameters<typeof runReplyFixtureEmbeddedAgent>[0]) =>
+    runReplyFixtureEmbeddedAgent(params, () => state.runEmbeddedAgentMock(params)),
 }));
 
 vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
@@ -569,39 +570,6 @@ function requireScheduledFollowupRunner(): (run: FollowupRun) => Promise<void> {
   return scheduled[1];
 }
 
-async function runHookBackedEmbeddedAgent(params: {
-  agentId?: string;
-  prompt: string;
-  runId: string;
-  sessionId: string;
-  sessionKey?: string;
-  trigger?: string;
-  workspaceDir: string;
-}) {
-  const hookResult = await runBeforeAgentReplyForTurn({
-    runId: params.runId,
-    trigger: params.trigger,
-    event: { cleanedBody: params.prompt },
-    context: {
-      runId: params.runId,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      trigger: params.trigger,
-      workspaceDir: params.workspaceDir,
-    },
-  });
-  return hookResult?.handled
-    ? {
-        payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-        meta: { agentMeta: {} },
-      }
-    : {
-        payloads: [{ text: "model reply" }],
-        meta: { agentMeta: {} },
-      };
-}
-
 function attachSourceTurnRecorder(params: {
   followupRun: FollowupRun;
   sessionEntry: SessionEntry;
@@ -743,7 +711,7 @@ describe("runReplyAgent active steering", () => {
     // A retired admission may reject; its successor must keep the same source either way.
     const firstSettled = firstAdmission.then(
       () => undefined,
-      () => undefined,
+      (error: unknown) => committed.reject(error),
     );
     let replacement: ReplyOperation | undefined;
     try {
@@ -2660,7 +2628,9 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("rejects channel recovery admission without a source-keyed user turn", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    const runState: ReplyOperationRunState = {};
     const { run } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -2674,9 +2644,15 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await expect(run()).rejects.toThrow(
-      "channel restart recovery requires source-keyed user-turn admission",
-    );
+    await expect(run()).resolves.toMatchObject({
+      isError: true,
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
+    expect(runState.agentTurnOwner?.result).toEqual({
+      kind: "failed",
+      code: "run_failed",
+      cause: new Error("channel restart recovery requires source-keyed user-turn admission"),
+    });
 
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(await readStoredMainSession(storePath)).not.toMatchObject({
@@ -3209,9 +3185,10 @@ describe("runReplyAgent pending final delivery capture", () => {
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       status: "running",
     });
+    const runState: ReplyOperationRunState = {};
     const onAdopted = vi.fn();
     const { run } = createMinimalRun({
-      opts: { turnAdoptionLifecycle: { onAdopted } },
+      opts: { turnAdoptionLifecycle: { onAdopted }, [REPLY_OPERATION_RUN_STATE]: runState },
       sessionCtx: {
         Provider: "webchat",
         OriginatingChannel: "webchat",
@@ -3223,7 +3200,15 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+    await expect(run()).resolves.toMatchObject({
+      isError: true,
+      text: expect.stringContaining("restart recovery claim changed before agent adoption"),
+    });
+    expect(runState.agentTurnOwner?.result).toEqual({
+      kind: "failed",
+      code: "run_failed",
+      cause: new Error("restart recovery claim changed before agent adoption"),
+    });
 
     expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
