@@ -191,6 +191,7 @@ function readSettledToolCalls(
 export function resolveSettledToolBatchEvidence(
   attempt: IncompleteTurnAttempt,
   checkpointToolCallIds?: readonly string[],
+  scope: "latest-user" | "current-attempt" = "latest-user",
 ) {
   const snapshot = attempt.messagesSnapshot ?? [];
   const latestUserIndex = snapshot.findLastIndex((message) => message.role === "user");
@@ -212,12 +213,27 @@ export function resolveSettledToolBatchEvidence(
   } else if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
     assistantIndex = snapshot.findLastIndex(
       (message, index) =>
-        index > latestUserIndex &&
+        (scope === "current-attempt" || index > latestUserIndex) &&
         message.role === "assistant" &&
         readSettledToolCalls(message).length > 0,
     );
     const candidate = assistantIndex >= 0 ? snapshot[assistantIndex] : undefined;
     assistant = candidate?.role === "assistant" ? candidate : undefined;
+    // Steering can append a user after this attempt's completed tools. Only
+    // producer-recorded call identities may cross that boundary; never search
+    // past a newer unproven batch or borrow a previous attempt's results.
+    if (
+      assistantIndex <= latestUserIndex &&
+      !readSettledToolCalls(assistant).every(
+        ({ id, name }) =>
+          id !== null &&
+          name !== null &&
+          attempt.toolMetas.some((entry) => entry.toolCallId === id && entry.toolName === name),
+      )
+    ) {
+      assistant = undefined;
+      assistantIndex = -1;
+    }
   }
   const requestedToolCalls = readSettledToolCalls(assistant);
   // Results must follow their owning assistant; session-wide reused ids cannot settle a new turn.

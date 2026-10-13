@@ -49,6 +49,7 @@ function expectRetryContinuesFromTranscript(): void {
 }
 
 function makeReplayUnsafeMidTurnOverflow(params?: {
+  promptErrorSource?: "precheck" | "prompt";
   activeCount?: number;
   asyncStarted?: boolean;
   asyncSettled?: boolean;
@@ -62,12 +63,15 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
   return session.makeAttemptResult({
     ...(params?.codeModeEngaged ? { codeModeEngaged: true } : {}),
     promptError: makeOverflowError("Context overflow: prompt too large (mid-turn precheck)."),
-    promptErrorSource: "precheck",
-    preflightRecovery: {
-      route: "compact_only",
-      source: "mid-turn",
-      estimatedPromptTokens: 201_000,
-    },
+    promptErrorSource: params?.promptErrorSource ?? "precheck",
+    preflightRecovery:
+      params?.promptErrorSource === "prompt"
+        ? undefined
+        : {
+            route: "compact_only",
+            source: "mid-turn",
+            estimatedPromptTokens: 201_000,
+          },
     assistantTexts: [],
     lastAssistant: settledExecAssistant,
     currentAttemptAssistant: settledExecAssistant,
@@ -323,6 +327,43 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       expect(result.meta.error).toBeUndefined();
     },
   );
+
+  it.each(["precheck", "prompt"] as const)(
+    "compacts %s overflow after same-attempt steering without replaying completed side effects",
+    async (promptErrorSource) => {
+      const attempt = makeReplayUnsafeMidTurnOverflow({ promptErrorSource });
+      attempt.messagesSnapshot.push({
+        role: "user",
+        content: "also check the result",
+        timestamp: 3,
+      });
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(attempt)
+        .mockResolvedValueOnce(session.makeAttemptResult());
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({ summary: "Keep the completed action and follow-up" }),
+      );
+
+      const result = await runEmbeddedAgent(session.runParams);
+
+      expect(mockedCompactDirect).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expectRetryContinuesFromTranscript();
+      expect(result.meta.error).toBeUndefined();
+    },
+  );
+
+  it("does not borrow a previous attempt's tool batch across a new user input", async () => {
+    const attempt = makeReplayUnsafeMidTurnOverflow();
+    attempt.messagesSnapshot.push({ role: "user", content: "new task", timestamp: 3 });
+    attempt.toolMetas = [];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(attempt);
+
+    await runEmbeddedAgent(session.runParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
 
   it("keeps background handles across a subsequent transcript retry", async () => {
     mockedRunEmbeddedAttempt

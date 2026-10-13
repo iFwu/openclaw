@@ -161,6 +161,9 @@ describe("recoverEmbeddedRunAttempt", () => {
           reason,
           allToolsProvenSettled: true,
           allToolCallsRecorded: true,
+          recoveryAllToolCallsRecorded: true,
+          recoveryAllToolsProvenSettled: true,
+          recoveryParkedCodeModeRun: false,
           replaySafe: false,
         },
       });

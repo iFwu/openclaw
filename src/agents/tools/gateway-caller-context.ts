@@ -15,6 +15,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -281,9 +282,40 @@ export function captureGatewayToolCallerAssertion(): ((method?: string) => void)
   }
   const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
+  let reportedInactive = false;
+  const reportInactive = (
+    reason: "operator_inactive" | "missing_receipt" | "aborted_signal" | "stale_receipt",
+  ) => {
+    if (reportedInactive) {
+      return;
+    }
+    reportedInactive = true;
+    try {
+      createSubsystemLogger("agents/caller-authority").warn(
+        `caller authority rejected: reason=${reason} runId=${caller.operationalRunInstance?.runId} ` +
+          `instanceId=${caller.operationalRunInstance?.instanceId} signals=${signals.length} ` +
+          `abortedSignals=${signals.filter((signal) => signal.aborted).length}`,
+      );
+    } catch {
+      // Diagnostics cannot replace the original authority rejection.
+    }
+  };
   return (method) => {
-    caller.operatorAuthority?.assertCurrent();
-    if (!isCurrent || signals.some((signal) => signal.aborted) || isCurrent() === false) {
+    try {
+      caller.operatorAuthority?.assertCurrent();
+    } catch (error) {
+      reportInactive("operator_inactive");
+      throw error;
+    }
+    const reason = !isCurrent
+      ? "missing_receipt"
+      : signals.some((signal) => signal.aborted)
+        ? "aborted_signal"
+        : isCurrent() === false
+          ? "stale_receipt"
+          : undefined;
+    if (reason) {
+      reportInactive(reason);
       throw new Error("agent tool caller authority is no longer active");
     }
     if (method?.startsWith("cron.") && caller.cronAuthorityCheck?.() === false) {
