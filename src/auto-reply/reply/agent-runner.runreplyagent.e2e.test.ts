@@ -46,7 +46,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
-import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
@@ -56,6 +55,7 @@ import {
   runReplyFixtureEmbeddedAgent,
 } from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
+import { registerSourceReplacementSteeringCase } from "./agent-runner.runreplyagent.source-replacement.test-support.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
@@ -75,7 +75,6 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import {
-  clearReplyRunForResetBySessionId,
   createReplyOperation,
   type ReplyOperation,
   replyRunRegistry,
@@ -642,136 +641,12 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("keeps the replacement source when retired admission completes", async () => {
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const sourceContext = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "first-source-message",
-    };
-    const { followupRun } = createMinimalRun({ sessionCtx: sourceContext });
-    const first = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    first.setPhase("running");
-    const createController = (
-      operation: ReplyOperation,
-      initialEntry: SessionEntry,
-      sourceTurnId: string,
-    ) => {
-      let entry = initialEntry;
-      return createReplyAgentRestartRecoveryController({
-        activeSessionStore: sessionStore,
-        cfg: {},
-        followupRun: {
-          ...followupRun,
-          run: { ...followupRun.run, sessionId: operation.sessionId },
-        },
-        getActiveSessionEntry: () => entry,
-        opts: undefined,
-        replyOperation: operation,
-        restartRecoverySourceTurnId: sourceTurnId,
-        runtimePolicySessionKey: undefined,
-        sessionCtx: sourceContext,
-        sessionKey: "main",
-        setActiveSessionEntry: (nextEntry) => {
-          entry = nextEntry;
-        },
-        storePath,
-      });
-    };
-    const firstController = createController(first, sessionEntry, "source-first");
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: "source-first",
-      storePath,
-      text: "first source input",
-    });
-    const recorder = followupRun.userTurnTranscriptRecorder;
-    if (!recorder) {
-      throw new Error("expected the source recorder");
-    }
-    const committed = createDeferred();
-    const returnAdmission = createDeferred();
-    const persistApproved = recorder.persistApproved.bind(recorder);
-    const persistence = vi
-      .spyOn(recorder, "persistApproved")
-      .mockImplementation(async (...args) => {
-        const result = await persistApproved(...args);
-        committed.resolve();
-        await returnAdmission.promise;
-        return result;
-      });
-    const firstAdmission = firstController.admitUserTurn(recorder);
-    // A retired admission may reject; its successor must keep the same source either way.
-    const firstSettled = firstAdmission.then(
-      () => undefined,
-      (error: unknown) => committed.reject(error),
-    );
-    let replacement: ReplyOperation | undefined;
-    try {
-      await withTestTimeout(committed.promise, 5_000, "first source admission did not persist");
-      expect(requireStoredSessionEntry(storePath).restartRecoveryDeliverySourceRunId).toBe(
-        "source-first",
-      );
-      clearReplyRunForResetBySessionId("session");
-      const replacementEntry = makeSessionEntry({ sessionId: "replacement-session" });
-      await replaceSessionEntry({ storePath, sessionKey: "main" }, replacementEntry);
-      sessionStore.main = replacementEntry;
-      replacement = createReplyOperation({
-        sessionKey: "main",
-        sessionId: "replacement-session",
-        resetTriggered: true,
-      });
-      replacement.setPhase("running");
-      replacement.attachBackend({
-        kind: "embedded",
-        runId: "replacement-backend",
-        cancel: vi.fn(),
-        messageInjection: {
-          isAvailable: () => true,
-          queueMessage: async () => {},
-        },
-      });
-      const replacementRecorder = createUserTurnTranscriptRecorder({
-        input: { text: "replacement source input", idempotencyKey: "source-replacement" },
-        target: {
-          agentId: "main",
-          config: {},
-          cwd: "/tmp",
-          sessionEntry: replacementEntry,
-          sessionId: "replacement-session",
-          sessionKey: "main",
-          sessionStore,
-          storePath,
-        },
-      });
-      await createController(replacement, replacementEntry, "source-replacement").admitUserTurn(
-        replacementRecorder,
-      );
-      expect(replyRunRegistry.resolveCurrentMessageInjectionTarget("main")).toMatchObject({
-        sourceTurnId: "source-replacement",
-      });
-
-      returnAdmission.resolve();
-      await firstSettled;
-
-      expect(replyRunRegistry.get("main")).toBe(replacement);
-      expect(replyRunRegistry.resolveCurrentMessageInjectionTarget("main")).toMatchObject({
-        sourceTurnId: "source-replacement",
-      });
-    } finally {
-      returnAdmission.resolve();
-      await firstSettled;
-      persistence.mockRestore();
-      first.complete();
-      replacement?.complete();
-    }
+  registerSourceReplacementSteeringCase({
+    createMinimalRun,
+    makeSessionEntry,
+    makeSessionFixture,
+    attachSourceTurnRecorder,
+    requireStoredSessionEntry,
   });
 
   registerSteeringReceiptCases({
