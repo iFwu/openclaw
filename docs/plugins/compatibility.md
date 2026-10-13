@@ -91,7 +91,6 @@ separately tracked so supported upgrade paths can still repair old config.
 The remaining dated compatibility areas are:
 
 - the renewed October 1 SDK subpath window listed in the migration guide
-- the beta.5 session-store bridge
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
 - the October 2026 SDK annotation families listed below
@@ -119,11 +118,15 @@ This does not authorize removal or claim a completed published-reader sweep.
 | `memory-host-compatibility-aliases`           | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
 | `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
 | `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
-| `deprecated-session-store-beta5-api`          | End the v2026.7.x whole-store upgrade window, including package-root aliases.                           | 2026-10-12    |
 | `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.           | 2026-11-29    |
 
+The `deprecated-session-store-beta5-api` bridge is removed in this fork, including
+its package-root load/save aliases. Legacy-data import and recovery remain core-owned;
+plugins use row-level session access and identity-backed transcript readers.
+
 `pnpm plugins:boundary-report` reports `removal-pending` records separately
-from deprecated records. A due `removal-pending` record remains blocked until
+from deprecated records. Fork CI treats calendar deadlines as review reminders;
+only an explicitly requested audit uses `--fail-on-eligible-compat`. A due `removal-pending` record remains blocked until
 its reported migration condition is satisfied and its reader references are
 cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for

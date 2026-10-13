@@ -73,16 +73,6 @@ const materializingSessionEntryAccessorNames = new Set([
   "loadSessionEntry",
 ]);
 
-// Shipped beta.5 official plugins import these deprecated helpers during
-// doctor migrations. Remove this ratchet with the compatibility bridge once
-// beta.5 is outside the supported upgrade window; do not add runtime callers.
-const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
-  "loadSessionStore",
-  "resolveSessionFilePath",
-  "resolveSessionStoreEntry",
-  "updateSessionStore",
-]);
-
 const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-abort.ts",
   "src/gateway/server-methods/sessions-compact.ts",
@@ -451,16 +441,11 @@ export function findSessionStoreRuntimeFileBackedCompatExportViolations(
 ) {
   const exports = collectSessionStoreRuntimeFileBackedCompatExports(content, fileName, sourceFile);
   const violations: BoundaryViolation[] = [];
-  for (const [exportedName, exported] of exports) {
-    if (
-      exportedName !== exported.sourceName ||
-      !allowedSessionStoreRuntimeFileBackedCompatExports.has(exportedName)
-    ) {
-      violations.push({
-        line: exported.line,
-        reason: `exports unratcheted file-backed SDK session helper "${exported.sourceName}"`,
-      });
-    }
+  for (const exported of exports.values()) {
+    violations.push({
+      line: exported.line,
+      reason: `exports retired file-backed SDK session helper "${exported.sourceName}"`,
+    });
   }
   return violations;
 }

@@ -1,9 +1,16 @@
 // Tests public package entrypoint exports and load behavior.
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import * as packageRoot from "./index.js";
 import { applyTemplate, runLegacyCliEntry } from "./index.js";
 
 describe("legacy root entry", () => {
+  it("omits retired whole-store APIs from the package root", () => {
+    expect(packageRoot).not.toHaveProperty("loadSessionStore");
+    expect(packageRoot).not.toHaveProperty("saveSessionStore");
+    expect(packageRoot.resolveStorePath).toEqual(expect.any(Function));
+  });
+
   it("routes the package root export to the pure library entry", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),

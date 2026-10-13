@@ -248,12 +248,9 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "deprecated-session-store-beta5-api",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-05-21",
-    deprecated: "2026-07-12",
-    warningStarts: "2026-07-12",
-    removeAfter: "2026-10-12",
     replacement:
       "`getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations",
     docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
@@ -272,7 +269,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "The beta.5 session-store import set and package-root whole-store aliases remain available while official plugins and package consumers migrate to row-level session access.",
+      "The beta.5 whole-store and transcript-file SDK helpers and package-root load/save aliases were removed. Plugins use row-level session access and identity-backed transcript readers; core legacy-data migration remains available.",
   },
   {
     code: "plugin-sdk-session-agent-resolution-aliases",

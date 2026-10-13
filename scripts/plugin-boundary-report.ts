@@ -604,6 +604,11 @@ function renderSummaryText(summary: BoundaryReportSummary): string {
   lines.push(
     `compat deprecated=${summary.compat.deprecatedCount} eligibleForRemoval=${summary.compat.eligibleForRemovalCount} removalPending=${summary.compat.removalPendingCount} removalPendingDue=${summary.compat.removalPendingDueCount}`,
   );
+  for (const record of summary.compat.eligibleForRemoval) {
+    lines.push(
+      `  review-due ${record.removeAfter} ${record.code} owner=${record.owner}; removal requires an explicit compatibility decision`,
+    );
+  }
   for (const record of summary.compat.removalPending) {
     lines.push(
       `  removal-pending ${formatRemovalGate(record)} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerCount} readers=${record.readerSample.join(",") || "none"}`,

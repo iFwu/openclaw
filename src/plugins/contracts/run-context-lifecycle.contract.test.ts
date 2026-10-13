@@ -7,7 +7,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { loadSessionStore, updateSessionStore } from "../../plugin-sdk/session-store-runtime.js";
+import { getSessionEntry, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
@@ -790,8 +790,11 @@ describe("plugin run context lifecycle", () => {
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
+          const sessionKey = "agent:main:main";
+          await upsertSessionEntry({
+            sessionKey,
+            storePath,
+            entry: {
               sessionId: "session-1",
               updatedAt: Date.now(),
               pluginExtensions: {
@@ -808,8 +811,7 @@ describe("plugin run context lifecycle", () => {
                   },
                 ],
               },
-            };
-            return undefined;
+            },
           });
 
           expectNoCleanupFailures(
@@ -821,11 +823,11 @@ describe("plugin run context lifecycle", () => {
             }),
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
-          expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
+          const stored = getSessionEntry({ sessionKey, storePath });
+          expect(stored?.pluginExtensions).toEqual({
             "restart-state-fixture": { workflow: { state: "waiting" } },
           });
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toEqual({
+          expect(stored?.pluginNextTurnInjections).toEqual({
             "restart-state-fixture": [
               {
                 id: "resume",

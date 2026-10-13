@@ -809,8 +809,8 @@ export function createChangedCheckPlan(
   }
   if (result.lanes.all || shouldRunDeprecationHygieneChecks(result.paths)) {
     broadAudits.add(add("deprecated API usage", ["check:deprecated-api-usage"]));
-    // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
-    // until their scheduled deletion PRs land.
+    // Compatibility dates prompt review; they do not invalidate unchanged fork builds.
+    // Actual deprecated imports remain enforced by the separate usage audit.
     add("plugin boundaries", ["plugins:boundary-report:ci"]);
   }
   if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
