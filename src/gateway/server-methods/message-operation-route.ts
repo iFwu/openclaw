@@ -331,6 +331,7 @@ export async function withMessageOperationRoute<
   work: (
     route: T & {
       accountId: string | undefined;
+      effectiveAccountId: string;
       idem: string;
       dedupeKey: string | undefined;
       authorize: () => boolean;
@@ -359,6 +360,7 @@ export async function withMessageOperationRoute<
       const result = await params.work({
         ...resolved,
         accountId: accountRoute.effectiveAccountId,
+        effectiveAccountId: accountRoute.effectiveAccountId,
         idem: params.idempotencyKey,
         dedupeKey: undefined,
         authorize,
@@ -485,6 +487,7 @@ export async function withMessageOperationRoute<
       .work({
         ...resolved,
         accountId: accountRoute.accountId,
+        effectiveAccountId: accountRoute.effectiveAccountId,
         idem: inflight.idem,
         dedupeKey: inflight.dedupeKey,
         authorize: params.authorize ?? (() => true),

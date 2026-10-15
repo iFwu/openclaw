@@ -62,6 +62,7 @@ export function createGatewayInflightUnavailableFailure(params: {
   dedupeKey: string | undefined;
   channel: string;
   err: unknown;
+  sessionRouteReceiptId?: string;
 }): GatewayInflightResult {
   // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
   const unsentError =
@@ -94,7 +95,20 @@ export function createGatewayInflightUnavailableFailure(params: {
     ErrorCodes.UNAVAILABLE,
     String(params.err),
     partialDelivery
-      ? { details: { partialDelivery }, retryable: false }
+      ? {
+          details: {
+            partialDelivery,
+            ...(params.sessionRouteReceiptId
+              ? {
+                  messageActionReceipt: {
+                    sessionRouteOwner: "gateway",
+                    requestId: params.sessionRouteReceiptId,
+                  },
+                }
+              : {}),
+          },
+          retryable: false,
+        }
       : queuedDelivery
         ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } }
         : undefined,

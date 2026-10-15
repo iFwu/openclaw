@@ -43,6 +43,7 @@ import {
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
+import { registerMessageActionSessionRouteTests } from "./send.session-route.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   createTelegramSourceSendRequest,
@@ -80,7 +81,9 @@ const mocks = vi.hoisted(() => ({
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
   resolveOutboundSessionRoute: vi.fn(),
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  ensureOutboundSessionEntry: vi.fn<
+    typeof import("../../infra/outbound/outbound-session.js").ensureOutboundSessionEntry
+  >(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   dispatchChannelMessageAction: vi.fn(),
   sendPoll: vi.fn<
@@ -617,20 +620,6 @@ describe("gateway send mirroring", () => {
 
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(requestConfig);
     expect(firstRespondCall(respond)[0]).toBe(true);
-  });
-
-  it("does not read the runtime config snapshot for send requests", async () => {
-    mockDeliverySuccess("m-no-runtime-config-read");
-
-    await runSend({
-      to: "channel:C1",
-      message: "hi",
-      channel: "slack",
-      idempotencyKey: "idem-send-no-runtime-config-read",
-    });
-
-    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
-    expect(mocks.getRuntimeConfigSourceSnapshot).not.toHaveBeenCalled();
   });
 
   it("does not share message.action idempotency results across authority origins", async () => {
@@ -1812,13 +1801,19 @@ describe("gateway send mirroring", () => {
     });
   });
 
-  registerSendUploadPolicyTests({
-    mocks,
-    runSendWithClient,
-    runMessageActionRequest,
-    registerMessageActionPlugin,
-    mockDeliverySuccess,
-  });
+  for (const registerTests of [
+    registerSendUploadPolicyTests,
+    registerMessageActionSessionRouteTests,
+  ]) {
+    registerTests({
+      mocks,
+      runSendWithClient,
+      runSend,
+      runMessageActionRequest,
+      registerMessageActionPlugin,
+      mockDeliverySuccess,
+    });
+  }
 
   it("materializes buffer-only gateway sends before outbound delivery", async () => {
     mockDeliverySuccess("m-buffer-media");

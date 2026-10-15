@@ -458,6 +458,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       accountId,
       route: outboundRoute,
       sourceSessionKey: input.sessionKey,
+      creation: input.sessionCreation,
+      assertCommitAllowed: input.assertDirectAdapterHandoff,
     });
   };
   throwIfAborted(abortSignal);
@@ -540,7 +542,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       });
   if (gatewayPluginAction) {
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
-    if (!deliveryFact || deliveryFact.status === "settled") {
+    // A newer Gateway owns the durable route; older installed Gateways still
+    // require the caller's post-delivery write during rolling upgrades.
+    if (
+      gatewayPluginAction.kind === "send" &&
+      gatewayPluginAction.sessionRouteOwner !== "gateway" &&
+      (!deliveryFact || deliveryFact.status === "settled")
+    ) {
       await commitOutboundSessionRoute();
     }
     return await annotateSourceDelivery(

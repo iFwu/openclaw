@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import {
@@ -96,6 +97,8 @@ export type MessageActionInput = {
   preparedMessageId?: string;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
+  /** @internal Gateway-derived creation policy for the destination route. */
+  sessionCreation?: MsgContext["SessionCreation"];
   /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
   forceCoreDelivery?: boolean;
   /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
@@ -147,6 +150,8 @@ export type MessageActionResult =
       action: "send";
       to: string;
       handledBy: "plugin" | "core" | "internal-source";
+      /** Gateway receipt ownership, never inferred from plugin payload fields. */
+      sessionRouteOwner?: "gateway";
       payload: unknown;
       normalization?: MessageActionNormalization;
       /** Exact text handed to the direct transport after core normalization and hooks. */

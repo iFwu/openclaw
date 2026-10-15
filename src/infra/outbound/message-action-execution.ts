@@ -36,6 +36,10 @@ import {
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
+import {
+  createGatewayMessageActionReceipt,
+  readGatewayMessageActionReceipt,
+} from "./message-action-receipt.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
@@ -168,13 +172,21 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
   );
 }
 
-export function projectMessageActionPartialDelivery(error: unknown) {
+export function projectMessageActionPartialDelivery(error: unknown, requestId?: string) {
   const directDelivery = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
   const gatewayDelivery =
     error instanceof Error && error.name === "GatewayClientRequestError"
       ? asResultRecord(asResultRecord(error)?.details)?.partialDelivery
       : undefined;
   const deliveryResult = directDelivery ?? gatewayDelivery;
+  const gatewayReceipt = asResultRecord(
+    asResultRecord(asResultRecord(error)?.details)?.messageActionReceipt,
+  );
+  const gatewayRouteOwner =
+    gatewayDelivery !== undefined &&
+    requestId !== undefined &&
+    gatewayReceipt?.sessionRouteOwner === "gateway" &&
+    gatewayReceipt.requestId === requestId;
   return deliveryResult === undefined
     ? undefined
     : {
@@ -183,6 +195,7 @@ export function projectMessageActionPartialDelivery(error: unknown) {
         sentBeforeError: true as const,
         error: formatErrorMessage(error),
         result: deliveryResult,
+        ...(gatewayRouteOwner ? { sessionRouteOwner: "gateway" as const } : {}),
       };
 }
 
@@ -356,7 +369,10 @@ export async function executeGatewayAction(
       actionParams: {
         channel: ctx.channel,
         action: params.action,
-        params: ctx.params,
+        params:
+          params.action === "send"
+            ? { ...ctx.params, __sessionRouteOwner: idempotencyKey }
+            : ctx.params,
         ...(params.reply ? { reply: params.reply } : {}),
         accountId: ctx.accountId ?? undefined,
         senderIsOwner: ctx.input.senderIsOwner,
@@ -370,10 +386,12 @@ export async function executeGatewayAction(
     });
   } catch (error) {
     const partialDelivery = ctx.input.messageActionAuthorization?.scheduled
-      ? projectMessageActionPartialDelivery(error)
+      ? projectMessageActionPartialDelivery(error, idempotencyKey)
       : undefined;
     if (partialDelivery !== undefined) {
-      payload = partialDelivery;
+      payload = partialDelivery.sessionRouteOwner
+        ? createGatewayMessageActionReceipt(partialDelivery, idempotencyKey)
+        : partialDelivery;
     } else {
       if (
         callerOwnsTerminalReceipt &&
@@ -386,10 +404,14 @@ export async function executeGatewayAction(
       throw error;
     }
   }
+  const receipt =
+    params.action === "send"
+      ? readGatewayMessageActionReceipt(payload, idempotencyKey)
+      : { payload, sessionRouteOwner: undefined };
   if (callerOwnsTerminalReceipt) {
     try {
       await reconcileTerminalSourceReplyDelivery({
-        deliveredPayload: payload,
+        deliveredPayload: receipt.payload,
         mirror: sourceReplyMirror,
         receipt: terminalDeliveryReceipt,
         ...(hadUnknownDeliveryOutcome ? { preservePendingOnExplicitFailure: true } : {}),
@@ -404,11 +426,18 @@ export async function executeGatewayAction(
       });
     }
   }
-  const result = params.result(payload);
+  const rawResult = params.result(receipt.payload);
+  const result =
+    rawResult.kind === "send"
+      ? {
+          ...rawResult,
+          ...(receipt.sessionRouteOwner ? { sessionRouteOwner: receipt.sessionRouteOwner } : {}),
+        }
+      : rawResult;
   if (!supportsCanonicalGatewayDelivery) {
     return result;
   }
-  const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
+  const partialDelivery = asResultRecord(receipt.payload)?.deliveryStatus === "partial_failed";
   if (result.kind === "send") {
     return {
       ...result,
@@ -417,7 +446,10 @@ export async function executeGatewayAction(
         ? {}
         : {
             // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
-            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+            sendResult: receipt.payload as Extract<
+              MessageActionResult,
+              { kind: "send" }
+            >["sendResult"],
           }),
     };
   }

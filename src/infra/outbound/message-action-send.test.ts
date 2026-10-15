@@ -8,6 +8,8 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { projectMessageActionPartialDelivery } from "./message-action-execution.js";
+import { createGatewayMessageActionReceipt } from "./message-action-receipt.js";
 import {
   createAlwaysConfiguredPluginConfig,
   createGatewayActionPlugin,
@@ -61,7 +63,12 @@ describe("runMessageAction plugin dispatch", () => {
         receipt: { ok: true, messageId: "sent-1" },
         accepted: true,
       },
-    ])("handles Gateway-relayed $name receipts", async ({ receipt, accepted }) => {
+      {
+        name: "legacy Gateway delivery",
+        receipt: { ok: true, messageId: "legacy-sent-1" },
+        accepted: true,
+      },
+    ])("handles Gateway-relayed $name receipts", async ({ name, receipt, accepted }) => {
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey: "agent:main:gatewaychat:direct:user-123",
         baseSessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -81,7 +88,11 @@ describe("runMessageAction plugin dispatch", () => {
         }),
         "gatewaychat",
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
+      const gatewayOwnsRoute = name !== "legacy Gateway delivery";
+      const gatewayReceipt = gatewayOwnsRoute
+        ? createGatewayMessageActionReceipt(receipt, "idem-gateway-action")
+        : receipt;
+      mocks.callGatewayLeastPrivilege.mockResolvedValue(gatewayReceipt);
       const result = await runMessageAction({
         cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
@@ -90,8 +101,61 @@ describe("runMessageAction plugin dispatch", () => {
         gateway: { clientName: "cli", mode: "cli" },
       });
       expect(result.payload).toEqual(receipt);
-      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(
+        !gatewayOwnsRoute && accepted ? 1 : 0,
+      );
     });
+    it.each(["sent", ["sent"], { ok: true, messageActionReceipt: { payload: "plugin-field" } }])(
+      "does not reopen the caller store for Gateway-owned payload %j",
+      async (payload) => {
+        setTestPlugin(
+          createGatewayActionPlugin({
+            pluginId: "gatewaychat",
+            label: "Gateway Chat",
+            blurb: "Test gateway",
+            actions: ["send"],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(),
+          }),
+          "gatewaychat",
+        );
+        mocks.callGatewayLeastPrivilege.mockResolvedValue(
+          createGatewayMessageActionReceipt(payload, "idem-gateway-action"),
+        );
+        const result = await runMessageAction({
+          cfg: createEnabledMessageActionConfig("gatewaychat"),
+          action: "send",
+          agentId: "main",
+          params: { channel: "gatewaychat", target: "user-123", message: "hello" },
+          gateway: { clientName: "cli", mode: "cli" },
+        });
+        expect(result.payload).toEqual(payload);
+        expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([true, false])(
+      "preserves partial-error route ownership from new Gateway=%s",
+      (owned) => {
+        const error = Object.assign(new Error("second part failed"), {
+          name: "GatewayClientRequestError",
+          details: {
+            partialDelivery: { visibleReplySent: true, messageIds: ["partial-id"] },
+            ...(owned
+              ? {
+                  messageActionReceipt: {
+                    sessionRouteOwner: "gateway",
+                    requestId: "partial-request",
+                  },
+                }
+              : {}),
+          },
+        });
+        const result = projectMessageActionPartialDelivery(error, "partial-request");
+        expect(result?.sentBeforeError).toBe(true);
+        expect(result?.sessionRouteOwner).toBe(owned ? "gateway" : undefined);
+      },
+    );
     it.each([
       { name: "raw base64", buffer: "SGVsbG8=" },
       { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },

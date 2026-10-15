@@ -30,6 +30,13 @@ validate config without running local state migrations. They require a reachable
 Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
 discovery retain local config and plugin preparation.
 
+Gateway-relayed sends keep destination-session route metadata on the Gateway.
+The CLI consumes the Gateway's route-ownership receipt without reopening its
+local agent database after delivery. When connected to an older Gateway that
+has no ownership receipt, the CLI retains the local post-delivery update. This
+route update does not imply that message text is mirrored into the destination
+session transcript. Local sends and dry-runs retain their existing behavior.
+
 ## Agent ownership
 
 `openclaw message` uses the configured
