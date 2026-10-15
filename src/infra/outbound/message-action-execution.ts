@@ -371,7 +371,7 @@ export async function executeGatewayAction(
         action: params.action,
         params:
           params.action === "send"
-            ? { ...ctx.params, __sessionRouteOwner: idempotencyKey }
+            ? { ...ctx.params, sessionRouteReceiptId: idempotencyKey }
             : ctx.params,
         ...(params.reply ? { reply: params.reply } : {}),
         accountId: ctx.accountId ?? undefined,

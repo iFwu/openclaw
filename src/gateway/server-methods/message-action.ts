@@ -75,8 +75,8 @@ export const messageActionHandler: NonNullable<GatewayRequestHandlers["message.a
     context,
   });
   const requestedRouteReceipt =
-    request.action === "send" && request.params.__sessionRouteOwner === request.idempotencyKey;
-  delete request.params.__sessionRouteOwner;
+    request.action === "send" && request.params.sessionRouteReceiptId === request.idempotencyKey;
+  delete request.params.sessionRouteReceiptId;
   const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
   if (!trustedContext.ok) {
     respond(false, undefined, trustedContext.error);

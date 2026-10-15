@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, type Mock } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
@@ -86,7 +86,7 @@ export function registerMessageActionSessionRouteTests({
           to: "-123",
           threadId: "456",
           message: "hello",
-          __sessionRouteOwner: "cli-route-receipt",
+          sessionRouteReceiptId: "cli-route-receipt",
         },
         agentId: "main",
         idempotencyKey: "cli-route-receipt",
@@ -129,7 +129,7 @@ export function registerMessageActionSessionRouteTests({
           to: "-123",
           message: "hello",
           ...fields,
-          __sessionRouteOwner: "thread-account-route",
+          sessionRouteReceiptId: "thread-account-route",
         },
         idempotencyKey: "thread-account-route",
       },
@@ -163,7 +163,7 @@ export function registerMessageActionSessionRouteTests({
       channel: "telegram",
       action: "send",
       agentId: "main",
-      params: { to: "-123", message: "hello", __sessionRouteOwner: "partial-route-owner" },
+      params: { to: "-123", message: "hello", sessionRouteReceiptId: "partial-route-owner" },
       idempotencyKey: "partial-route-owner",
     };
     const first = await runMessageActionRequest(
