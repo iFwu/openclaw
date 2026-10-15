@@ -5,7 +5,10 @@ import {
   validateMessageActionParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  dispatchChannelMessageAction,
+  isScheduledMessageWriteAction,
+} from "../../channels/plugins/message-action-dispatch.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
@@ -302,7 +305,7 @@ export const messageActionHandler: NonNullable<GatewayRequestHandlers["message.a
               request.inboundTurnKind === "room_event" ? "room_event" : "user_request";
             const actionContext = {
               channel,
-              action: request.action as never,
+              action: request.action,
               cfg,
               params: request.params,
               reply: request.reply,
@@ -365,8 +368,15 @@ export const messageActionHandler: NonNullable<GatewayRequestHandlers["message.a
                 });
               }
             };
+            const runnerAction =
+              request.action === "send" ||
+              request.action === "poll" ||
+              isScheduledMessageWriteAction(request.action)
+                ? request.action
+                : undefined;
             const runnerOwnsRoute =
-              canonicalAction || Boolean(messageAuthority.assertScheduledWriteCurrent);
+              runnerAction !== undefined &&
+              (canonicalAction || Boolean(messageAuthority.assertScheduledWriteCurrent));
             const commitPluginRoute =
               requestedRouteReceipt && !runnerOwnsRoute
                 ? await prepareMessageActionSessionRoute({
@@ -385,11 +395,12 @@ export const messageActionHandler: NonNullable<GatewayRequestHandlers["message.a
                 : undefined;
             let payload: unknown;
             try {
-              if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+              if (runnerOwnsRoute && runnerAction !== undefined) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({
                   ...actionContext,
+                  action: runnerAction,
                   gatewayOwnedDelivery: true,
                   sessionCreation: resolveSandboxedSessionCreation(client, cfg),
                   ...(request.action === "send"

@@ -8,7 +8,6 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { projectMessageActionPartialDelivery } from "./message-action-execution.js";
 import { createGatewayMessageActionReceipt } from "./message-action-receipt.js";
 import {
   createAlwaysConfiguredPluginConfig,
@@ -136,7 +135,9 @@ describe("runMessageAction plugin dispatch", () => {
 
     it.each([true, false])(
       "preserves partial-error route ownership from new Gateway=%s",
-      (owned) => {
+      async (owned) => {
+        const { projectMessageActionPartialDelivery } =
+          await import("./message-action-execution.js");
         const error = Object.assign(new Error("second part failed"), {
           name: "GatewayClientRequestError",
           details: {

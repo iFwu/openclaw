@@ -438,6 +438,8 @@ describe("gateway send mirroring", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.deliverOutboundPayloads.mockReset();
+    mockDeliverySuccess("default-send-receipt");
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
     mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
