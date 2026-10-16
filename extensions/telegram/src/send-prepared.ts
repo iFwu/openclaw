@@ -1,6 +1,5 @@
 import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
-import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -8,7 +7,7 @@ import {
   isTelegramSkippableChunkSendError,
   mergeTelegramPartialDeliveryError,
 } from "./chunk-delivery.js";
-import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
+import { rethrowTelegramSendError } from "./network-errors.js";
 import {
   sendTelegramCaptionedMediaWithFallback,
   sendTelegramOutboundMediaWithPhotoFallback,
@@ -19,6 +18,7 @@ import {
   withTelegramNativeQuoteFallback,
   isTelegramQuoteParamError,
 } from "./reply-parameters.js";
+import { assertTelegramRequestAuthority } from "./request-authority.js";
 import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
@@ -29,6 +29,7 @@ import {
   isTelegramPhotoLimitError,
   isTelegramVoiceMessagesForbiddenError,
 } from "./send-error-predicates.js";
+import { createTelegramSendRetryRunner } from "./send-retry.js";
 import {
   sendTelegramTextPageParts,
   type TelegramTextDeliveryPage,
@@ -43,10 +44,7 @@ type PreparedRequest = <T>(
 ) => Promise<T>;
 
 export function createTelegramReplyRequest(runtime: RuntimeEnv): PreparedRequest {
-  const retry = createChannelApiRetryRunner({
-    shouldRetry: isSafeToRetrySendError,
-    strictShouldRetry: true,
-  });
+  const retry = createTelegramSendRetryRunner();
   return (send, operation, options) =>
     withTelegramApiErrorLogging({
       operation,
@@ -147,10 +145,10 @@ export function createTelegramPreparedSender(config: {
       request: (effective, operation) =>
         config.request(
           () => {
-            config.assertPlatformSendAuthorized?.();
-            return runAuthorizedTelegramRequest(config.assertPlatformSendAuthorized, () =>
-              send(effective),
-            );
+            const assertCurrent = () =>
+              assertTelegramRequestAuthority(config.assertPlatformSendAuthorized);
+            assertCurrent();
+            return runAuthorizedTelegramRequest(assertCurrent, () => send(effective));
           },
           operation,
           {

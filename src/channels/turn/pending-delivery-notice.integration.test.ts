@@ -7,7 +7,7 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { failDurableDelivery } from "../../infra/outbound/delivery-completion.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
@@ -104,6 +104,7 @@ describe("pending delivery notice end to end", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync(tmpDir);
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -160,7 +161,8 @@ describe("pending delivery notice end to end", () => {
         expect.objectContaining({
           channel: "telegram",
           to: "chat-1",
-          text: expect.stringContaining("couldn’t confirm"),
+          text: expect.stringContaining("the final answer"),
+          idempotencyKey: "main-session-restart-recovery:pending-final:intent-e2e:replay",
         }),
       );
       expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
@@ -168,7 +170,7 @@ describe("pending delivery notice end to end", () => {
       );
 
       // Reopen the canonical store so normalization must preserve the terminal fact.
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
       // A queue restart can repeat owner settlement after its first write committed.
       await failDurableDelivery({ kind: "pending-final", ...completion });
       await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });

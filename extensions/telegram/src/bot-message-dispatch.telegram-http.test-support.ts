@@ -19,6 +19,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -41,6 +42,7 @@ const CHAT_ID = 123;
 
 export function createTelegramDispatchHttpFixture() {
   let server: Server;
+  let proxyEnv: ReturnType<typeof captureEnv> | undefined;
   let apiRoot: string;
   let state: OpenClawTestState;
   let bot: Bot;
@@ -78,6 +80,28 @@ export function createTelegramDispatchHttpFixture() {
     | undefined;
 
   beforeAll(async () => {
+    const proxyKeys = [
+      "OPENCLAW_DEBUG_PROXY_ENABLED",
+      "OPENCLAW_DEBUG_PROXY_URL",
+      "ALL_PROXY",
+      "all_proxy",
+      "HTTP_PROXY",
+      "http_proxy",
+      "HTTPS_PROXY",
+      "https_proxy",
+      "NO_PROXY",
+      "no_proxy",
+      "OPENCLAW_PROXY_URL",
+      "OPENCLAW_PROXY_ACTIVE",
+      "OPENCLAW_PROXY_CA_FILE",
+    ];
+    proxyEnv = captureEnv(proxyKeys);
+    // Both the fixture Bot and the durable send adapter must use the loopback server.
+    for (const key of proxyKeys) {
+      delete process.env[key];
+    }
+    process.env.NO_PROXY = "127.0.0.1,localhost,::1";
+    process.env.no_proxy = process.env.NO_PROXY;
     server = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => {
@@ -348,12 +372,16 @@ export function createTelegramDispatchHttpFixture() {
   }
 
   afterAll(async () => {
-    for (const socket of sockets) {
-      socket.destroy();
+    try {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    } finally {
+      proxyEnv?.restore();
     }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
   });
 
   function createContext(): TelegramMessageContext {
@@ -572,7 +600,7 @@ export function createTelegramDispatchHttpFixture() {
       await settleDetachedDeletes();
 
       if (!scenario?.allowErrors) {
-        expect(errors).toEqual([]);
+        expect(errors, errors.join("\n")).toEqual([]);
       }
       expect(result.kind).toBe(scenario?.outcome ?? "completed");
       return calls

@@ -17,13 +17,14 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
-import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
+import { rethrowTelegramSendError } from "./network-errors.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import {
   bindTelegramRequestAuthority,
   findTelegramRequestAuthorityError,
 } from "./request-authority.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
+import { createTelegramSendRetryRunner } from "./send-retry.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
 
@@ -458,13 +459,16 @@ export function createTelegramRequestWithDiag(params: {
   /** When true, the shouldRetry predicate is used exclusively without the TELEGRAM_RETRY_RE fallback. */
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
+  retryRunner?: ReturnType<typeof createChannelApiRetryRunner>;
 }): TelegramRequestWithDiag {
-  const request = createChannelApiRetryRunner({
-    retry: params.retry,
-    verbose: params.verbose,
-    ...(params.shouldRetry ? { shouldRetry: params.shouldRetry } : {}),
-    ...(params.strictShouldRetry ? { strictShouldRetry: true } : {}),
-  });
+  const request =
+    params.retryRunner ??
+    createChannelApiRetryRunner({
+      retry: params.retry,
+      verbose: params.verbose,
+      ...(params.shouldRetry ? { shouldRetry: params.shouldRetry } : {}),
+      ...(params.strictShouldRetry ? { strictShouldRetry: true } : {}),
+    });
   const logHttpError = createTelegramHttpLogger(params.cfg);
   return <T>(
     fn: () => Promise<T>,
@@ -533,6 +537,7 @@ export function createRequestWithChatNotFound(params: {
 }
 
 export function createTelegramNonIdempotentRequestWithDiag(params: {
+  signal?: AbortSignal;
   cfg: OpenClawConfig;
   retry?: RetryConfig;
   verbose?: boolean;
@@ -543,8 +548,11 @@ export function createTelegramNonIdempotentRequestWithDiag(params: {
     retry: params.retry,
     verbose: params.verbose,
     useApiErrorLogging: params.useApiErrorLogging,
-    shouldRetry: isSafeToRetrySendError,
-    strictShouldRetry: true,
+    retryRunner: createTelegramSendRetryRunner({
+      retry: params.retry,
+      verbose: params.verbose,
+      signal: params.signal,
+    }),
   });
   return (fn, label, options) => request(fn, label, options).catch(rethrowTelegramSendError);
 }

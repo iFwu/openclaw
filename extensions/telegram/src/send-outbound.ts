@@ -97,7 +97,7 @@ export async function reportTelegramProviderDelivery(
 export async function prepareTelegramOutbound<T extends string | number | undefined>(params: {
   to: string | number;
   context: TelegramApiContext;
-  opts: Pick<TelegramSendOpts, "verbose" | "retry" | "gatewayClientScopes">;
+  opts: Pick<TelegramSendOpts, "verbose" | "retry" | "gatewayClientScopes" | "signal">;
   messageIdInput?: T;
   thread?: {
     messageThreadId?: number;
@@ -143,6 +143,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
           retry: params.opts.retry,
           verbose: params.opts.verbose,
           useApiErrorLogging: params.request.useApiErrorLogging,
+          signal: params.opts.signal,
         })
       : createTelegramRequestWithDiag({
           cfg,

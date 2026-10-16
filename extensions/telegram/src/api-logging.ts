@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { describeTelegramNetworkError } from "./network-errors.js";
 
 type TelegramApiLogger = (message: string) => void;
 
@@ -26,7 +27,7 @@ export async function withTelegramApiErrorLogging<T>({
     if (!shouldLog || shouldLog(err)) {
       const errText = formatErrorMessage(err);
       const log = logger ?? runtime?.error ?? ((message: string) => fallbackLogger.error(message));
-      log(`telegram ${operation} failed: ${errText}`);
+      log(`telegram ${operation} failed: ${errText} (${describeTelegramNetworkError(err)})`);
     }
     throw err;
   }

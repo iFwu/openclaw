@@ -7,7 +7,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
 const PENDING_DELIVERY_NOTICE =
-  "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
+  "上条回复未确认送达。请在当前话题要求补发缺失内容，不要重新执行原任务。";
 
 const sendRecoveryNotice = vi.hoisted(() => vi.fn());
 const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
@@ -74,6 +74,7 @@ describe("pending delivery notice", () => {
       threadId: 42,
       text: PENDING_DELIVERY_NOTICE,
       idempotencyKey: "main-session-restart-recovery:pending-final:intent-1",
+      isCurrent: expect.any(Function),
     });
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -110,6 +111,113 @@ describe("pending delivery notice", () => {
       state: "owed",
     });
   });
+
+  it.each(["match", "other-intent", "other-topic", "other-account"] as const)(
+    "only replays saved text for its exact intent and route (%s)",
+    async (scope) => {
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingFinalDelivery: {
+            kind: "replayable",
+            createdAt: entry.pendingDeliveryNotice!.createdAt,
+            text: "Saved answer without rerunning any tools",
+            intentId: scope === "other-intent" ? "other" : "intent-1",
+            context: {
+              channel: "telegram",
+              to: "chat-1",
+              accountId: scope === "other-account" ? "other" : "default",
+              threadId: scope === "other-topic" ? 43 : 42,
+            },
+            deliveries: [{ id: "delivery-1", state: "unknown" }],
+          },
+        },
+      );
+      await deliverPendingDeliveryNotice(sessionKey, storePath);
+      const payload = sendRecoveryNotice.mock.calls[0]?.[0];
+      expect(payload).toMatchObject({
+        channel: "telegram",
+        to: "chat-1",
+        accountId: "default",
+        threadId: 42,
+      });
+      expect(payload.text.includes("Saved answer")).toBe(scope === "match");
+      await deliverPendingDeliveryNotice(sessionKey, storePath);
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["reset", "intent", "route"] as const)(
+    "does not hand off saved text after a concurrent %s",
+    async (change) => {
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingFinalDelivery: {
+            kind: "replayable",
+            text: "Old answer",
+            createdAt: Date.now(),
+            intentId: "intent-1",
+            context: entry.pendingDeliveryNotice!.context,
+            deliveries: [{ id: "delivery-1", state: "unknown" }],
+          },
+        },
+      );
+      const started = createDeferred();
+      const release = createDeferred();
+      const transport = vi.fn();
+      sendRecoveryNotice.mockImplementationOnce(async (payload) => {
+        started.resolve();
+        await release.promise;
+        if (!payload.isCurrent()) {
+          throw new Error("retired");
+        }
+        transport(payload.text);
+        return { suppressed: false };
+      });
+      const sending = deliverPendingDeliveryNotice(sessionKey, storePath);
+      await started.promise;
+      const current = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...current,
+          ...(change === "reset" ? { sessionId: "replacement-session" } : {}),
+          ...(change === "intent"
+            ? {
+                pendingDeliveryNotice: {
+                  ...current.pendingDeliveryNotice!,
+                  intentId: "replacement",
+                },
+              }
+            : {}),
+          ...(change === "route"
+            ? {
+                delivery: {
+                  kind: "external",
+                  route: { channel: "telegram", accountId: "default" },
+                  context: {
+                    channel: "telegram",
+                    to: "chat-1",
+                    accountId: "default",
+                    threadId: 43,
+                  },
+                  origin: {},
+                } as const,
+              }
+            : {}),
+        },
+      );
+      release.resolve();
+      await sending;
+      expect(transport).not.toHaveBeenCalled();
+      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains debt terminally when the notice send is suppressed", async () => {
     sendRecoveryNotice.mockResolvedValue({ suppressed: true });
@@ -171,11 +279,16 @@ describe("pending delivery notice", () => {
     async (suppressedFirst) => {
       const first = createDeferred<{ suppressed: boolean }>();
       const second = createDeferred<{ suppressed: boolean }>();
-      sendRecoveryNotice.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const bothStarted = createDeferred();
+      sendRecoveryNotice.mockReturnValueOnce(first.promise).mockImplementationOnce(() => {
+        bothStarted.resolve();
+        return second.promise;
+      });
       const attempts = [
         deliverPendingDeliveryNotice(sessionKey, storePath),
         deliverPendingDeliveryNotice(sessionKey, storePath),
       ];
+      await bothStarted.promise;
       first.resolve({ suppressed: suppressedFirst });
       await attempts[0];
       second.resolve({ suppressed: !suppressedFirst });
@@ -189,8 +302,13 @@ describe("pending delivery notice", () => {
 
   it("leaves a replacement notice owed when an earlier send finishes", async () => {
     const sent = createDeferred<{ suppressed: boolean }>();
-    sendRecoveryNotice.mockReturnValueOnce(sent.promise);
+    const started = createDeferred();
+    sendRecoveryNotice.mockImplementationOnce(() => {
+      started.resolve();
+      return sent.promise;
+    });
     const attempt = deliverPendingDeliveryNotice(sessionKey, storePath);
+    await started.promise;
     const entry = loadSessionEntry({ sessionKey, storePath })!;
     const replacement = { ...entry.pendingDeliveryNotice!, intentId: "intent-2" };
     await replaceSessionEntry(

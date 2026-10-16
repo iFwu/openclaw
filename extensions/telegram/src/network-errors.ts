@@ -11,6 +11,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findTelegramRequestAuthorityError } from "./request-authority.js";
 
 const TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION =
   "Bad Request: group chat was upgraded to a supergroup chat";
@@ -31,6 +32,10 @@ function isTelegramRequestNotStartedError(err: unknown): boolean {
 }
 
 export function rethrowTelegramSendError(err: unknown): never {
+  const authorityError = findTelegramRequestAuthorityError(err);
+  if (authorityError) {
+    throw authorityError.originalError;
+  }
   if (isTelegramRequestNotStartedError(err)) {
     throw new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err });
   }
@@ -96,6 +101,23 @@ function collectTelegramErrorCandidates(err: unknown) {
 
 function normalizeCode(code?: string): string {
   return code?.trim().toUpperCase() ?? "";
+}
+
+export function describeTelegramNetworkError(err: unknown): string {
+  const names = new Set<string>();
+  const codes = new Set<string>();
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const name = readErrorName(candidate);
+    const code = normalizeCode(getErrorCode(candidate));
+    // Never include nested messages, URLs, headers, or grammY request payloads.
+    if (name && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name)) {
+      names.add(name);
+    }
+    if (code && /^[A-Z0-9_]{1,64}$/.test(code)) {
+      codes.add(code);
+    }
+  }
+  return `errorTypes=${[...names].join(">") || "unknown"} codes=${[...codes].join(",") || "unknown"}`;
 }
 
 function getErrorCode(err: unknown): string | undefined {

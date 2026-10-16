@@ -318,8 +318,31 @@ describe("Telegram operation leases through real clients", () => {
       } else {
         await expect(sending).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
       }
-      expect(attempts).toBe(kind === "ambiguous" ? 1 : 2);
+      expect(attempts).toBe(2);
       expect(fixture.requests).toEqual([]);
+    },
+  );
+
+  it.each([
+    { entry: "direct", rich: false },
+    { entry: "direct", rich: true },
+    { entry: "public", rich: false },
+    { entry: "public", rich: true },
+  ] as const)(
+    "retries a lost ACK with identical content and topic ($entry, rich=$rich)",
+    async ({ entry, rich }) => {
+      const timer = global.setTimeout;
+      vi.spyOn(global, "setTimeout").mockImplementation((callback, delay, ...args) =>
+        timer(callback, delay !== undefined && delay >= 900 && delay <= 1_100 ? 0 : delay, ...args),
+      );
+      fixture.rejections.push({ resetConnection: true });
+      await fixture.sendThrough(entry, "Saved reply", async () => {}, undefined, rich, undefined, {
+        threadId: 42,
+      });
+      expect(fixture.requests).toHaveLength(2);
+      expect(fixture.requests[0]).toEqual(fixture.requests[1]);
+      expect(fixture.requests[1]?.method).toBe(rich ? "sendRichMessage" : "sendMessage");
+      expect(fixture.requests[1]?.fields.message_thread_id).toBe(42);
     },
   );
 

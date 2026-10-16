@@ -205,7 +205,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     return;
   }
   const text =
-    "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+    "回复发送未成功或尚未确认。你下次在当前话题发消息时，会尝试补发已保存的正文；不会重新执行原任务。";
   const stream = turn.answerLane.stream;
   const messageId = stream?.messageId();
   if (

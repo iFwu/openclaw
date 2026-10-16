@@ -79,7 +79,9 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 ### Telegram
 
 - With the built-in transport, new text messages and rich-text messages use fresh HTTP connections, avoiding stale keep-alive sockets for initial previews, replies, and terminal errors. Polling, edits, and control requests retain connection pooling. This adds a connection handshake to each new text message.
-- These non-idempotent text sends retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
+- Text sends favor delivery over duplicate avoidance. Transient network failures, including a reset, timeout, or lost response after sending, and Bot API 5xx responses are retried up to eight total attempts. Exponential backoff starts at one second and caps at 30 seconds, with jitter. The current text part is retried unchanged; accepted earlier parts are not replayed. A lost acknowledgment can therefore produce a duplicate message.
+- Flood control (429) remains owned by the per-account limiter, which honors Telegram's wait. Authentication, permission, and other client rejections are not retried by the text retry policy. Non-text sends retain the proven-not-started retry policy.
+- If final delivery remains uncertain and replayable text is saved, the next inbound turn on the same Telegram account, chat, and topic resends that saved text with a duplicate-warning prefix. It does not rerun the model or any tools. A missing or mismatched saved intent produces an in-chat notice instead; transport-only attachments are not reconstructed from text. This is bounded retry and next-turn recovery, not an unlimited background outbox.
 - Idempotent operations, such as editing an existing message, can retry transient network failures.
 - Uses `retry_after` when available, otherwise exponential backoff.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
