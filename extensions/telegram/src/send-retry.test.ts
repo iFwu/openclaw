@@ -53,7 +53,10 @@ describe("Telegram text delivery retry policy", () => {
       ["sendPhoto", Object.assign(new Error("socket closed"), { code: "ECONNRESET" })],
       [
         "sendMessage",
-        new PlatformMessageNotDispatchedError("writer retired", { retryable: false }),
+        new PlatformMessageNotDispatchedError("writer retired", {
+          cause: new Error("delivery authority revoked"),
+          retryable: false,
+        }),
       ],
     ] as const) {
       const send = vi.fn().mockRejectedValue(error);
