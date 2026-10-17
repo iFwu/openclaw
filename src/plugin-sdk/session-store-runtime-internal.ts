@@ -1,4 +1,6 @@
+import path from "node:path";
 import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery/main-session-recovery-clear.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
 import {
   projectPublicSessionEntry,
@@ -6,6 +8,74 @@ import {
   SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
 } from "../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+type ModelSelectionSnapshot = {
+  scope: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  fields: Pick<
+    InternalSessionEntry,
+    "modelSelectionRevision" | "continuationTurnRevision" | "continuationModelSelection"
+  >;
+};
+
+// Keep the read's CAS epoch host-private without another database read or public metadata.
+const modelSelectionSnapshots = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginModelSelectionSnapshots"),
+  () => ({ entries: new WeakMap<SessionEntry, ModelSelectionSnapshot>() }),
+  (state) => {
+    state.entries = new WeakMap();
+  },
+  "close-only",
+);
+
+function modelSelectionScope(params: SessionStoreReadParams): string {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePathCore(undefined, {
+      agentId,
+      env: params.env,
+    });
+  return JSON.stringify([path.resolve(storePath), agentId, params.sessionKey]);
+}
+
+export function capturePluginModelSelectionSnapshot(
+  entry: InternalSessionEntry,
+  projected: SessionEntry,
+  scope: SessionStoreReadParams,
+): void {
+  modelSelectionSnapshots.entries.set(projected, {
+    scope: modelSelectionScope(scope),
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    fields: structuredClone({
+      modelSelectionRevision: entry.modelSelectionRevision,
+      continuationTurnRevision: entry.continuationTurnRevision,
+      continuationModelSelection: entry.continuationModelSelection,
+    }),
+  });
+}
+
+export function restorePluginModelSelectionSnapshot(
+  entry: SessionEntry,
+  scope: SessionStoreReadParams,
+): InternalSessionEntry | undefined {
+  const snapshot = modelSelectionSnapshots.entries.get(entry);
+  if (!snapshot) {
+    return { ...entry };
+  }
+  if (
+    snapshot.scope !== modelSelectionScope(scope) ||
+    snapshot.sessionId !== entry.sessionId ||
+    snapshot.lifecycleRevision !== entry.lifecycleRevision
+  ) {
+    return undefined;
+  }
+  return { ...snapshot.fields, ...entry };
+}
 
 export type SessionStoreReadParams = {
   agentId?: string;

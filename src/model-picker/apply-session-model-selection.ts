@@ -401,7 +401,7 @@ async function applySessionModelSelection(
       allowCreate: params.allowCreate,
       reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
-      touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      touchedFields: [...SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS, "lifecycleRevision"],
       validateCommit,
     });
     if (persistence.entry) {

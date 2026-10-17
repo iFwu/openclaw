@@ -12,6 +12,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
+import { applySessionModelSelection as applyPluginSessionModelSelection } from "../plugin-sdk/model-session-runtime.js";
+import { getSessionEntry as getPluginSessionEntry } from "../plugin-sdk/session-store-runtime.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -86,6 +88,137 @@ beforeEach(() => {
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection", () => {
+  it("captures host-owned model revisions for repeated public SDK selections", async () => {
+    const storePath = path.join(tempDirs.make("sdk-model-selection-"), "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:123:thread:123:42";
+    const scope = { storePath, sessionKey };
+    await replaceSessionEntry(scope, {
+      ...createEntry(),
+      sessionId: "sdk-selection",
+      lifecycleRevision: "sdk-generation",
+      modelSelectionRevision: "previous-choice",
+      continuationTurnRevision: "previous-turn",
+      continuationModelSelection: {
+        runId: "previous-run",
+        sessionId: "sdk-selection",
+        lifecycleRevision: "sdk-generation",
+        modelSelectionRevision: "previous-choice",
+        turnRevision: "previous-turn",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+    });
+    const projected = getPluginSessionEntry(scope);
+    if (!projected) {
+      throw new Error("Expected the SDK session snapshot");
+    }
+    expect(projected).not.toHaveProperty("modelSelectionRevision");
+    const selected = await applyPluginSessionModelSelection(
+      createParams({
+        ...scope,
+        sessionEntry: projected,
+        sessionStore: { [sessionKey]: projected },
+      }),
+    );
+    expect(selected.status).toBe("applied");
+    expect(projected).not.toHaveProperty("modelSelectionRevision");
+    expect(projected).not.toHaveProperty("continuationModelSelection");
+    const selectedEntry = loadSessionEntryReadOnly(scope);
+    expect(selectedEntry?.modelOverride).toBe("gpt-4o");
+    expect(selectedEntry?.modelSelectionRevision).not.toBe("previous-choice");
+    expect(selectedEntry?.continuationModelSelection).toBeUndefined();
+    const refreshed = getPluginSessionEntry(scope);
+    if (!refreshed) {
+      throw new Error("Expected the refreshed SDK snapshot");
+    }
+    expect(refreshed).not.toHaveProperty("modelSelectionRevision");
+    const reset = await applyPluginSessionModelSelection(
+      createParams({
+        ...scope,
+        sessionEntry: refreshed,
+        sessionStore: { [sessionKey]: refreshed },
+        currentProvider: "openai",
+        currentModel: "gpt-4o",
+        request: createRequest("anthropic", "claude-opus-4-6", { isDefault: true }),
+      }),
+    );
+    expect(reset.status).toBe("applied");
+    expect(loadSessionEntryReadOnly(scope)?.modelOverrideSource).toBe("default");
+  });
+  it.each(["revision", "lifecycle", "store"] as const)(
+    "rejects a public SDK snapshot after its %s changed",
+    async (changed) => {
+      const storePath = path.join(tempDirs.make("sdk-model-epoch-"), "sessions.json");
+      const sessionKey = "agent:main:telegram:direct:123:thread:123:42";
+      const scope = { storePath, sessionKey };
+      const original = {
+        ...createEntry(),
+        lifecycleRevision: "generation-a",
+        modelSelectionRevision: "choice-a",
+      };
+      await replaceSessionEntry(scope, original);
+      const projected = getPluginSessionEntry(scope);
+      if (!projected) {
+        throw new Error("Expected the SDK session snapshot");
+      }
+      const target =
+        changed === "store"
+          ? { ...scope, storePath: path.join(path.dirname(storePath), "other.json") }
+          : scope;
+      const current = {
+        ...original,
+        ...(changed === "lifecycle"
+          ? { lifecycleRevision: "generation-b" }
+          : { modelSelectionRevision: changed === "store" ? undefined : "choice-b" }),
+      };
+      await replaceSessionEntry(target, current);
+      const result = await applyPluginSessionModelSelection(
+        createParams({
+          ...target,
+          sessionEntry: projected,
+          sessionStore: { [sessionKey]: projected },
+        }),
+      );
+      expect(result.status).toBe("conflict");
+      expect(loadSessionEntryReadOnly(target)).toEqual(current);
+      expect(projected).not.toHaveProperty("modelSelectionRevision");
+      expectNoSelectionEffects();
+    },
+  );
+  it.each(["target", "sibling"] as const)(
+    "preserves a concurrent shared %s snapshot when SDK selection is rejected",
+    async (slot) => {
+      const storePath = path.join(tempDirs.make("sdk-model-shared-"), "sessions.json");
+      const sessionKey = "agent:main:dm:shared";
+      const scope = { storePath, sessionKey };
+      await replaceSessionEntry(scope, createEntry());
+      const projected = getPluginSessionEntry(scope);
+      if (!projected) {
+        throw new Error("Expected the SDK session snapshot");
+      }
+      const otherKey = "agent:main:dm:other";
+      const sessionStore = {
+        [sessionKey]: projected,
+        [otherKey]: createEntry({ sessionId: "other" }),
+      };
+      const key = slot === "target" ? sessionKey : otherKey;
+      const replacement = createEntry({ sessionId: "newer", updatedAt: 2 });
+      const result = await applyPluginSessionModelSelection(
+        createParams({
+          ...scope,
+          sessionEntry: projected,
+          sessionStore,
+          validateAuthProfileSelection: () => {
+            sessionStore[key] = replacement;
+            return "Select an account you own.";
+          },
+        }),
+      );
+      expect(result.status).toBe("rejected");
+      expect(sessionStore[key]).toBe(replacement);
+      expectNoSelectionEffects();
+    },
+  );
   it.each([false, true])(
     "remembers a DM topic selection unless explicitly session-only=%s",
     async (sessionOnly) => {

@@ -33,6 +33,7 @@ import type {
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,
+  capturePluginModelSelectionSnapshot,
   generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
@@ -157,7 +158,12 @@ export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessi
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
-  return entry ? projectPluginSessionEntry(entry) : undefined;
+  if (!entry) {
+    return undefined;
+  }
+  const projected = projectPluginSessionEntry(entry);
+  capturePluginModelSelectionSnapshot(entry, projected, params);
+  return projected;
 }
 
 /** Reads the current session binding of one canonical transport address. */
