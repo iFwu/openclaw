@@ -6,7 +6,6 @@ import { resolveStoredModelOverride } from "./stored-model-overrides.js";
 import {
   rememberTelegramDmModelSelection,
   withTelegramDmModelSelection,
-  resolveTelegramDmModelParent,
 } from "./telegram-dm-model-selection.js";
 
 it("serializes same-millisecond topic choices through durable preference completion and supports Default", async () => {
@@ -23,8 +22,8 @@ it("serializes same-millisecond topic choices through durable preference complet
         sessionKey: `${parentKey}:thread:123:${topic}`,
         selection: { provider: "fixture", model, isDefault },
       });
-    const entered = createDeferredCore<void>();
-    const release = createDeferredCore<void>();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
     const order: string[] = [];
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
@@ -48,7 +47,9 @@ it("serializes same-millisecond topic choices through durable preference complet
       clock.mockRestore();
     }
     const parent = loadSessionEntry(scope);
-    if (!parent) throw new Error("Expected the remembered DM parent");
+    if (!parent) {
+      throw new Error("Expected the remembered DM parent");
+    }
     expect(parent.modelOverride).toBe("newest");
     expect(
       resolveStoredModelOverride({
@@ -92,6 +93,18 @@ it.each([
     "agent:main:telegram:direct:linked-person:thread:123:42",
     "agent:main:telegram:direct:linked-person",
   ],
-])("retains account and linked identity for %s", (key, parent) => {
-  expect(resolveTelegramDmModelParent(key)).toBe(parent);
+])("retains account and linked identity for %s", async (sessionKey, parentKey) => {
+  const sessionStore: Record<string, import("../config/sessions/types.js").SessionEntry> = {};
+  expect(
+    await rememberTelegramDmModelSelection({
+      agentId: "main",
+      sessionKey,
+      sessionStore,
+      selection: { provider: "fixture", model: "selected" },
+    }),
+  ).toBe(true);
+  expect(sessionStore[parentKey]).toMatchObject({
+    providerOverride: "fixture",
+    modelOverride: "selected",
+  });
 });

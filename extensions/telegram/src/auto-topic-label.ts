@@ -21,17 +21,22 @@ async function bindPendingLabel(
   previous: string | undefined,
   generation: string,
 ): Promise<boolean> {
-  if (previous === generation) return true;
+  if (previous === generation) {
+    return true;
+  }
   const store = pendingLabels();
   if (previous === undefined) {
     return (
       (await store.registerIfAbsent(key, generation)) || (await store.lookup(key)) === generation
     );
   }
-  if (!store.observe || !store.compareAndApply)
+  if (!store.observe || !store.compareAndApply) {
     throw new Error("Topic labels require atomic generation binding.");
+  }
   const observed = await store.observe(key);
-  if (observed.value !== previous) return observed.value === generation;
+  if (observed.value !== previous) {
+    return observed.value === generation;
+  }
   const result = await store.compareAndApply(key, observed.comparison, {
     operation: "update",
     action: "set",
@@ -49,8 +54,12 @@ export async function prepareTelegramTopicLabel(params: {
   const store = pendingLabels();
   const generation = params.sessionId ?? "";
   const pending = await store.lookup(params.key);
-  if (!params.firstTurn && pending !== generation && pending !== "") return false;
-  if (!(await bindPendingLabel(params.key, pending, generation))) return false;
+  if (!params.firstTurn && pending !== generation && pending !== "") {
+    return false;
+  }
+  if (!(await bindPendingLabel(params.key, pending, generation))) {
+    return false;
+  }
   const text = params.userMessage.trim();
   return Boolean(text && !text.startsWith("/"));
 }
@@ -64,18 +73,22 @@ export async function runTelegramTopicLabelOnce(params: {
 }): Promise<void> {
   const generation = params.sessionId ?? "";
   const identity = JSON.stringify([params.key, generation]);
-  if (activeLabels.has(identity) || !params.isCurrent()) return;
+  if (activeLabels.has(identity) || !params.isCurrent()) {
+    return;
+  }
   activeLabels.add(identity);
   try {
     const store = pendingLabels();
-    if (!store.deleteIfEqual)
+    if (!store.deleteIfEqual) {
       throw new Error("Topic labels require atomic pending-state settlement.");
+    }
     const pending = await store.lookup(params.key);
     if (
       pending !== generation &&
       (pending !== "" || !(await bindPendingLabel(params.key, pending, generation)))
-    )
+    ) {
       return;
+    }
     if (params.isCurrent() && (await params.run())) {
       await store.deleteIfEqual(params.key, generation);
     }

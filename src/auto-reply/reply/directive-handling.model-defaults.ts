@@ -19,9 +19,13 @@ export async function persistDirectiveModelDefaults(
   dmTopicDefaultUpdated?: boolean;
 }> {
   const selection = params.modelSelection;
-  if (!selection) return {};
+  if (!selection) {
+    return {};
+  }
   const errorText = params.validateSelection();
-  if (errorText) return { errorText };
+  if (errorText) {
+    return { errorText };
+  }
   const dmTopicDefaultUpdated =
     params.directives.modelScope !== "session" &&
     canPersistSessionDirectiveDefaults(params) &&
@@ -33,11 +37,15 @@ export async function persistDirectiveModelDefaults(
       selection,
       assertCurrent: () => {
         const error = params.validateSelection();
-        if (error) throw new Error(error);
+        if (error) {
+          throw new Error(error);
+        }
       },
     }));
   const currentError = params.validateSelection();
-  if (currentError) return { errorText: currentError, dmTopicDefaultUpdated };
+  if (currentError) {
+    return { errorText: currentError, dmTopicDefaultUpdated };
+  }
   const configuredDefaultUpdate =
     params.canPersistStickyModelSelection === true && params.stickyModelSelectionTarget
       ? persistStickyModelSelectionBestEffort({

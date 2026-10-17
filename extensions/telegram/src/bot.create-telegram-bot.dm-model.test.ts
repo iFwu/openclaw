@@ -57,15 +57,19 @@ it("the registered DM picker remembers a manual selection and reports the actual
       },
     });
     const parent = getSessionEntry({ storePath, sessionKey: parentKey });
-    if (model === "gpt-5") expect(parent?.modelOverride).toBe("gpt-5");
-    else expect(parent?.modelOverrideSource).toBe("default");
+    if (model === "gpt-5") {
+      expect(parent?.modelOverride).toBe("gpt-5");
+    } else {
+      expect(parent?.modelOverrideSource).toBe("default");
+    }
   }
   const edits = apiCalls.mock.calls.filter(([method]) => method === "editMessageText");
   expect(edits).toHaveLength(2);
-  for (const [, payload] of edits)
+  for (const [, payload] of edits) {
     expect(payload).toMatchObject({
       text: expect.stringContaining("new topics in this private chat"),
     });
+  }
   expect(cfg.agents?.defaults?.model).toBe("openai/gpt-4o");
   expect(harness.replySpy).not.toHaveBeenCalled();
 });

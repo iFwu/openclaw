@@ -13,7 +13,7 @@ vi.mock("../../sessions/telegram-dm-model-selection.js", () => ({
 }));
 
 it("revalidates authority after the parent write before dispatching configured defaults", async () => {
-  const entered = createDeferredCore<void>();
+  const entered = createDeferredCore();
   const completion = createDeferredCore<boolean>();
   let revoked = false;
   vi.mocked(rememberTelegramDmModelSelection).mockImplementation(async () => {

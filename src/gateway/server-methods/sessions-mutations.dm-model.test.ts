@@ -7,6 +7,7 @@ import {
   withAgentSessionModelPatchOrigin,
   withSessionStatusModelPatchOrigin,
 } from "../session-model-patch-origin.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -38,7 +39,14 @@ it.each(["manual", "session-only", "agent", "status", "non-admin", "revoked"])(
             fixture: {
               api: "openai-completions",
               baseUrl: "https://fixture.invalid/v1",
-              models: models.map(({ id, name }) => ({ id, name })),
+              models: models.map(({ id, name }) => ({
+                id,
+                name,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 4096,
+              })),
             },
           },
         },
@@ -65,7 +73,9 @@ it.each(["manual", "session-only", "agent", "status", "non-admin", "revoked"])(
       if (origin === "revoked") {
         const patch = sessions.patchSessionEntryCore;
         vi.spyOn(sessions, "patchSessionEntryCore").mockImplementation(async (target, ...args) => {
-          if (target.sessionKey === parentKey) current = false;
+          if (target.sessionKey === parentKey) {
+            current = false;
+          }
           return await patch(target, ...args);
         });
       }
@@ -97,8 +107,8 @@ it.each(["manual", "session-only", "agent", "status", "non-admin", "revoked"])(
         ...(origin === "session-only" ? { modelSelectionScope: "session" } : {}),
       };
       const responses: Parameters<RespondFn>[] = [];
-      const run = () =>
-        sessionMutationHandlers["sessions.patch"]?.({
+      const run = async () => {
+        await sessionMutationHandlers["sessions.patch"]?.({
           req: { type: "req", id: "patch-dm-model", method: "sessions.patch", params },
           params,
           context,
@@ -107,11 +117,20 @@ it.each(["manual", "session-only", "agent", "status", "non-admin", "revoked"])(
           isWebchatConnect: () => true,
           respond: (...value) => responses.push(value),
         });
-      if (origin === "agent") await withAgentSessionModelPatchOrigin(run);
-      else if (origin === "status") await withSessionStatusModelPatchOrigin(run);
-      else await run();
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.[0]).toBe(origin !== "revoked");
+      };
+      if (origin === "agent") {
+        await withAgentSessionModelPatchOrigin(run);
+      } else if (origin === "status") {
+        await withSessionStatusModelPatchOrigin(run);
+      } else if (origin === "revoked") {
+        await expect(run()).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
+      } else {
+        await run();
+      }
+      expect(responses).toHaveLength(origin === "revoked" ? 0 : 1);
+      if (origin !== "revoked") {
+        expect(responses[0]?.[0]).toBe(true);
+      }
       expect(sessions.loadSessionEntry({ ...scope, sessionKey })?.modelOverride).toBe("selected");
       expect(sessions.loadSessionEntry({ ...scope, sessionKey: parentKey })?.modelOverride).toBe(
         origin === "manual" ? "selected" : "original",

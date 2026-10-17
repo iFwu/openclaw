@@ -11,7 +11,7 @@ import { emitSessionLifecycleEvent } from "./session-lifecycle-events.js";
 
 const selections = createKeyedFifoLeaseRegistry(Symbol.for("openclaw.telegramDmModelSelections"));
 
-export function resolveTelegramDmModelParent(sessionKey: string): string | undefined {
+function resolveTelegramDmModelParent(sessionKey: string): string | undefined {
   const route = parseSessionDeliveryRoute(sessionKey);
   const thread = parseThreadSessionSuffix(sessionKey);
   return route?.channel === "telegram" && route.peerKind === "direct" && thread.threadId
@@ -26,7 +26,9 @@ export async function withTelegramDmModelSelection<T>(
 ): Promise<T> {
   const keys = sessionKeys.flatMap((key) => resolveTelegramDmModelParent(key) ?? []);
   const lease = selections.reserve(keys);
-  if (!lease) return await run();
+  if (!lease) {
+    return await run();
+  }
   try {
     await lease.wait();
     return await run();
@@ -45,7 +47,9 @@ export async function rememberTelegramDmModelSelection(params: {
   assertCurrent?: () => void;
 }): Promise<boolean> {
   const parentKey = resolveTelegramDmModelParent(params.sessionKey);
-  if (!parentKey) return false;
+  if (!parentKey) {
+    return false;
+  }
   const fallbackEntry: SessionEntry = { sessionId: randomUUID(), updatedAt: Date.now() };
   let remembered = false;
   const update = (entry: SessionEntry) => {

@@ -39,7 +39,9 @@ export async function publishSessionPatchEffects(params: {
   const archivedSessionKeys = new Set<string>();
   for (const target of params.targets) {
     const outcome = params.outcomes[target.index];
-    if (!outcome?.ok || !outcome.applied) continue;
+    if (!outcome?.ok || !outcome.applied) {
+      continue;
+    }
     const { entry, accessChanged } = outcome;
     const assertCurrent = () => {
       params.operatorAuthority?.assertCurrent();
@@ -48,7 +50,9 @@ export async function publishSessionPatchEffects(params: {
         "patch authority",
       ).commitGuard;
       const error = guard();
-      if (error) throw new SessionMutationAuthorizationChangedError(error);
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
       params.storage.get(target.index)?.assertCurrent();
     };
     triggerSessionPatchHook({

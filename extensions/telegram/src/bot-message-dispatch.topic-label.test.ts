@@ -74,9 +74,11 @@ describeTelegramDispatch("DM topic labels", () => {
 
   it("defers slash-prefixed input until real content even after a command ran a turn", async () => {
     const bot = createBot();
+    const editForumTopic = vi.spyOn(bot.api, "editForumTopic");
     const context = createContext();
     const sessionKey = "agent:main:telegram:direct:123:thread:123:777";
     context.ctxPayload = {
+      CommandAuthorized: true,
       SessionKey: sessionKey,
       RawBody: "  /unknown arguments",
     };
@@ -90,7 +92,7 @@ describeTelegramDispatch("DM topic labels", () => {
       telegramCfg: { autoTopicLabel: true },
     });
     expect(generateTopicLabel).not.toHaveBeenCalled();
-    expect(bot.api.editForumTopic).not.toHaveBeenCalled();
+    expect(editForumTopic).not.toHaveBeenCalled();
 
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "command-first", systemSent: true },
@@ -105,7 +107,7 @@ describeTelegramDispatch("DM topic labels", () => {
     expect(generateTopicLabel).not.toHaveBeenCalled();
 
     const renamed = createDeferred<void>();
-    vi.mocked(bot.api.editForumTopic).mockImplementation(async () => {
+    editForumTopic.mockImplementation(async () => {
       renamed.resolve();
       return true;
     });

@@ -501,12 +501,16 @@ async function applySessionModelSelection(
       selection: request,
       assertCurrent: () => {
         const error = validateSelection();
-        if (error) throw new Error(error);
+        if (error) {
+          throw new Error(error);
+        }
       },
     }));
 
   const currentError = validateSelection();
-  if (currentError) return { status: "rejected", reason: "not-allowed", message: currentError };
+  if (currentError) {
+    return { status: "rejected", reason: "not-allowed", message: currentError };
+  }
   operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =

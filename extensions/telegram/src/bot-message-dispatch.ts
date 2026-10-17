@@ -246,7 +246,9 @@ function scheduleDmTopicLabel(params: {
     return;
   }
   const topicThreadId = context.threadSpec.id!;
-  if (!params.labelState) return;
+  if (!params.labelState) {
+    return;
+  }
   void runTelegramTopicLabelOnce({
     ...params.labelState,
     run: async () => {
@@ -257,12 +259,14 @@ function scheduleDmTopicLabel(params: {
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
       });
-      if (!label || !params.labelState?.isCurrent()) return false;
+      if (!label || !params.labelState?.isCurrent()) {
+        return false;
+      }
       await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
       logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
       return true;
     },
-  }).catch((err) => logVerbose(`auto-topic-label: failed: ${String(err)}`));
+  }).catch((err: unknown) => logVerbose(`auto-topic-label: failed: ${String(err)}`));
 }
 
 export const dispatchTelegramMessage = async (
