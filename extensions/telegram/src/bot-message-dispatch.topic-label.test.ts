@@ -78,6 +78,7 @@ describeTelegramDispatch("DM topic labels", () => {
     const context = createContext();
     const sessionKey = "agent:main:telegram:direct:123:thread:123:777";
     context.ctxPayload = {
+      ...context.ctxPayload,
       CommandAuthorized: true,
       SessionKey: sessionKey,
       RawBody: "  /unknown arguments",
