@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -13,6 +13,7 @@ import {
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
+  resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
@@ -71,7 +72,7 @@ export async function withRetainedUpdateRuntime<T>(
           const sourceRoot = await fs.realpath(root);
           assertCurrent();
           const mutations = mutationRoots.map((entry) =>
-            resolvePathViaExistingAncestorSync(path.resolve(entry)),
+            resolveIdentityPathViaExistingAncestorSync(path.resolve(entry)),
           );
           if (
             !mutations.some(
@@ -91,21 +92,16 @@ export async function withRetainedUpdateRuntime<T>(
           const packageOwner = installTarget
             ? (resolveNativePackageProjectRoot(installTarget, env) ?? installTarget.globalRoot)
             : undefined;
-          const boundaries = [
-            sourceRoot,
+          const mutationBoundaries = [
             ...mutations,
             ...(packageOwner
-              ? [resolvePathViaExistingAncestorSync(path.resolve(packageOwner))]
+              ? [resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))]
               : []),
           ];
-          let parent = path.dirname(sourceRoot);
-          while (boundaries.some((entry) => isPathInside(entry, parent))) {
-            const ancestor = path.dirname(parent);
-            if (ancestor === parent) {
-              break;
-            }
-            parent = ancestor;
-          }
+          const boundaries = [sourceRoot, ...mutationBoundaries];
+          const parent = resolveRetainedUpdateRuntimeParents(sourceRoot, mutationBoundaries).at(
+            -1,
+          )!;
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
           // An unselected module install can copy its entire enclosing module
@@ -134,7 +130,7 @@ export async function withRetainedUpdateRuntime<T>(
             }
           }
           if (!directory) {
-            const temporary = resolvePathViaExistingAncestorSync(path.resolve(os.tmpdir()));
+            const temporary = resolveIdentityPathViaExistingAncestorSync(path.resolve(os.tmpdir()));
             if (!outsideMutation(temporary)) {
               throw new Error(
                 "Updater temporary directory is inside an installation being replaced",
@@ -180,6 +176,11 @@ export async function withRetainedUpdateRuntime<T>(
             targetStateDir: privateRoot,
             candidateRoot,
             retainedHostRoot: sourceRoot,
+            // Missing optional peers must not pull unrelated ancestor installations
+            // into a retained runtime. Explicit linked dependency owners still travel.
+            retainedDependencyRoot: packageOwner
+              ? resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))
+              : sourceRoot,
             onProgress: assertCurrent,
           });
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);

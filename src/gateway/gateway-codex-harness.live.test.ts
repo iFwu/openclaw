@@ -69,6 +69,9 @@ import {
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
+  resolveBoundedPositiveIntEnv,
+  resolveCodexHarnessThinkingLevel,
+  resolveLiveTimeoutMs,
   shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
@@ -252,49 +255,6 @@ const observedCodexClientIds = new Map<string, string>();
 const observedCodexThreadActions = new Map<string, string>();
 
 type GuardianPluginApprovalDecision = "allow-once" | "allow-always" | "deny";
-type CodexHarnessThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultra";
-
-function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
-  const parsed = raw ? Number(raw) : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-function resolveBoundedPositiveIntEnv(
-  name: string,
-  raw: string | undefined,
-  fallback: number,
-  max: number,
-  min = 1,
-): number {
-  if (raw === undefined || raw.trim() === "") {
-    return fallback;
-  }
-  if (!/^\d+$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be between ${min} and ${max}`);
-  }
-  return parsed;
-}
-
-function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarnessThinkingLevel {
-  const normalized = raw?.trim().toLowerCase() || "low";
-  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(normalized)) {
-    throw new Error(`invalid OPENCLAW_LIVE_CODEX_HARNESS_THINKING: ${raw}`);
-  }
-  return normalized as CodexHarnessThinkingLevel;
-}
-
 function resolveCodexHarnessExpectedAppServerEffort(modelId: string): string | null {
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {
@@ -2067,7 +2027,20 @@ describeLive("gateway live (Codex harness)", () => {
             runId,
             timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           });
-          expect(finalText.trim()).toBe(marker);
+          // On mismatch, report the transcript answer to separate stream loss from model output.
+          const historyAnswer =
+            finalText.trim() === marker
+              ? undefined
+              : await firstClient
+                  .request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 })
+                  .then((history) =>
+                    history.messages
+                      .map(asOptionalRecord)
+                      .filter((message) => message?.role === "assistant")
+                      .map((message) => extractFirstTextBlock(message))
+                      .at(-1),
+                  );
+          expect(finalText.trim(), `transcript answer: ${historyAnswer}`).toBe(marker);
           const nativeStarts = gatewayEvents.filter((event) => {
             const payload = asOptionalRecord(event.payload);
             return (

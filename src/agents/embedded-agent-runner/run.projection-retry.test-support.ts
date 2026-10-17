@@ -86,13 +86,15 @@ describe("runEmbeddedAgent transcript projection retry", () => {
 
     try {
       mockedRunEmbeddedAttempt
-        .mockResolvedValueOnce(
-          makeAttemptResult({
+        .mockImplementationOnce(async () => {
+          expect(waitForProjection).toHaveBeenCalledOnce();
+          expect(ownedProjectionSettled).toBe(true);
+          return makeAttemptResult({
             timedOut: true,
             sessionIdUsed: sessionId,
             lastAssistant: { usage: { input: 160_000 } } as never,
-          }),
-        )
+          });
+        })
         .mockImplementationOnce(async () => {
           expect(ownedProjectionSettled).toBe(true);
           expect(
@@ -110,6 +112,8 @@ describe("runEmbeddedAgent transcript projection retry", () => {
             "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
           )
           .run(sessionId);
+        // Foreground readiness must not satisfy the later compaction-retry checkpoint.
+        ownedProjectionSettled = false;
 
         expect(() =>
           activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
@@ -139,8 +143,10 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       });
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(waitForProjection).toHaveBeenCalledOnce();
-      expect(waitForProjection).toHaveBeenCalledWith(
+      expect(waitForProjection).toHaveBeenCalledTimes(2);
+      expect(waitForProjection).toHaveBeenNthCalledWith(1, sessionTarget, expect.any(AbortSignal));
+      expect(waitForProjection).toHaveBeenNthCalledWith(
+        2,
         { ...sessionTarget, expectedWriterRunId: "run-owned-projection-retry" },
         expect.any(AbortSignal),
       );
@@ -155,7 +161,9 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       ).toBe(1);
       const cancellation = new Error("caller stopped projection work");
       controller.abort(cancellation);
-      expect(waitForProjection.mock.calls[0]?.[1]?.reason).toBe(cancellation);
+      for (const [, abortSignal] of waitForProjection.mock.calls) {
+        expect(abortSignal?.reason).toBe(cancellation);
+      }
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);

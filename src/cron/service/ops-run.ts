@@ -1,4 +1,5 @@
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
+import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -446,7 +447,12 @@ async function executePreparedManualRun(
       if (!activeRun.ran) {
         return activeRun;
       }
-      await finishPreparedManualRun(state, activeRun, mode);
+      // Admission is complete; the stored job now owns execution, not the
+      // operator request whose tool and source scopes can close before its next tool call.
+      const execute = () => finishPreparedManualRun(state, activeRun, mode);
+      await runOutsideOperatorToolGatewayAuthority(() =>
+        state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(execute) : execute(),
+      );
       return { ok: true, ran: true } as const;
     },
     undefined,

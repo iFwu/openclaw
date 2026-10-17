@@ -116,7 +116,7 @@ function buildAgentToolResultMiddlewareFactory(
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
-  workspaceDir?: string;
+  workspaceDir: string;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;

@@ -133,11 +133,11 @@ describe("handleAbortChat", () => {
   });
 
   it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
-    "clears the typed stop command %s after aborting the active run",
+    "clears the typed stop command %s after stopping the selected session",
     async (message) => {
       const host = makeChatHost({
         requestHandlers: {
-          "chat.abort": { aborted: true },
+          "sessions.abort": { status: "aborted" },
         },
         chatRunId: "run-main",
         chatMessage: message,
@@ -146,10 +146,11 @@ describe("handleAbortChat", () => {
 
       await handleSendChat(host);
 
-      expect(host.request).toHaveBeenCalledWith("chat.abort", {
-        runId: "run-main",
-        sessionKey: "agent:main",
+      expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
       });
+      expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
       expect(host.chatMessage).toBe("");
     },
   );
@@ -159,7 +160,7 @@ describe("handleAbortChat", () => {
       requestHandlers: {},
       chatRunId: "run-main",
       chatMessage: "/stop",
-      hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
+      hello: gatewayHelloForMethods(["sessions.abort"], ["operator.read"]),
       sessionKey: "agent:main",
       chatRunError: { summary: "Previous run failed" },
     });
@@ -219,6 +220,47 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
   });
+
+  it.each(["current", "terminal", "replacement"] as const)(
+    "keeps a typed-stop failure with its originating run (%s)",
+    async (scenario) => {
+      const response = Promise.withResolvers<never>();
+      const request = vi.fn(() => response.promise);
+      const host = makeChatHost({
+        client: clientWithRequest(request),
+        connected: true,
+        chatRunId: "run-a",
+        chatMessage: "/stop",
+        sessionKey: "agent:main",
+      });
+      const sending = handleSendChat(host);
+      if (scenario === "replacement") {
+        host.chatRunId = "run-b";
+      } else if (scenario === "terminal") {
+        host.chatRunId = null;
+        host.lastLocalTerminalReconcile = {
+          sessionKey: host.sessionKey,
+          runId: "run-a",
+          phase: "interrupted",
+          sessionStatus: "killed",
+        };
+      }
+      response.reject(new Error("stop failed"));
+      await sending;
+      expect(request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
+      });
+      if (scenario === "current") {
+        expect(host.chatError).toContain("stop failed");
+      } else if (scenario === "terminal") {
+        expect(host.chatRunError).toMatchObject({ runId: "run-a", summary: "stop failed" });
+      } else {
+        expect(host.chatError).toBeFalsy();
+        expect(host.chatRunError).toBeFalsy();
+      }
+    },
+  );
 
   it("does not queue an unversioned session stop while disconnected", async () => {
     const request = vi.fn();

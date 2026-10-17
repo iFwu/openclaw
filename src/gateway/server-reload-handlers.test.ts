@@ -36,7 +36,6 @@ import {
   requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
   setGatewayRestartPolicy,
-  setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import {
@@ -130,9 +129,12 @@ import {
   createHotTailPlan,
   createPluginReloadPlan,
   createTestCronState,
+  createTestCronReconciliation,
   createValidConfigSnapshot,
   publishConfigWrite,
+  restartTesting,
 } from "./server-reload-handlers.config.test-support.js";
+import { registerModelPublicationSupersessionTests } from "./server-reload-handlers.supersession.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl } from "./server-reload-managed.js";
@@ -181,16 +183,6 @@ function waitForFast<T>(
 
 const tempDirs: string[] = [];
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const restartTesting = {
-  resetRestartSignalState() {
-    resetGatewayRestartStateForInProcessRestart();
-    markGatewayRestartHandled();
-    setGatewayRestartPolicy({ allowExternal: false });
-    setPreRestartDeferralCheck(() => 0);
-    resetGatewayWorkAdmission();
-  },
-};
 
 function createGatewayReloadHandlers(
   params: Partial<Omit<ReloadHandlerParams, "requestRecoveryRestart">> & {
@@ -561,15 +553,6 @@ function enableChannelReloadsForTest() {
     } else {
       process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
     }
-  };
-}
-
-function createTestCronReconciliation() {
-  const complete = vi.fn<() => Promise<void>>(async () => {});
-  return {
-    arm: vi.fn<() => { complete: () => Promise<void> }>(() => ({ complete })),
-    complete,
-    invalidate: vi.fn(),
   };
 }
 
@@ -2993,6 +2976,19 @@ describe("gateway targeted service reload", () => {
 });
 
 describe("gateway hot reload superseded tail recovery", () => {
+  registerModelPublicationSupersessionTests({
+    createFixture: () => {
+      const setState = vi.fn();
+      return { handlers: createGatewayReloadHandlers({ setState }), setState };
+    },
+    installRefresh: (implementation) => {
+      const refresh = hoisted.refreshPreparedModelRuntimeSnapshots;
+      const previous = refresh.getMockImplementation();
+      refresh.mockImplementation(implementation);
+      return () => refresh.mockImplementation(previous ?? (async () => {}));
+    },
+  });
+
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));

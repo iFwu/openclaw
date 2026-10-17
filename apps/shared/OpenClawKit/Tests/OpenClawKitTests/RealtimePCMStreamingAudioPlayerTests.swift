@@ -1,4 +1,5 @@
 #if Talk && canImport(ElevenLabsKit) && (os(iOS) || os(macOS))
+import AVFAudio
 import Foundation
 import Testing
 @testable import OpenClawKit
@@ -162,6 +163,47 @@ struct RealtimePCMStreamingAudioPlayerTests {
     private let sampleRate = 8000.0
     private var frameBytes: Int {
         Int(self.sampleRate * RealtimePCMStreamingAudioPlayer.frameDurationSeconds) * 2
+    }
+
+    @Test func `relay PCM16LE converts to the iOS Float32 mixer format`() throws {
+        let format = try #require(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: self.sampleRate,
+            channels: 1,
+            interleaved: false))
+        let buffer = try RealtimePCMStreamingAudioPlayer.pcmBuffer(
+            data: Data([0x00, 0x80, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0x7F]),
+            format: format)
+        let samples = try #require(buffer.floatChannelData?[0])
+        #expect(buffer.frameLength == 4)
+        let rendered = Array(UnsafeBufferPointer(start: samples, count: 4))
+        let expected: [Float] = [-1, -1 / 32768, 0, 32767 / 32768]
+        #expect(rendered == expected)
+    }
+
+    @Test func `shared engine restart resumes only active playback`() async throws {
+        let backend = RealtimePCMPlaybackBackend()
+        var starts = 0
+        let player = RealtimePCMStreamingAudioPlayer(
+            preparePlayback: backend.prepare,
+            scheduleFrame: backend.schedule,
+            startPlayback: { starts += 1 },
+            stopPlayback: backend.stop,
+            playbackTime: { nil })
+        player.resumePlaybackAfterEngineRestart()
+        #expect(starts == 0)
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        let playback = Task { await player.play(stream: stream, sampleRate: self.sampleRate) }
+        continuation.yield(Data(repeating: 0, count: self.frameBytes))
+        try await backend.waitForScheduledFrames(1)
+        #expect(starts == 1)
+        player.resumePlaybackAfterEngineRestart()
+        #expect(starts == 2)
+        _ = player.stop()
+        #expect(await playback.value.finished == false)
+        player.resumePlaybackAfterEngineRestart()
+        #expect(starts == 2)
+        continuation.finish()
     }
 
     @Test func `prepare failure returns unfinished playback`() async {

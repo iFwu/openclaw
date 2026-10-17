@@ -32,6 +32,11 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+If a service refresh refuses before writing its definition, the candidate keeps
+the original refusal in its output. The updater can then revalidate and restart
+the preserved service definition. Actual loss of native service authority still
+leaves recovery pending until ownership and restoration can be verified.
+
 If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git target SHA equals `HEAD` and the installed runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`.
 Runtime maintenance can therefore succeed without changing the Git revision.
 A same-version explicit `--channel` or installation-method change finishes successfully.
@@ -230,6 +235,13 @@ After the package is installed, a failed post-plugin Doctor process is a recorde
 warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
+
+If optional memory dreaming cron ownership inspection is unavailable, Doctor
+retains existing rows and the pending plugin repair, records a warning, and
+continues core recovery. A cron inspection whose read completed keeps its result
+when disposable snapshot cleanup fails; the snapshot stays registered for a later
+cleanup retry. Run `openclaw doctor --fix` to retry that inspection. Cron rewrite
+and required state migration failures retain their existing safety checks.
 
 Doctor's disposable database migration and repair connections use a 64 MiB SQLite
 page-cache allowance to reduce repeated reads while rebuilding large stores.
@@ -654,7 +666,9 @@ for update status and Gateway health, then exits; this acknowledges the handoff,
 not a completed update. The acknowledging CLI exits with code `75` (`EX_TEMPFAIL`)
 so scripts cannot mistake accepted background work for a completed update. The
 detached helper remains the settlement authority; use the printed status and
-health commands to retrieve its terminal result. The helper launches staging and validation outside the
+health commands to retrieve its terminal result. A handoff accepted during candidate
+admission keeps this pending result after local staging cleanup; it does not create
+an update failure report. The helper launches staging and validation outside the
 Gateway's service boundary while the old Gateway keeps serving. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
@@ -1018,6 +1032,10 @@ installed version and its recorded selector. The summary, warning log, and run
 history name the plugin, requested target, resolution failure, and
 `openclaw plugins update <id>` next action. JSON keeps top-level `status: "ok"`
 with a `plugin-target-unavailable` advisory under `postUpdate.plugins.warnings`.
+An official `@openclaw/*` plugin is not retained when its installed files import
+`openclaw/plugin-sdk/*` subpaths the new core no longer exports, because it
+would fail to load. Plugin sync reports it as a failed plugin update that names
+the missing subpaths and the `openclaw plugins update <id>` retry instead.
 
 Before mutation, OpenClaw checks installed compatibility metadata and skips
 registry queries for compatible plugins. If a plugin's declared

@@ -6,6 +6,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
+import { loadProviderScopedThinkingCatalog } from "../model-catalog.runtime.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { bindNativeCompletionOwner } from "../subagents/announce/subagent-announce-handoff.js";
@@ -20,6 +21,13 @@ import {
 import * as runtimeLoaders from "./runtime-loaders.js";
 
 vi.mock("../model-catalog.js", { spy: true });
+vi.mock("../model-catalog.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-catalog.runtime.js")>();
+  return {
+    ...actual,
+    loadProviderScopedThinkingCatalog: vi.fn().mockResolvedValue([]),
+  };
+});
 
 const createFixture = setupConfiguredModelSelectionTests();
 
@@ -201,6 +209,46 @@ describe("command selection with configured model facts", () => {
       fixture.select({ opts: { message: "Resume", mainRestartRecoveryAdmitted: true } }),
     ).rejects.toThrow("no longer allowed");
   });
+  it.each([
+    { previous: null, observed: "max", configured: undefined, supported: true },
+    { previous: "max", observed: null, configured: undefined, supported: false },
+    { previous: null, observed: "max", configured: null, supported: false },
+    { previous: "max", observed: null, configured: "max", supported: true },
+    { previous: "max", observed: undefined, configured: undefined, supported: true },
+  ])(
+    "uses observed max support ($supported) over stale catalog facts",
+    async ({ previous, observed, configured, supported }) => {
+      const fixture = createFixture();
+      fixture.custom.models.forEach((model) => {
+        model.reasoning = true;
+        if (model.id === "child" && configured !== undefined) {
+          model.thinkingLevelMap = { max: configured };
+        }
+      });
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      const stale = {
+        ...catalogEntry("custom", "child"),
+        reasoning: true,
+        thinkingLevelMap: { max: previous },
+      };
+      fixture.inventory.mockReturnValue([stale]);
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue(
+        observed === undefined ? [] : [{ ...stale, thinkingLevelMap: { max: observed } }],
+      );
+      const selection = fixture.select({
+        configuredThinkingCatalog: [stale],
+        requestedThinkLevel: "max",
+        thinkOnce: "max",
+        isSubagentLane: false,
+      });
+      if (supported) {
+        await expect(selection).resolves.toMatchObject({ provider: "custom", model: "child" });
+      } else {
+        await expect(selection).rejects.toThrow('Thinking level "max" is not supported');
+      }
+    },
+  );
+
   it("does not probe a primary excluded by the original operator policy", async () => {
     const fixture = createRestrictedFixture();
     fixture.store[sessionKey] = {

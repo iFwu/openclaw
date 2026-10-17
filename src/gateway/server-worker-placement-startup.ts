@@ -460,6 +460,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
+    isInterruptedTurn: dispatchService.isInterruptedTurn,
     waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchPlacement: createWorkerPlacementRedispatch({
@@ -470,6 +471,7 @@ export function createGatewayWorkerPlacementRuntime(
     workspaceOperations,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
+    persistAbandonedPartial: params.persistAbandonedPartial,
   });
   const startRuntime = async (hooks: {
     isClosePreludeStarted: () => boolean;

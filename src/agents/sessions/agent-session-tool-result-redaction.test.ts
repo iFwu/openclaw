@@ -245,6 +245,7 @@ describe("AgentSession model-visible tool-result redaction", () => {
       settingsManager,
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
+        workspaceDir: cwd,
         sessionManager,
         provider: model.provider,
         modelId: model.id,

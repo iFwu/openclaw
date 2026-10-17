@@ -64,7 +64,7 @@ describe("handleSendChat browser annotation context", () => {
     async (command) => {
       const attachment = createBrowserAnnotationAttachment("stop", "Review the annotated page");
       const host = makeChatHost({
-        requestHandlers: { "chat.abort": { aborted: true } },
+        requestHandlers: { "sessions.abort": { status: "aborted" } },
         chatAttachments: [attachment],
         chatMessage: command,
         chatRunId: "annotation-stop-run",
@@ -73,9 +73,9 @@ describe("handleSendChat browser annotation context", () => {
       vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
       await handleSendChat(host);
 
-      expect(host.request).toHaveBeenCalledWith("chat.abort", {
-        runId: "annotation-stop-run",
-        sessionKey: "agent:main",
+      expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
       });
       expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     },

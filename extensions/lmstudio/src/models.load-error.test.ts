@@ -1,8 +1,63 @@
 import { createServer } from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 
 describe("LM Studio model-load error transport", () => {
+  it.each([
+    { timeoutMs: undefined, loaded: true },
+    { timeoutMs: 30_000, loaded: false },
+  ])(
+    "allows a slow cold load without overriding an explicit timeout ($loaded)",
+    async (testCase) => {
+      const timeoutError = new DOMException("Model load timed out", "TimeoutError");
+      vi.useFakeTimers();
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(timeoutError), delay);
+        return controller.signal;
+      });
+      const modelKey = "qwen3-8b-instruct";
+      const fetchImpl: typeof fetch = async (_url, init) => {
+        if (init?.method !== "POST") {
+          return Response.json({ models: [{ type: "llm", key: modelKey, loaded_instances: [] }] });
+        }
+        await new Promise<void>((resolve, reject) => {
+          const signal = init.signal;
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(timeoutError);
+          };
+          const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+          }, 45_000);
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        return Response.json({ status: "loaded", instance_id: "cold-load-instance" });
+      };
+      try {
+        const result = ensureLmstudioModelLoaded({
+          baseUrl: "http://slow-model.localhost:1234/v1",
+          modelKey,
+          timeoutMs: testCase.timeoutMs,
+          fetchImpl,
+        }).then(
+          (key) => ({ loaded: true, key }),
+          () => ({ loaded: false, key: undefined }),
+        );
+        await vi.advanceTimersByTimeAsync(45_000);
+        expect(await result).toEqual({
+          loaded: testCase.loaded,
+          key: testCase.loaded ? modelKey : undefined,
+        });
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
   it("redacts actual outbound credentials reflected by a model-load HTTP server", async () => {
     let responseStatus = 502;
     const server = createServer((request, response) => {

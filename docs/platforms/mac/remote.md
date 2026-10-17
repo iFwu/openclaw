@@ -373,7 +373,7 @@ produce a missing-local-port warning.
 - Prefer loopback binds on the remote host and connect via SSH, Tailscale Serve, or a trusted Tailnet/LAN direct URL.
 - SSH tunneling requires an already-trusted host key by default. Trust the host key first (add it to the configured known-hosts file), or explicitly set `gateway.remote.sshHostKeyPolicy: "openssh"` for a managed alias whose OpenSSH trust policy you accept.
 - If you bind the Gateway to a non-loopback interface, require valid Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
-- Direct `wss://` connections apply one certificate policy to both operator/control traffic and the Mac companion node. Set `gateway.remote.tlsFingerprint` for an explicit pin. Without one, the app records a first-use pin only after normal macOS trust succeeds.
+- Direct `wss://` connections apply one certificate policy to both operator/control traffic and the Mac companion node. Set `gateway.remote.tlsFingerprint` for an explicit pin. Without one, the app records a first-use pin only after normal macOS trust succeeds. For loopback and Tailscale Serve hosts, learned pins renew after a trusted certificate rotation, including automatic reconnects after a Gateway restart or network loss. Configured pins remain strict. Declined renewal logs name the failed check under subsystem `ai.openclaw`, category `gateway.tls-repair`.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).
 
 ## WhatsApp login flow (remote)

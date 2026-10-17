@@ -4,8 +4,8 @@ import { isPromise } from "node:util/types";
 import { serialize } from "node:v8";
 import {
   MessageChannel,
-  receiveMessageOnPort,
   MessagePort,
+  receiveMessageOnPort,
   type Transferable,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -17,6 +17,7 @@ import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerAdmissionTimeoutError,
 } from "./sqlite-worker-contract.js";
 import type {
   RetainedWorkerTransactionAdmission,
@@ -28,6 +29,7 @@ const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
 const EFFECT_UNKNOWN = 3;
+const TIMED_OUT = 4;
 
 /** Only the factory's admission before agent open may certify this refusal. */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
@@ -44,6 +46,8 @@ export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
 export type SqliteWorkerAdmissionRequest = {
   stage: "open" | "prepare" | "transaction" | "commit" | "effect";
   facts: unknown;
+  /** Opt-in wait budget in milliseconds; omission retains the live-owner wait. */
+  deadlineMs?: number;
 };
 
 type SqliteWorkerEffectAttempt = {
@@ -210,6 +214,31 @@ export function createSqliteWorkerOperationAdmission(
       return;
     }
     const decision = new Int32Array(message.decision);
+    const expired = () => {
+      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+        if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
+          Atomics.notify(decision, 0);
+        }
+      }
+      if (Atomics.load(decision, 0) !== TIMED_OUT) {
+        return false;
+      }
+      if (effects.length > 0) {
+        recordFailure(new SqliteWorkerAdmissionTimeoutError(), "domain");
+      }
+      if (Array.isArray(message.ports)) {
+        for (const port of message.ports) {
+          if (port instanceof MessagePort) {
+            port.close();
+          }
+        }
+      }
+      return true;
+    };
+    if (expired()) {
+      // The worker has abandoned this request; even policy preparation must not run late.
+      return;
+    }
     decisions.add(decision);
     if (closed) {
       refuse(
@@ -240,7 +269,7 @@ export function createSqliteWorkerOperationAdmission(
         );
         return false;
       }
-      if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+      if (closed || expired() || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
       // Domain admission can reenter owner lifecycle before handing the native writer its grant.
@@ -248,6 +277,9 @@ export function createSqliteWorkerOperationAdmission(
         inOwnerContext(() => databaseAuthority?.assertAccess());
       } catch (error) {
         refuse(decision, error, "authority");
+        return false;
+      }
+      if (closed || expired() || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
       const granted = Atomics.compareExchange(decision, 0, REQUESTED, GRANTED) === REQUESTED;
@@ -487,7 +519,8 @@ export function createSqliteWorkerOperationAdmission(
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
-  refusal?: SqliteWorkerError;
+  refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
+  effectEntered?: true;
   committed?: { facts: unknown };
   settled?: true;
 };
@@ -569,12 +602,30 @@ export function requestSqliteWorkerOperationAdmission(
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  scope.port.postMessage({ ...request, decision: decision.buffer }, transferList);
-  // Host scheduling delay does not revoke the retained owner's authority. The
-  // broker keeps this port through settlement and joins worker exit on failure;
-  // only the live host owner can grant or refuse the pending request.
+  const deadlineNs =
+    request.deadlineMs === undefined
+      ? undefined
+      : process.hrtime.bigint() + BigInt(request.deadlineMs) * 1_000_000n;
+  scope.port.postMessage(
+    {
+      ...request,
+      decision: decision.buffer,
+      deadlineNs,
+      ports: transferList.filter((value) => value instanceof MessagePort),
+    },
+    transferList,
+  );
+  // Without an explicit deadline, host scheduling delay does not revoke the
+  // retained owner's authority. A timeout revokes this request, never grants
+  // authority; settlement still joins native rollback before custody release.
   while (Atomics.load(decision, 0) === REQUESTED) {
-    Atomics.wait(decision, 0, REQUESTED);
+    const remainingMs =
+      deadlineNs === undefined ? undefined : Number(deadlineNs - process.hrtime.bigint()) / 1e6;
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT);
+    } else {
+      Atomics.wait(decision, 0, REQUESTED, remainingMs);
+    }
   }
   if (Atomics.load(decision, 0) !== GRANTED) {
     const refusal =
@@ -583,7 +634,14 @@ export function requestSqliteWorkerOperationAdmission(
             "SQLite operation outcome is unknown after host effect entry",
             "outcome-unknown",
           )
-        : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+        : Atomics.load(decision, 0) === TIMED_OUT
+          ? scope.owner.effectEntered
+            ? new SqliteWorkerError(
+                "SQLite operation outcome is unknown after host effect entry",
+                "outcome-unknown",
+              )
+            : new SqliteWorkerAdmissionTimeoutError()
+          : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;
     throw refusal;
   }
@@ -649,6 +707,7 @@ export function requestSqliteWorkerOperationEffect(facts: unknown): unknown {
         "outcome-unknown",
       );
     }
+    scope.owner.effectEntered = true;
     return value.outcome;
   } finally {
     port1.close();

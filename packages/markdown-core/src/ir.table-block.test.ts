@@ -24,10 +24,10 @@ describe("markdownToIRWithMeta tableMode block", () => {
             { text: "30", styles: [], links: [] },
           ],
         ],
-        placeholderOffset: ir.text.indexOf("After"),
+        placeholderOffset: "Before\n\n".length,
       },
     ]);
-    expect(ir.text).toBe("Before\n\nAfter");
+    expect(ir.text).toBe("Before\n\n\nAfter");
   });
 
   it.each([

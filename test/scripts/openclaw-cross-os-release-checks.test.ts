@@ -25,6 +25,7 @@ import {
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
+  buildPackagedUpgradeUpdateCommand,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -100,11 +101,12 @@ import {
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
-  waitForGatewayWithStartupMigrationRestart,
+  waitForGatewayWithStartupRecovery,
   writePackageDistInventoryForCandidate,
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
+import { formatError } from "../../scripts/lib/cross-os-release-checks/shared.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
@@ -426,6 +428,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(trimForSummary(input)).toBe(expected);
   });
 
+  it("names every inner failure of a lane AggregateError within the summary", () => {
+    const cleanup = new AggregateError(
+      [new Error("schtasks /End failed"), new Error("host lease release failed")],
+      "Managed-service cleanup and host-lease release both failed.",
+    );
+    const error = new AggregateError(
+      [new Error("Command timed out: openclaw gateway stop --help"), cleanup],
+      "Installer release check and managed-service cleanup both failed.",
+    );
+
+    const summary = trimForSummary(formatError(error));
+    for (const message of [
+      "Installer release check and managed-service cleanup both failed.",
+      "Command timed out: openclaw gateway stop --help",
+      "schtasks /End failed",
+      "host lease release failed",
+    ]) {
+      expect(summary).toContain(message);
+    }
+  });
+
   it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
     let canceled = false;
     const abortController = new AbortController();
@@ -538,7 +561,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const firstError = new Error("first gateway exited");
       let restartCalls = 0;
 
-      await waitForGatewayWithStartupMigrationRestart({
+      await waitForGatewayWithStartupRecovery({
+        gatewayPort: 18_789,
         gatewayHolder: holder,
         restartGateway: async () => {
           restartCalls += 1;
@@ -591,7 +615,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       let restartCalls = 0;
 
       await expect(
-        waitForGatewayWithStartupMigrationRestart({
+        waitForGatewayWithStartupRecovery({
+          gatewayPort: 18_789,
           gatewayHolder: holder,
           restartGateway: async () => {
             restartCalls += 1;
@@ -624,7 +649,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       let restartCalls = 0;
 
       await expect(
-        waitForGatewayWithStartupMigrationRestart({
+        waitForGatewayWithStartupRecovery({
+          gatewayPort: 18_789,
           gatewayHolder: holder,
           restartGateway: async () => {
             restartCalls += 1;
@@ -663,7 +689,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       let restartCalls = 0;
 
       await expect(
-        waitForGatewayWithStartupMigrationRestart({
+        waitForGatewayWithStartupRecovery({
+          gatewayPort: 18_789,
           gatewayHolder: holder,
           restartGateway: async () => {
             restartCalls += 1;
@@ -1174,6 +1201,63 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--no-restart",
     ]);
     expect(args.at(-2)).toBe("--timeout");
+  });
+
+  it.each([
+    {
+      label: "stable predecessor",
+      baselineVersion: "2026.8.32",
+      candidateVersion: "2026.8.34",
+      expectedArgs: [
+        "update",
+        "--tag",
+        "http://127.0.0.1:49152/openclaw-current.tgz",
+        "--yes",
+        "--json",
+        "--no-restart",
+        "--timeout",
+        "1200",
+      ],
+      expectedPackageSpec: undefined,
+      expectedNpmTag: undefined,
+    },
+    {
+      label: "extended-stable predecessor and candidate",
+      baselineVersion: "2026.8.33",
+      candidateVersion: "2026.8.34",
+      expectedArgs: ["update", "--yes", "--json", "--no-restart", "--timeout", "1200"],
+      expectedPackageSpec: "openclaw",
+      expectedNpmTag: "extended-stable",
+    },
+    {
+      label: "extended-stable predecessor and regular candidate",
+      baselineVersion: "2026.8.33",
+      candidateVersion: "2026.9.1",
+      expectedArgs: [
+        "update",
+        "--tag",
+        "http://127.0.0.1:49152/openclaw-current.tgz",
+        "--yes",
+        "--json",
+        "--no-restart",
+        "--timeout",
+        "1200",
+      ],
+      expectedPackageSpec: undefined,
+      expectedNpmTag: undefined,
+    },
+  ])("routes packaged upgrades from the $label channel", (testCase) => {
+    const candidateUrl = "http://127.0.0.1:49152/openclaw-current.tgz";
+    const updateCommand = buildPackagedUpgradeUpdateCommand({
+      env: { NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152" },
+      candidateUrl,
+      candidateVersion: testCase.candidateVersion,
+      timeoutSeconds: 1200,
+      baselineVersion: testCase.baselineVersion,
+    });
+    expect(updateCommand.args).toEqual(testCase.expectedArgs);
+    expect(updateCommand.env.OPENCLAW_UPDATE_PACKAGE_SPEC).toBe(testCase.expectedPackageSpec);
+    expect(updateCommand.env.NPM_CONFIG_TAG).toBe(testCase.expectedNpmTag);
   });
 
   it("uses forced shutdown only when the installed gateway supports it", () => {
@@ -2351,6 +2435,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
 
     expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error(
+          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --yes --json --no-restart --timeout 1200",
+        ),
+        "win32",
+      ),
+    ).toBe(true);
     expect(
       isRecoverableWindowsPackagedUpgradeTimeoutError(
         new Error(

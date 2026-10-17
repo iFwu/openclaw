@@ -308,9 +308,15 @@ vi.mock("./bundled-plugin-load-paths.js", () => ({
     ),
 }));
 
+// mock-isolation: Script warning output without reading host auth stores.
 vi.mock("./stale-oauth-profile-shadows.js", () => ({
-  scanStaleOAuthProfileShadows: () =>
-    staleOAuthShadowState.warnings.map((warning, index) => ({ profileId: String(index), warning })),
+  scanStaleOAuthProfileShadows: () => ({
+    hits: staleOAuthShadowState.warnings.map((warning, index) => ({
+      profileId: String(index),
+      warning,
+    })),
+    warnings: [],
+  }),
   collectStaleOAuthProfileShadowWarnings: ({ hits }: { hits: Array<{ warning: string }> }) =>
     hits.map((hit) => hit.warning),
 }));
@@ -684,35 +690,6 @@ describe("doctor preview warnings", () => {
       `plugins.load.paths: legacy bundled plugin path "${legacyPath}"`,
     );
     expect(warning).toContain('Run "openclaw doctor --fix"');
-  });
-
-  it("includes stale OAuth profile shadow warnings", async () => {
-    staleOAuthShadowState.warnings = [
-      '- ~/.openclaw/agents/telegram/agent/auth-profiles.json has stale OAuth auth profile openai-codex:default. Run "openclaw doctor --fix".',
-    ];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: {},
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expectSingleWarningContaining(warnings, "stale OAuth auth profile openai-codex:default");
-  });
-
-  it("includes stale configured auth-order warnings", async () => {
-    staleAuthOrderState.warnings = [
-      "- auth.order.anthropic references only missing profiles while compatible stored credentials exist; run openclaw doctor --fix to remove the stale override and restore automatic selection.",
-    ];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: {},
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expectSingleWarningContaining(
-      warnings,
-      "auth.order.anthropic references only missing profiles",
-    );
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {

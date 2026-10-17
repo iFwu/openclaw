@@ -1,0 +1,2376 @@
+{
+  "targetBranch": "extended-stable/2026.9.33",
+  "targetVersion": "2026.9.33",
+  "targetBaseline": "d53dbcf7a09fccf19a041d5a93ca8589e85d1ef2",
+  "frozenDonorBranch": "release/2026.10.5",
+  "frozenDonorEnd": "467e83dea27c0d9ade8e999d688de2ed656b2225",
+  "scope": {
+    "donorOnlyCommits": 5249,
+    "historicalRowsCarriedForward": 5099,
+    "newRowsClassified": 150,
+    "decisionCounts": {
+      "skip": 70,
+      "not-affected": 9,
+      "blocked": 39,
+      "backport-recommended": 30,
+      "already-covered": 2
+    },
+    "selectedOctoberGroups": 25,
+    "selectedOctoberDonors": 30,
+    "historicalSemanticReviewRepeated": false,
+    "acceptedAuditCursorAdvanced": false
+  },
+  "historicalInventory": "docs/releases/2026.9.33-backport-audit/commits.jsonl",
+  "candidateFrozenForRelease": false,
+  "runtimeQualificationClaimed": false,
+  "security": "This is a public-source backport assessment, not new private advisory clearance. Historical ledger decisions are retained as historical evidence.",
+  "partialDonorResiduals": [
+    {
+      "sha": "d84dc316c584639be4bb1ff73d42405c88aa5abb",
+      "residual": "Channel runtime warning collector extension is unclosed on old readiness owner; only recorded-success terminal hunk selected."
+    }
+  ],
+  "octoberGroups": [
+    {
+      "id": "safe-bin-trailing-whitespace",
+      "orderedDonorShas": [
+        "b4c55a08bf21672f798aee7948a55798ce5dc37c"
+      ],
+      "dependencies": [],
+      "impact": "Allowlisted node commands with trailing whitespace otherwise fail their execution-plan match.",
+      "branchLocalAdaptation": "Production is three-way clean. Existing parsed argv/authorization-plan guards are unchanged.",
+      "sourceTestInputs": [
+        "src/node-host/invoke-system-run-allowlist.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "windows-node-quoted-argv",
+      "orderedDonorShas": [
+        "4af47e719bf25ec22d57c405302b2f369b75a9d5"
+      ],
+      "dependencies": [],
+      "impact": "Canonical Windows cmd.exe shell payload loses quoted executable paths and prompts.",
+      "branchLocalAdaptation": "Production is three-way clean; use existing windowsVerbatimArguments. Native Windows child output remains CI proof, not a macOS pass.",
+      "sourceTestInputs": [
+        "src/node-host/invoke.run-command.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "linux-node-service-path",
+      "orderedDonorShas": [
+        "c6cd8579cc992bef22c5fd7542d68154740c0674"
+      ],
+      "dependencies": [
+        "windows-node-quoted-argv"
+      ],
+      "impact": "Generated /bin/sh -lc node commands lose managed-service PATH during login startup.",
+      "branchLocalAdaptation": "Apply after Windows launch-owner fix; preserve caller environment and restrict carrier to canonical login-shell envelope.",
+      "sourceTestInputs": [
+        "src/node-host/invoke.run-command.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "node-approval-identity",
+      "orderedDonorShas": [
+        "f744125c06a9cdf7c4ddef3bdea5184eb03f9d61"
+      ],
+      "dependencies": [],
+      "impact": "Prepared node approval omits identity in stored plan while top-level binding has it, breaking replay.",
+      "branchLocalAdaptation": "Retain September normalizeCommandPreview and explicit-plan precedence; capture cwd/agentId/sessionKey once and store the same fallback facts in plan and binding.",
+      "sourceTestInputs": [
+        "src/gateway/server-methods/exec-approval.agent-runtime.test.ts",
+        "src/infra/system-run-approval-context.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "queued-cli-abort",
+      "orderedDonorShas": [
+        "d24cdbfd1392a48684eea72d8b6e953e964d570c"
+      ],
+      "dependencies": [],
+      "impact": "A cancelled queued CLI caller stays blocked until its predecessor finishes.",
+      "branchLocalAdaptation": "Forward existing options.abortSignal to September command queue; do not import donor-only sessionTarget option.",
+      "sourceTestInputs": [
+        "src/agents/session-placement-admission.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "cli-session-mcp-overrides",
+      "orderedDonorShas": [
+        "5df28c7d3bfc39916866a7908109d55b38b2656f"
+      ],
+      "dependencies": [],
+      "impact": "Claude CLI ignores already-supported per-session MCP selections.",
+      "branchLocalAdaptation": "Shared command params receive existing toolOverrides; embedded duplicate is removed. Runtime and public MCP contracts already ship.",
+      "sourceTestInputs": [
+        "src/agents/command/attempt-execution.cli-mcp.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "queued-fallback-probe-retarget",
+      "orderedDonorShas": [
+        "39dba6d34231807574d8d1b8a1cc8871edc06959"
+      ],
+      "dependencies": [],
+      "impact": "Queued follow-up can retain an old primary probe after /model changes its selection.",
+      "branchLocalAdaptation": "Only delete autoFallbackPrimaryProbe beside existing provenance deletion; no UI live-edit feature.",
+      "sourceTestInputs": [
+        "src/auto-reply/reply/queue/state.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "lmstudio-slow-preload",
+      "orderedDonorShas": [
+        "9f1e4410173229071a62de8f5387af5dadf8386a"
+      ],
+      "dependencies": [],
+      "impact": "Slow local model load hits a 30-second default, then inference uses an undersized context and overflows.",
+      "branchLocalAdaptation": "Only the extracted 30s to 120s preload budget; explicit timeout, cancellation, inference and errors remain unchanged.",
+      "sourceTestInputs": [],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "memory-flush-original-history",
+      "orderedDonorShas": [
+        "10bcd8e2aab6e71830a9754bd61d9b2fdd9a1e63"
+      ],
+      "dependencies": [],
+      "impact": "Memory extraction can see a provider summary instead of the original history.",
+      "branchLocalAdaptation": "Disable existing provider-native compaction overrides only for memory trigger; no new defaults or compaction features.",
+      "sourceTestInputs": [
+        "src/agents/embedded-agent-runner/run/attempt-stream-transport.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "matrix-probe-client-close",
+      "orderedDonorShas": [
+        "89329f6e78e902b6e95e13733c3e91aab35d2942"
+      ],
+      "dependencies": [],
+      "impact": "A private Matrix whoami probe leaves its newly created client alive.",
+      "branchLocalAdaptation": "Existing stopWithoutPersist in finally preserves persistStorage:false and success/failure ownership; no broad shutdown redesign.",
+      "sourceTestInputs": [
+        "extensions/matrix/src/matrix/probe.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "telegram-table-boundaries",
+      "orderedDonorShas": [
+        "101622e4a9325b6e286c7883304e7529bca2e06c"
+      ],
+      "dependencies": [],
+      "impact": "A table next to a blockquote/list can be nested incorrectly or lose its values.",
+      "branchLocalAdaptation": "Both existing markdown IR owner and Telegram rich-block consumer move together. Public schemas/signatures do not change.",
+      "sourceTestInputs": [
+        "extensions/telegram/src/rich-blocks-table-segments.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "empty-roster-rehearsal",
+      "orderedDonorShas": [
+        "9ecae99c966350297c50a1ecb6fd21e7825cb52a"
+      ],
+      "dependencies": [],
+      "impact": "Explicit empty agent roster throws during update rehearsal; copied plugin roots must be admitted before collection.",
+      "branchLocalAdaptation": "No new SDK/config API; existing listAgentIds supplies implicit owner only for pre-roster configs.",
+      "sourceTestInputs": [
+        "src/memory-host-sdk/dreaming.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "accepted-update-handoff",
+      "orderedDonorShas": [
+        "14987c0198e6a8ac5de142e5b32b2e2e6895a4e3"
+      ],
+      "dependencies": [],
+      "impact": "Accepted Gateway update handoff is incorrectly reported as an update failure during admission.",
+      "branchLocalAdaptation": "Only UpdateCommandAbort without process-cleanup error returns after staging disposal; retained cleanup failures stay fatal.",
+      "sourceTestInputs": [
+        "src/cli/update-cli/update-command-candidate-admission.test-support.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "global-retained-inventory",
+      "orderedDonorShas": [
+        "0c8e8076ffadb2ad2c45656f01bd4b70f20d2323",
+        "95cf9de9da3ea309c9081fc3a5a5733632cd9b79",
+        "836fd79faa03f154458b895be6e0e4f38d0b705c",
+        "e78e01582fe5759685e905227d21750b4e2c9c3b"
+      ],
+      "dependencies": [],
+      "impact": "Retention can copy unrelated ancestor/global packages, exhaust its I/O budget, or miss replacement under Windows native spelling.",
+      "branchLocalAdaptation": "Use existing native-identity path helper; stop manifest lookup at installation; retain only reached global package; preserve explicit linked and rootless owners. Keep September recovery-control names and lifecycle.",
+      "sourceTestInputs": [
+        "src/infra/update-retained-runtime.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "auth-status-classification",
+      "orderedDonorShas": [
+        "a827a9d3a92881e881e9af415356bd2a6131593a"
+      ],
+      "dependencies": [],
+      "impact": "Tool argument counts equal to 401/403 falsely trigger authentication classification and refresh guidance.",
+      "branchLocalAdaptation": "Production and two core tests are three-way clean. Preserve September TUI billing expectation; donor billing hunk is unrelated and was itself corrected by 8dfe9bea.",
+      "sourceTestInputs": [
+        "src/agents/embedded-agent-helpers/assistant-message-failures.test.ts",
+        "src/agents/failover/classify.test.ts",
+        "src/tui/tui-event-handlers.test.ts"
+      ],
+      "partialDonorSelection": true
+    },
+    {
+      "id": "valid-tool-union-values",
+      "orderedDonorShas": [
+        "9265297399ebcc0bd30f475ee5e80f9694b3eef5"
+      ],
+      "dependencies": [],
+      "impact": "Union coercion changes values already accepted by a later schema branch, e.g. string 00123 becomes number 123.",
+      "branchLocalAdaptation": "Existing getSubSchemaValidator acceptance before coercion; retain nested recovery, null guard and final oneOf validation.",
+      "sourceTestInputs": [
+        "packages/llm-core/src/validation.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "trusted-approved-arguments",
+      "orderedDonorShas": [
+        "34d07e7b0dc1b5f0ed54de67a9647d9e6b8c23de"
+      ],
+      "dependencies": [],
+      "impact": "Ordinary hooks can change parameters after trusted inline approval without approving final arguments.",
+      "branchLocalAdaptation": "Existing hook isolation and requireApproval serve the repair; preserve unchanged hooks, explicit separate approval, deferred denial and exact code-mode normalization. No SDK/schema additions.",
+      "sourceTestInputs": [
+        "src/agents/agent-tools.before-tool-call.embedded-mode.test.ts",
+        "src/agents/agent-tools.before-tool-call.trusted-approval.test.ts",
+        "src/plugins/trusted-approval-install.integration.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "typed-session-stop",
+      "orderedDonorShas": [
+        "8743c2a30b1557581531e43e81a3443a37e5cb86"
+      ],
+      "dependencies": [],
+      "impact": "Typed /stop aborts only the current run and lets queued completions restart the session.",
+      "branchLocalAdaptation": "All production files three-way clean. Existing sessions.abort clearQueued contract; retain exact-run Stop button/offline replay and feedback ownership.",
+      "sourceTestInputs": [
+        "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
+        "ui/src/e2e/chat-stop-response-ownership.e2e.test.ts",
+        "ui/src/pages/chat/chat-commands.test.ts",
+        "ui/src/pages/chat/chat-send-abort.test.ts",
+        "ui/src/pages/chat/chat-send-readiness.test.ts",
+        "ui/src/pages/chat/chat-send-submit.annotations.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "serving-ui-document-recovery",
+      "orderedDonorShas": [
+        "f63f823635149e9313eea064463c409fff27d7b1"
+      ],
+      "dependencies": [],
+      "impact": "A stale chat probes its session link with HEAD, which is rejected, and cannot recover after update.",
+      "branchLocalAdaptation": "Production three-way clean. Existing resolveControlUiPaths and configuredUiDevGateway choose served index document without query/hash; do not import unrelated recovery timing changes.",
+      "sourceTestInputs": [
+        "ui/src/app/stale-chunk-reload.test.ts",
+        "ui/src/components/login-gate-refresh.test.ts",
+        "ui/src/e2e/chat-file-editor-recovery.e2e.test.ts",
+        "ui/src/e2e/plugin-bundled-view-recovery.e2e.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "openai-implicit-harness-selection",
+      "orderedDonorShas": [
+        "8aa2ac63e19b4ae813be46a09bc2048e1bbf0deb"
+      ],
+      "dependencies": [],
+      "impact": "Switching to an OpenAI model is refused without Codex even though an ordinary turn runs via existing implicit fallback.",
+      "branchLocalAdaptation": "Do NOT import public resolveEffectiveAgentRuntime mode parameter: command-auth-native exports it. Session patch consumes existing execution availability owner with exact session overrides; thinking projection stays unchanged.",
+      "sourceTestInputs": [
+        "src/gateway/sessions-patch.harness-selection.test.ts"
+      ],
+      "partialDonorSelection": true
+    },
+    {
+      "id": "committed-simple-completion",
+      "orderedDonorShas": [
+        "200e71645671137b75f4646c2afb88008fe8e8d7"
+      ],
+      "dependencies": [],
+      "impact": "A retained context-engine/plugin completion reads retired generation after unrelated plugin reload.",
+      "branchLocalAdaptation": "Production and two existing tests three-way clean; use existing runOutsidePluginRuntimeGenerationScope, structural public signatures unchanged. Exclude absent main test-mock ratchet.",
+      "sourceTestInputs": [
+        "src/agents/simple-completion-runtime.generation.test.ts",
+        "src/agents/simple-completion-runtime.test.ts",
+        "src/plugins/runtime/runtime-llm.retained-generation.test.ts"
+      ],
+      "partialDonorSelection": true
+    },
+    {
+      "id": "workspace-compaction-rules",
+      "orderedDonorShas": [
+        "dc5f1f578eb744a24d568cb1af3035ec4d336d3d"
+      ],
+      "dependencies": [],
+      "impact": "Safeguard compaction cannot read configured AGENTS.md sections because prepared workspace is dropped.",
+      "branchLocalAdaptation": "Pass effectiveWorkspace through September-only attempt-session-runtime-prepare split, then into factory and manual compaction. Keep provider/modelId/context budget and all tool middleware; no new config.",
+      "sourceTestInputs": [
+        "src/agents/agent-hooks/compaction-safeguard.test.ts",
+        "src/agents/embedded-agent-runner.extensions.test.ts",
+        "src/agents/embedded-agent-runner/extensions.test.ts",
+        "src/agents/embedded-agent-runner/run/attempt-session.test.ts",
+        "src/agents/sessions/agent-session-tool-result-redaction.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "superseded-model-publication",
+      "orderedDonorShas": [
+        "ad332df677b4897afb22ae6af2fd68f45e35c350",
+        "b755f03cd5a45596e55a4a90a54ec372a3a51074"
+      ],
+      "dependencies": [],
+      "impact": "A replaced model publication creates stale restart debt when newer config/credential owner already owns publication.",
+      "branchLocalAdaptation": "Final paired guard handles existing PreparedModelRuntimePublicationSupersededError as existing reload cancellation. Never stop at intermediate !isCurrent guard; all other errors retain recovery restart.",
+      "sourceTestInputs": [
+        "src/gateway/server-reload-handlers.supersession.test-support.ts",
+        "src/gateway/server-reload-handlers.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "current-migration-warnings-monotonic-verification",
+      "orderedDonorShas": [
+        "a87b5e6df2bb4b20cb1ce7cbec7705f5f76aa295"
+      ],
+      "dependencies": [],
+      "impact": "Completed migrations retain stale warnings, and wall-clock jumps can immediately expire package verification.",
+      "branchLocalAdaptation": "All four production files three-way clean. Existing pending migration owner and awaitWithinDeadline clock injection; internal warning helper only, no schema/digest changes.",
+      "sourceTestInputs": [
+        "src/cli/update-cli/update-command-lease.test-support.ts",
+        "src/cli/update-cli/update-command-resume-completion.test.ts",
+        "src/commands/doctor-update-run.test.ts",
+        "src/infra/package-update-swap.bounds.test.ts"
+      ],
+      "partialDonorSelection": false
+    },
+    {
+      "id": "recorded-success-terminal-outcome",
+      "orderedDonorShas": [
+        "d84dc316c584639be4bb1ff73d42405c88aa5abb",
+        "d357abf71bedeb1a86e0c1fa73c27df1cd7b8c32"
+      ],
+      "dependencies": [],
+      "impact": "Failure while publishing a ledger-finalized success can reopen failure triage and claim recovery is pending.",
+      "branchLocalAdaptation": "Select only d84 terminal success hunk plus both d357 ExitError guards. Existing success receipt is authoritative after cleanup. Channel-warning extension of d84 is held unclosed separately.",
+      "sourceTestInputs": [
+        "src/cli/update-cli/update-command-terminal-unreported.test.ts",
+        "src/cli/update-cli/update-command-verification-channels.test.ts"
+      ],
+      "partialDonorSelection": true
+    }
+  ],
+  "newerCandidates": [
+    {
+      "pr": 169583,
+      "donor": "50c3948e92529087d023ffc3bd08eba58f2d6010",
+      "disposition": "included",
+      "target_reason": "Foreground admission joins the existing session transcript projection after deferred maintenance; caller-owned/detached managers preserve their existing bypass. Regression reproduces the exact rebuilding-projection error."
+    },
+    {
+      "pr": 169481,
+      "donor": "751fa4fe7652b12e57692ad5e97b8cc198a99f89",
+      "disposition": "included",
+      "target_reason": "Resolve qualified Windows task UserId aliases to a SID through the existing bounded PowerShell boundary; accept only the expected SID. Different/unresolvable accounts remain unknown edits, with no task mutations."
+    },
+    {
+      "pr": 168037,
+      "donor": "2790eea27fb735f76ebf9d2414e5e04377c4f11b",
+      "disposition": "included",
+      "target_reason": "After guarded manual activation, detach the initiating operator-tool scope and execute/finalize under the existing scheduler Gateway context. Retain live admission, job/receipt authority, saved accounts, saved tools, cancellation, and caller revocation before activation."
+    },
+    {
+      "pr": 168907,
+      "donor": "33827c2fcc426bc5c3113592cc41be10fe303bdc",
+      "disposition": "included",
+      "target_reason": "Use existing joinWorkerTunnelStops for node stopAll; after the tunnel join, close transfer state and preserve every real sibling failure. Service shutdown defers only WorkerTunnelOwnerDisconnectedError; durable physical cleanup ownership remains."
+    },
+    {
+      "pr": 168973,
+      "donor": "695eb4f4987972d92206ff4fe39318c0316d54cb",
+      "disposition": "included",
+      "target_reason": "Return both already-validated address families for all-address lookup while keeping single-address IPv4 preference and asynchronous callbacks. Preserve whole-DNS-answer SSRF rejection."
+    },
+    {
+      "pr": 168491,
+      "donor": "379da8e456922f1abd32b6241a1c99e3dea5f755",
+      "disposition": "included",
+      "target_reason": "Before editing/re-emitting a file, require node:buffer isUtf8 over original capped bytes. Read-only verbs retain permissive decoding; invalid files remain byte-identical."
+    },
+    {
+      "pr": 168077,
+      "donor": "56cf1f830da3b43e11b68e17e6a47d2dbf3b14f3",
+      "disposition": "excluded",
+      "target_reason": "Donor requires October direct-steering and named/FIFO command-admission cutover (#166597). September keeps unnamed inner command admission, no serializeOwner query surface, masks same-session direct runs as its own queued pre-dispatch reply, and has no donor direct-steering rejection path. Importing only its new barrier would not fix the registered September flow; no exploratory steering source changes remain."
+    }
+  ],
+  "nativeCandidates": [
+    {
+      "pr": 168151,
+      "donor": "9948a4b83404b2e969593aa072b932735c1d2cfe",
+      "scope": "Automatic macOS TLS renewal reconnect; retain September learned-pin trust and shutdown/credential admission."
+    },
+    {
+      "pr": 168416,
+      "donor": "a1b019a280d0cb144924ef8542f0ad69f1283db3",
+      "scope": "iOS first-reply/player and builtin-speaker playback; retain September MainActor and capture-owned engine."
+    }
+  ],
+  "rows": [
+    {
+      "sha": "1659cdf5337ef2fe191f2740f2bc1b7fdbebbfa2",
+      "subject": "chore(release): prepare 2026.10.5-beta.1",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Release/version/dependency preparation is excluded; no October version, native publication, package-manager or dependency change in September PR.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "1442b912490fcef91f340cf89c53fb5488f327ad",
+      "subject": "docs(changelog): carry interim 2026.10.5 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "9240ec11d20567762d4d7495720b6140f81e018f",
+      "subject": "fix(release): mxc-sandbox npm preflight fails on unreviewed mxc-sdk 0.9.0 bwrap probes (#168165)",
+      "sourceOrigins": [
+        "ae71c921365ab735c8b31fa15e4310d43dfe9f06"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "0c3ac8332b066094dd9de35e92f4f71511f7a9e3",
+      "subject": "fix(ci): narrow release harness lockfile to its sparse checkout (#168172)",
+      "sourceOrigins": [
+        "5a680062cdb3554b52e3eee5499e24bf8c0a3850"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "0bc1591afb3ebe9fdb8e58c236744e7079f6148f",
+      "subject": "test(lint): allowlist sqlite observer iterator receiver capture",
+      "sourceOrigins": [
+        "bc8f693df3aee184c65626f7e9c9c58889c51a8b"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "bbf474b5f8ae87c77950fd938a0f8861f710b066",
+      "subject": "test(gateway): observe catalog renewal without forcing a refresh",
+      "sourceOrigins": [
+        "5033097b75dd6a8582a07a6b22969a75d750d8f7"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "98b0ce5a471482d8a23f76fe4366ba6ed716e324",
+      "subject": "test(gateway): observe query probes in memory reload fixture",
+      "sourceOrigins": [
+        "fc7c5047e59a7d7d4ae37b0f8991786d2def1b76"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "349ed90157b64924ca3e520f77d3c543aaa5cb93",
+      "subject": "test(memory): align incognito status with configuration diagnostics (#168182)",
+      "sourceOrigins": [
+        "dfdda05fe3c5d2e71c916f8662996f6ccec8d1e1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "104d6abd22c4c1eb84bc4083001ee29ce0eb306a",
+      "subject": "fix(release): settle generated npm locks at npm's reload fixpoint (#168191)",
+      "sourceOrigins": [
+        "9250ad1213ef21cfb569bbe1598c2663324cf9c2"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "23a0293b22485d795171631ea70ce2700329b811",
+      "subject": "fix(ci): align UI recovery tests with current interaction contracts (#168195)",
+      "sourceOrigins": [
+        "5c7d73950d93896b51b99cbf6cc0ce8149f1577a"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "f71265c342216d7d8196ca64c0a7827d28becd51",
+      "subject": "build(release): pin pnpm 12.9.0 from #168103",
+      "sourceOrigins": [
+        "c44c2e51ad3fdeaa84a0aa35a36c4f83a116c746"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Release/version/dependency preparation is excluded; no October version, native publication, package-manager or dependency change in September PR.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "b38982fe4fa839b2cca0256f978b037bb5b3a448",
+      "subject": "Revert \"fix(ci): narrow release harness lockfile to its sparse checkout (#168172)\" (#168217)",
+      "sourceOrigins": [
+        "4578c1dde1cb8b7217709845d091176e1d2cccc5"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "bc81fb41b753a45279ef104004ce76c99bb28615",
+      "subject": "fix(update): leave live current handoff owners alone in update repair (#168197)",
+      "sourceOrigins": [
+        "efa552b9cef854d4f0b74eb8119ae9035f4fb79b"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "September has no prepareManagedHandoffRepair or its legacyUpdate root predicate. Its source file contains original-cancellation admission reclamation only; do not add newer repair architecture.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "d36a8719ab2ede42bd8fe57217d0bf348c723a61",
+      "subject": "test(plugins): pin a stable host version in managed install channel tests (#168230)",
+      "sourceOrigins": [
+        "0a55cbe057e0e0f4d7a2013e01e925b0fcfbca93"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "ed38460ca10cec6bd0d7dec8243a574448bebb57",
+      "subject": "test(gateway): expect cold-start discovery before credential-free refresh (#168235)",
+      "sourceOrigins": [
+        "9fc63cc93f65fd27bf390cc9a77ffb5f0bc57cf9"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "90cb1c153e3cc812f54cfada0923ee486f202d69",
+      "subject": "fix(ci): gateway config RPC suite deadlocks on agent mutations after acknowledgement barrier (#168242)",
+      "sourceOrigins": [
+        "5c6b01a42fa76b4555f475278c554dbc6984e82d"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "26360ccac7d6eded659fbda66a3cacc57e9b921e",
+      "subject": "fix(release): keep ClawHub retry classification source-resolvable in release harness (#168234)",
+      "sourceOrigins": [
+        "21490fb9dc601f5eb9b398ee1b2bbfc6768aacfb"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "ebe4a183ac4adf900dffdb398717d3b9eac02a1f",
+      "subject": "fix(ci): ignore the dormant sqlite source-fence admission module in Knip (#168241)",
+      "sourceOrigins": [
+        "d719f09ad46f2bbe07a97aa9c50845e672fefc40"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "73b58056f0a1da1745e762e61dba59951343af93",
+      "subject": "test(whatsapp): expect carried overflow in long styled chunks",
+      "sourceOrigins": [
+        "281379b0111a2c7c18afff10d00845614f7325cf"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "fcd948c5538454fa385e88f5e234f6beaccb43ba",
+      "subject": "test(e2e): accept Doctor pinning ownerless legacy cron jobs to their historical owner (#168314)",
+      "sourceOrigins": [
+        "b43da95af1513b59c19df2c3390c78fc9909e29e"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "83ce62eb86358f2c59debfdd8918ba81949da53a",
+      "subject": "fix(plugins): Windows Gateway startup stalls capturing installed plugin files (#168313)",
+      "sourceOrigins": [
+        "2cb28836a5deefd4c8b87f6188db2955f77df24c",
+        "e86845769895c9b417ce7846787a6f1a85106725"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Source removes a Windows exclusion from a small-file copy fastpath absent in September. Narrow Windows performance adaptation remains possible; no full source fastpath/fs-safe upgrade is selected.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "19825377e1c4eae718e0b30f777e5868aa40c139",
+      "subject": "fix(sessions): register disk-budget worker as a runtime process entrypoint (#168310)",
+      "sourceOrigins": [
+        "587a19170f3c333ad94507212e1ea18ec7c52d18"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Historical update ledger says compiled-test disk-budget worker applicability unproven. Existing runtime entrypoint/build owner present, but no installed updater or Gateway defect/proof established for September.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "6f1668e9ccaf9f84aa257b3997ff4cb98cfbf564",
+      "subject": "test(plugins): settle the startup index before measuring memory watcher retirement (#168327)",
+      "sourceOrigins": [
+        "fdb06ff5ca8cb1fad79f16e0b976996503345116"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "cda4572901315b1d021fd4f136ccc4a65f87ec0c",
+      "subject": "test(plugins): park the late memory probe on embed, not embedBatch",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "a293f2e850c377d629a6f536c7c36d8900e2b3a5",
+      "subject": "fix(agents): re-admit runs on the configured generation after a catalog publication (#168410)",
+      "sourceOrigins": [
+        "171df4e1c5a08e1da631c4fff50c420db2bb6f84"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Production is three-way clean and existing configured publication/lease owners support the private WeakSet repair. Missing remote-publication test file/old fixture adaptation must close abort and derived-parent confinement before inclusion.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "e06b51bb2e46b29c886030c34ca59f1b45e57a86",
+      "subject": "test(gateway): retry plugin reload refused by post-ready registry refresh (#168594)",
+      "sourceOrigins": [
+        "4e3707f634c9f2176ed2d18034c8389484e4ae25"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "fa8fb6c3ec64559cc43d32ccf4300503793194d9",
+      "subject": "test(plugins): start dreaming under the boot path, not the reload candidate deadline (#168608)",
+      "sourceOrigins": [
+        "8076cd878f22bf41cf104feaf7fa8be037bc7029"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "822289f0ce854a8f9b9e84a7b5fbe8f7b40f9d3c",
+      "subject": "test(qa-lab): size the repeated-turn child close budget for loaded CI (#168622)",
+      "sourceOrigins": [
+        "53d2109ebfce9e2612115315d8b814cbcef6266d"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c9d5ccb1dc52607e0c3c54acbba7cb1912203ebe",
+      "subject": "docs(changelog): 2026.10.5-beta.1 release notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c772f8b4dc97c81b9e662e0ee047b45ea3c9faa6",
+      "subject": "fix(release): make update compatibility coverage test-only (#168836)",
+      "sourceOrigins": [
+        "c6d71fae0ed1c0f7968c8d05c410345246af235b"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "d5567f2d2926d34f821ecdab4fa006d3f5750f79",
+      "subject": "docs(changelog): record #168836 in 2026.10.5-beta.1 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c5ef39044c5a3fed8e4f708131d40ef4f529d89a",
+      "subject": "fix(release): record 2026.10.1 updater compatibility (#168740)",
+      "sourceOrigins": [
+        "217d8bfb7cfa06a5a6c7d3381f92cbae7b269eac"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "a9f1750aa299ef7ef0d1f800036f368776124a67",
+      "subject": "docs(changelog): record #168740 in 2026.10.5-beta.1 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "6e33e15ace1220bd198d31c1510658fc4dc67460",
+      "subject": "fix(update): keep the 10.1 updater's original cleanup queue across replacement (2026.10.5 backport) (#168883)",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "be82cf6a71260eb10c82efec746607b287b6a029",
+      "subject": "docs(changelog): record #168883 in 2026.10.5-beta.1 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c93a93e00c89b3da9c67ee4027e1a87e54ab9403",
+      "subject": "fix(test): seed retained OAuth sidecar after published baseline setup",
+      "sourceOrigins": [
+        "951dffef48a9f5458984d87890c42cf8ae203ab7"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c34941a3ccc2559b78f406c83f4755162f3901c3",
+      "subject": "docs(changelog): refresh 2026.10.5-beta.1 record target",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "341ed51518c74cf1ff043a6efb281cc26b516bbe",
+      "subject": "fix(update): accept native Windows spellings of the recovery capture directory (#168968)",
+      "sourceOrigins": [
+        "a216ad8eea6a15fee9341f7bdf2f51e9012ec441"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "557c52278e5ec86bb07447041a3ba6a01fbece36",
+      "subject": "docs(changelog): record #168968 in 2026.10.5-beta.1 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "45248f28b3f0fa321deb499a6e679f699971a541",
+      "subject": "fix(update): serve the 2026.10.1 updater's pending-migration read after replacement (#169031)",
+      "sourceOrigins": [
+        "34e71463b60e42ab073f576502e3daf996009dfa"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "October 10.1-specific worker read compatibility operation adds protocol routing outside approved September bugfix contract; September worker already has its own retained-runtime/update-only compatibility contract.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "f283c3c71226c2e1d9ca06b11972f8bdb3969bd8",
+      "subject": "docs(changelog): record #169031 in 2026.10.5-beta.1 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "45cba279541e498558d98140c356a6ad2c7b818d",
+      "subject": "test(gateway): stabilize manual model policy catalog fixture",
+      "sourceOrigins": [
+        "504885e7b765c7f99182e152cbe95d8e922cc958"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "75118f4531be7bf77137730944dad26e950a2c22",
+      "subject": "test(codex): wait on catalog publications instead of timing cold model reads (#169281)",
+      "sourceOrigins": [
+        "68127439e6c989a585f35c0e3ac8d767d758bd09"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "0c8e8076ffadb2ad2c45656f01bd4b70f20d2323",
+      "subject": "fix(update): retain and reclaim updater runtimes under alternate path spellings (#169292)",
+      "sourceOrigins": [
+        "032a58bf34d643d59482656bfe0005c27d5c1e17"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Retention can copy unrelated ancestor/global packages, exhaust its I/O budget, or miss replacement under Windows native spelling.",
+      "group": "global-retained-inventory",
+      "carryForward": false
+    },
+    {
+      "sha": "d92949caa59dc088e33d4f062d3a08bd5471ffd2",
+      "subject": "chore(build): stop packing the update-compat inventory (#169268)",
+      "sourceOrigins": [
+        "db8dbef60ed6c03b4fb9e0bee1f820a1815b988b"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "ce2d290f1368196619ee8339f8997e3d61fd310c",
+      "subject": "chore(deps): refresh eligible dependencies through October 2 (#168103)",
+      "sourceOrigins": [
+        "c44c2e51ad3fdeaa84a0aa35a36c4f83a116c746"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Release/version/dependency preparation is excluded; no October version, native publication, package-manager or dependency change in September PR.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "1efd7a39246853262d090d343f004d772f6c4a6e",
+      "subject": "fix: Doctor maintenance fails when state inspection is slow (#168161)",
+      "sourceOrigins": [
+        "0c91469b2dabc593638e7080b6674fda5f1dee3b"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "2,466 production changed lines across 21 daemon/systemd owners including new service-inspection-budget. Existing slow-service budget group is carry-forward; architecture-wide transplant is not a maintenance fix.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "8e4f960f76799de83d07642d568b80a301f1ce2c",
+      "subject": "fix(update): recover blocked updates after completed receipt identity drift (#168388)",
+      "sourceOrigins": [
+        "eae2e5421daa5b0647126830917df8772ab35f70"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Completed receipt settlement expects newer archive/supersession and publication-retired owner lifecycle not established on September; no guard/durability weakening accepted.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "b5da92b5c378bbe20ac47971c7987d8d8e979e67",
+      "subject": "fix: preserve model fallback after provider timeouts (#168605)",
+      "sourceOrigins": [
+        "e52cbaafccaeffdc5f75ea7925d0364a902b1d56"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "September finalizer has no turnCandidate path and already returns for promptError/aborted/yieldAborted before every afterTurn/ingest operation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "7c9a839ecaa2fb8a21a27b578045154c6f5480bc",
+      "subject": "fix: preserve replies while their agent finishes starting (#168826)",
+      "sourceOrigins": [
+        "cce7888a7c73e3b5aa26f4470ec81649e23d8327"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "fef80ebe41213a79377f36bad16b973c4676c76f",
+      "subject": "fix(update): carry the service heap budget into update children (#168889)",
+      "sourceOrigins": [
+        "9a62c5b5cd2eb98a47e7091dfa1484cfe8dd7809"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "227ca30f113a5b3f9a7dbc1aa822198bfb525c29",
+      "subject": "perf(update): skip redundant rehashing during retention and publication (#168958)",
+      "sourceOrigins": [
+        "c96fac1cc6a48f7249ac21575a73e025bfcc3e51"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Retention/publication rehash optimization depends on newer missing publication-tree helper. No separate P0/P1 defect established; keep observed budgets/integrity checks.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "f1fc086d71350c746365409c07d69da76a77c2cf",
+      "subject": "fix(update): run deferred official owners' webhook-listener migration in candidate Doctor (#169035)",
+      "sourceOrigins": [
+        "054004acbc73fc814882cd696afc851eb4c251dc"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "76f4a2e98d05ae2f7db01ae7560b915e7896f958",
+      "subject": "fix(telegram): resolve polling workers in source and package builds (#154286)",
+      "sourceOrigins": [
+        "dd053f96aa300a82443d5ab9725f206214e9c36e"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Full-source applicability metadata exists, but no complete target owner/caller/fixture proof closed for this row. Preserve it, do not infer safety or eligibility from subject/clean application.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "74baf9b1836812527002914255bfb923e0f2f14b",
+      "subject": "fix(update): settle legacy package-activation records after metadata-only drift (#169027)",
+      "sourceOrigins": [
+        "3e832726ad2a19e1a19d07651e7817a6dd8aa2b9"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Legacy 9.8 recovery adds digest dialect/metadata-drift matcher and settlement across package publication owners. September digest/authority contracts cannot be changed by a clean-looking local hunk.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "65849b2289666b962c7da6f3485f55045747deb0",
+      "subject": "fix(update): settle stale handoff leases and completed receipts instead of blocking updates (#169038)",
+      "sourceOrigins": [
+        "ff6f58a8c32b6daa4bf1cf5f60b3493ae96d1764"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Stale handoff lease and receipt recovery group depends on newer package activation prepare/journal settlement. Source spans nine owners, with missing baseline module and unresolved durable closure.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "ce8aa49fb898353e3b13187f49b9b4f9d589ca08",
+      "subject": "fix(release): size the plugin publication manifest cap for its file-entry cap (#169084)",
+      "sourceOrigins": [
+        "d29e2d5be0f618c13417d74fa48216384ea3bb74"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "f63f823635149e9313eea064463c409fff27d7b1",
+      "subject": "fix(ui): recover updated chats through the serving document (#168941)",
+      "sourceOrigins": [
+        "cb1b6cdb9c74cd17b92b141a55c3f4e448ca5aba"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A stale chat probes its session link with HEAD, which is rejected, and cannot recover after update.",
+      "group": "serving-ui-document-recovery",
+      "carryForward": false
+    },
+    {
+      "sha": "913fd19c40f0709e58572d3cb75d743c987c92d9",
+      "subject": "chore(release): prepare 2026.10.5-beta.2",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Release/version/dependency preparation is excluded; no October version, native publication, package-manager or dependency change in September PR.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "0854050b3b4132be6950989cf62d90f5509032a9",
+      "subject": "docs(changelog): 2026.10.5-beta.2 release notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c21fa6aa758171417476c12b2fff3aea34ade785",
+      "subject": "fix: stop catalog refreshes retaining duplicate native plugin graphs (#169272)",
+      "sourceOrigins": [
+        "a81bb54f094f0bb5df760b4fe7e100c791c757d1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "a2e6574e0da724fc0e17b9418e092d1e45936ca7",
+      "subject": "fix(release): release:candidate refuses to resume after a release-tooling repair on main (#169257)",
+      "sourceOrigins": [
+        "0b0c2f216658ba62557fe4dbd444a6ebeb4b0f7c"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "9ff671c3232f6703e01a81907d67fa7be8ce3a2d",
+      "subject": "fix: recover catalog config after failed native ESM refresh (#169321)",
+      "sourceOrigins": [
+        "d0df645f66013c79290904ac9c4e69f9749b94fd"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Useful narrow catalog failed-refresh invalidation fits existing workspace contexts, but whole source conflicts and native ESM heap fixture must be adapted and proved. Not certified/source-qualified by this supplement.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "28f004f1a8841d0788bf43a82374ba22a60b786f",
+      "subject": "fix: stop catalog refreshes retaining duplicate native plugin graphs (#169272) (production half)",
+      "sourceOrigins": [
+        "a81bb54f094f0bb5df760b4fe7e100c791c757d1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Native ESM graph retention group changes six source-build/module/API lifecycle owners (300 production changed lines). Required graph identity, registration, retirement companions/proof remain unclosed.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "e42934d89117f1ce9004a8b1e8b99dbcd58e5786",
+      "subject": "fix(doctor): recovery copies miss Canvas and Memory Core files before migrations move them (#169436)",
+      "sourceOrigins": [
+        "7187a9afa71af15eb5f7889f6af47faed021097a"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Plugin-owned Canvas/Memory recovery collectors require exact September resource selection and publication/deferred-root companions. Code paths exist but source conflicts; #169516 selected only its independently compatible empty-roster/root-admission fix.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "615861be03a7453ffbc75f4578830af972cf4890",
+      "subject": "docs(changelog): refresh 2026.10.5-beta.2 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "1cfb3aa9abdeefdf849f6ab1f4ba22c3f5b8cfcb",
+      "subject": "fix(gateway): Control UI turns stop after unrelated pairing activity (#169457)",
+      "sourceOrigins": [
+        "99f7d3c0f284425d090482325ff18ab9fbab25d8"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Per-device pairing revision and operator-run recovery cut spans twelve owners with absent recovery/admission modules. Existing revocation/security fences must not be replaced by an unverified narrow condition.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "122518e26058ea9404c1a2113120bcfad4fd3266",
+      "subject": "fix(agentsapi): preserve saved sessions across binding upgrades (#168150)",
+      "sourceOrigins": [
+        "bc524d8903002ca70d07f9770b2f993e5e7aec59"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Agents API binding migration imports new migration/record modules and persisted compatibility format; no migration or remote protocol extension approved in this maintenance PR.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "190a67db679158b68c9f3918897018751810ea01",
+      "subject": "fix: restart-auth release proof exceeds job deadline and misses stop policy (#168097)",
+      "sourceOrigins": [
+        "2d991c67599c2adc4dc5deaee940d27e3c15cf07"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "a4cf5f48854f3e370750fc522c584479f46e4614",
+      "subject": "fix(doctor): preserve installed plugins when path safety checks block them (#168111)",
+      "sourceOrigins": [
+        "e048d9d952d6d9016718af7828bd153385459d0a"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Installed blocked-plugin preservation is useful, but source changes discovery availability, config pruning, Doctor migration and status contracts together; seven-source-owner closure remains unresolved on September.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "96966986fab762b28db1f77926fe13ffe70ada1a",
+      "subject": "test(subagents): stop polling scheduler effects in cancellation concurrency tests (#168128)",
+      "sourceOrigins": [
+        "2d6f7a3052a03867896f10d521969c78c4555d9a"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "b410f727ba6275803dc7173872ec50fc9826cf96",
+      "subject": "fix(memory): prevent repeated daily-note blocks during flush (#168123)",
+      "sourceOrigins": [
+        "77bbc865a05bb38e4284e651ddf229d8ac10a53c"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Daily-note duplicate append guard introduces new content policy and removes a sandbox mkdir stage. Exact memory append/read/write and paragraph/heading negative-control proof on September remains unclosed.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "82eafa511f3f2bcc124419fbe7c992e0259ddd34",
+      "subject": "test(plugins): status test fails since metadata snapshots carry diagnostics (#168264)",
+      "sourceOrigins": [
+        "e7eece5bae3dd756856a2ca2e371a6a13516d66b"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "0ef70a2694fc5c639b685828d165f1644ee14a15",
+      "subject": "fix: keep task replies in their chat and avoid Reef commit-link false positives (#168248)",
+      "sourceOrigins": [
+        "56521b610f441ae4f7190a2d82b7acd4feba2991"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Task reply routing/mirrored send group crosses announce/media/outbound/server send owners plus Reef credential classification. September source delivery/provenance producer closure and no-SDK adaptation are not established.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "d8b0f79d24f5abca93a457732e8b85d3f6b3a454",
+      "subject": "fix(sessions): coalesce pending Home creation notices (#168239)",
+      "sourceOrigins": [
+        "addfa4853e2f61dd1398d8e0dbe6f5776a6e5ae6"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Session creation notice coalescing changes notification behavior and is not a separately proven P0/P1 repair; keep it out of bugfix maintenance batch.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c43b72bb1a0af718238b877bbe4b1566a8f8c786",
+      "subject": "fix(workboard): keep fallback runs active until the overall outcome settles (#168215)",
+      "sourceOrigins": [
+        "9f7cb66e186b15519ff435caf5383c7d109a179d"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Workboard fallback run terminal settlement crosses plugin lifecycle and host run-status events; September event producer/consumer closure remains unverified.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "1180c887ae48fd4675c1daf92847bc1de4279973",
+      "subject": "fix(recovery): keep interrupted completion replies from being lost (#167814)",
+      "sourceOrigins": [
+        "78e6318772e0bcd6aa79cb14d1b1ed2bbd2c39a7"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Interrupted completion delivery is material, but September lacks hasCompletedMainSessionRecoveryOutcome and has different running/failed admission predicates. Source terminal guard alone would not close recovery admission.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "be4e322f880135d3502310da54c9a1d8d8d66f9f",
+      "subject": "fix(gateway): avoid blocking stops on native skills watcher cleanup (#168273)",
+      "sourceOrigins": [
+        "8832904b171a34dd5b134f9985208d2ecabea24f"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Native watcher close repair spans Gateway shutdown/run-loop and skills-owner retirement, with absent source files. Existing historical P2 predecessor-stop adaptation remains unclosed; no broad shutdown/compiler redesign imported.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "c4521d27e01a64dd6b432721acd1d235255d81e3",
+      "subject": "fix(memory): rebuild cached index managers when provider config changes (#151263)",
+      "sourceOrigins": [
+        "72eafadc01a01781cd4ac114f9397c02af9b367f"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "Source adds reload prefix to memory-core-index service not registered by September memory plugin. Do not import newer service owner to fix its own invalidation contract.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "59e9db4c551360dfbeac542e8ef14a21e0d63a6e",
+      "subject": "fix(ai): keep unfinished reasoning private at tool boundaries (#168294)",
+      "sourceOrigins": [
+        "757d73980426df41869314a063b17fc847b36511"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "September ReasoningTagTextPartitioner.flush has no recoverUnclosed option and hides unclosed reasoning. Donor repairs the later recoverable-reasoning feature; do not add it.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "1788beea06d19a115bb1d964af3f4094e081ef99",
+      "subject": "fix: prevent session admission stack overflows in large fleets (#168354)",
+      "sourceOrigins": [
+        "38fee354e63626edea4ce6f620461acc15d571f4"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "Main-only plural agent-store admission recursion is absent. Merged update audit established singular September owner/caller equivalence and introducing history; preserve existing 128-task fleet issue separately.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "55e6b49076acf9cdfcea1c5b3cd16615781b6f31",
+      "subject": "fix(models): Claude CLI models vanish from the picker after a plugin config change (#168315)",
+      "sourceOrigins": [
+        "a14a5d1908eb567012624675d349266b86ff10d1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Claude CLI catalog dropped-row reacquisition is plausible on old inventory owner, but both production owners and source fixture conflict and baseline credential/account equivalence is not closed.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "33705d2f9a9f542b4968c0de2afee57949e3b2a2",
+      "subject": "fix(codex): reap clients after model discovery times out (#168365)",
+      "sourceOrigins": [
+        "e7ec72eb23c57265ea4980648e5762b2d59e70c9"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": true,
+      "decision": "already-covered",
+      "reason": "Timed-out catalog client retirement is the e7ec72e source already adapted by merged update-only PR #169605, including sibling lease and process ownership.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "8743c2a30b1557581531e43e81a3443a37e5cb86",
+      "subject": "fix(ui): typed /stop lets queued turns restart the agent in the Control UI (#167860)",
+      "sourceOrigins": [
+        "01238a50ec81dcf50278a2591df9a8fb5d5c3640"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Typed /stop aborts only the current run and lets queued completions restart the session.",
+      "group": "typed-session-stop",
+      "carryForward": false
+    },
+    {
+      "sha": "67d199f89dd6a29fd0ddc6e51ffa86ee2aea5f20",
+      "subject": "fix(sessions): avoid repeated host compaction after native compaction (#168051)",
+      "sourceOrigins": [
+        "9cd23e6067c84433439d14166b15c132ddcc1983"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Native compaction accounting spans ten owners/session projection fields. Preserve existing host accounting until produced native-count and baseline persistence companions are proven together.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "62084f628d63414b711dffff2b849dce7aa6bca0",
+      "subject": "test(gateway): assert logout ordering instead of a one-second deadline in auth refresh (#168330)",
+      "sourceOrigins": [
+        "d476209d42a0e3d6083b9f15c1d523480de0b455"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "8d66b946cda0b8554c79934d373bc02dd343620f",
+      "subject": "fix: keep runtime context in user messages on compatible Responses endpoints (#168546)",
+      "sourceOrigins": [
+        "b5bf83fecaf3643edf4f423e74e6f3271f19cb2a"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "already-covered",
+      "reason": "September Responses converter replays runtimeContextCarrier as role:user; no isRuntimeContextMessage/inHistorySystemUpdates instruction-role promotion exists.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "a827a9d3a92881e881e9af415356bd2a6131593a",
+      "subject": "fix: malformed tool calls report auth failures when argument length is 401 or 403 (#168500)",
+      "sourceOrigins": [
+        "3050cdc493af8832fe2092045402d35e5fb1fda5"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Tool argument counts equal to 401/403 falsely trigger authentication classification and refresh guidance.",
+      "group": "auth-status-classification",
+      "carryForward": false
+    },
+    {
+      "sha": "9265297399ebcc0bd30f475ee5e80f9694b3eef5",
+      "subject": "fix: preserve valid values in tool argument unions (#158974)",
+      "sourceOrigins": [
+        "e491bbc1c69bf6ffd4eea99e8a90ea5fbd69ca51"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Union coercion changes values already accepted by a later schema branch, e.g. string 00123 becomes number 123.",
+      "group": "valid-tool-union-values",
+      "carryForward": false
+    },
+    {
+      "sha": "9ba59567f4fcc60db9e56bc4f7f275040f7e07b0",
+      "subject": "fix(models): discover models after API-key sign-in (#168617)",
+      "sourceOrigins": [
+        "31c8052b92e59e6e1d9114ef0c8d9b9aac153855"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Post-sign-in model discovery changes secret-provider refresh selection and retained runtime ownership (111 production lines). Historical auth/model baseline compatibility proof unclosed.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "101622e4a9325b6e286c7883304e7529bca2e06c",
+      "subject": "fix(telegram): keep table before blockquote/list as sibling, not nested or dropped (#168383)",
+      "sourceOrigins": [
+        "c1d38ec4227f43c10e9fbeaa7a087b1fd64872aa"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A table next to a blockquote/list can be nested incorrectly or lose its values.",
+      "group": "telegram-table-boundaries",
+      "carryForward": false
+    },
+    {
+      "sha": "b4c55a08bf21672f798aee7948a55798ce5dc37c",
+      "subject": "fix(node-host): allow trailing whitespace in safe-bin commands (#168120)",
+      "sourceOrigins": [
+        "6cc0e8460192d6dae2f1f3622665755d09b908b7"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Allowlisted node commands with trailing whitespace otherwise fail their execution-plan match.",
+      "group": "safe-bin-trailing-whitespace",
+      "carryForward": false
+    },
+    {
+      "sha": "c00f326b5f90f1a4fdda9bc400020aa8276684d0",
+      "subject": "fix: preserve Claude CLI tools after exec completion (#168670)",
+      "sourceOrigins": [
+        "17a04f2148c7a7cac6fb0b695f28d91a521df6c1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Claude CLI after exec completion requires four absent session-event lifecycle modules and fifteen owner changes; cannot import mainline handoff architecture for a narrow tools fix.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "ee9efdc9cc087428d4a594f3e0b7a355d2ecc6e4",
+      "subject": "fix(gateway): keep normalized chat text stable across replay (#168725)",
+      "sourceOrigins": [
+        "bbd2daf8b6def57eb0ac47c5e270c9b39cc168e6"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Normalized first-message prompt bytes matter, but September has only request-local installModelPromptTransform and different persistence/projection ownership. Exact first-send/replay prefix proof is not established by replacing one returned string.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "4b2e8d5fbb233744dd87f7cac945ff5624d2c48d",
+      "subject": "fix(mcp): release computer control with its admitted run (#151127)",
+      "sourceOrigins": [
+        "5d91eff61f278980bb87d0c50e992b4dfbbca1e1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "MCP computer release adds tool callback in shared OpenClaw tool type and changes tool-resolution owner. No no-public-SDK/context-lifetime adaptation or native lease proof closed.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "34d07e7b0dc1b5f0ed54de67a9647d9e6b8c23de",
+      "subject": "fix: prevent tool parameter changes after approval (#142700)",
+      "sourceOrigins": [
+        "48a2b3d29bdb71792b5fa7fb97ca9450ac995ac6"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Ordinary hooks can change parameters after trusted inline approval without approving final arguments.",
+      "group": "trusted-approved-arguments",
+      "carryForward": false
+    },
+    {
+      "sha": "4af47e719bf25ec22d57c405302b2f369b75a9d5",
+      "subject": "fix(node-host): preserve quoted Windows shell arguments (#158160)",
+      "sourceOrigins": [
+        "52384f51d74d6139bb508d08b9b8e9f56632c9ad"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Canonical Windows cmd.exe shell payload loses quoted executable paths and prompts.",
+      "group": "windows-node-quoted-argv",
+      "carryForward": false
+    },
+    {
+      "sha": "95cf9de9da3ea309c9081fc3a5a5733632cd9b79",
+      "subject": "fix(update): bound retained-runtime dependency lookup to the installation (#168927)",
+      "sourceOrigins": [
+        "01b25a9da819f294c13d300013d7b1f5c9678baf"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Retention can copy unrelated ancestor/global packages, exhaust its I/O budget, or miss replacement under Windows native spelling.",
+      "group": "global-retained-inventory",
+      "carryForward": false
+    },
+    {
+      "sha": "f744125c06a9cdf7c4ddef3bdea5184eb03f9d61",
+      "subject": "fix(approvals): complete node plan identity before recording (#161980)",
+      "sourceOrigins": [
+        "f2e649da67fa909126980d88171e93f3f99d6f01"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Prepared node approval omits identity in stored plan while top-level binding has it, breaking replay.",
+      "group": "node-approval-identity",
+      "carryForward": false
+    },
+    {
+      "sha": "cada1bc0d9ac1c0120f5fbc63829db310648b3e7",
+      "subject": "fix(plugins): keep incompatible Codex runtimes unavailable after updates (#168930)",
+      "sourceOrigins": [
+        "5cb977c8dda53e5b1d23317afcec62ab6d372b78"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Codex minimum-runtime admission adds user-visible compatibility policy, repair metadata and multiple install/loader owners; no new runtime requirement/policy approval in September maintenance scope.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "836fd79faa03f154458b895be6e0e4f38d0b705c",
+      "subject": "fix(update): resolve retained dependency root with native identity",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Retention can copy unrelated ancestor/global packages, exhaust its I/O budget, or miss replacement under Windows native spelling.",
+      "group": "global-retained-inventory",
+      "carryForward": false
+    },
+    {
+      "sha": "72d32d98b6918671d771154120d351726246ee8e",
+      "subject": "fix(cron): avoid Doctor backups for unchanged one-shot jobs (#168938)",
+      "sourceOrigins": [
+        "1bd9966d0f61283f4598265dbb853e4a7f08807c"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "One-shot no-op backup avoidance has a narrow old-owner condition but is P2 maintenance/I/O optimization, not a proven P0/P1 failure in this scope.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "e95d9c2cceb21fc3bdc0f2b1c7dc4332553a4689",
+      "subject": "fix: OAuth catalog refresh fails with historical agent stores (#168957)",
+      "sourceOrigins": [
+        "43c68c34df71bed694fc4b1de0725f5e7495b8c1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Historical OAuth store refresh changes candidate-store admission/sqlite ownership (144 production lines). Exact current September auth normalization/read worker companions are not closed.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "14987c0198e6a8ac5de142e5b32b2e2e6895a4e3",
+      "subject": "fix(update): keep an accepted Gateway handoff during admission from being reported as a failure (#168993)",
+      "sourceOrigins": [
+        "8c5841d11a6e6b50404438304ff29672c5706355"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Accepted Gateway update handoff is incorrectly reported as an update failure during admission.",
+      "group": "accepted-update-handoff",
+      "carryForward": false
+    },
+    {
+      "sha": "a87b5e6df2bb4b20cb1ce7cbec7705f5f76aa295",
+      "subject": "fix(update): clear stale migration warnings and tolerate clock jumps in package verification (#169004)",
+      "sourceOrigins": [
+        "35ab90410d55a179a894c4e77a32bfb28cb42d78"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Completed migrations retain stale warnings, and wall-clock jumps can immediately expire package verification.",
+      "group": "current-migration-warnings-monotonic-verification",
+      "carryForward": false
+    },
+    {
+      "sha": "f4cbb99cdb69ce5de7fa6063a9e6cae8e6e0eb9a",
+      "subject": "fix(doctor): never rewrite root memory files with replacement characters (#169029)",
+      "sourceOrigins": [
+        "ce5b795128e359ebebd9df80bdcfaf0258659a5a"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Malformed UTF-8 Doctor merge is a real data-safety candidate. September calls readRegularFile directly twice before and twice after rename rather than donor local read helper; adapt byte-validation at all four reads and warning path, then prove untouched malformed canonical/legacy bytes.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "d84dc316c584639be4bb1ff73d42405c88aa5abb",
+      "subject": "fix(update): report finalized successes and suppressed channels as warnings (#169037)",
+      "sourceOrigins": [
+        "48a348028fb0f9e60f57832e8b03b35264ccdf54"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Failure while publishing a ledger-finalized success can reopen failure triage and claim recovery is pending.",
+      "group": "recorded-success-terminal-outcome",
+      "carryForward": false
+    },
+    {
+      "sha": "c6cd8579cc992bef22c5fd7542d68154740c0674",
+      "subject": "fix(node-host): keep the node service PATH when the Linux login shell resets it (#136677)",
+      "sourceOrigins": [
+        "95e0638a1046051eb09cfd23e452a00c095a2bbe"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Generated /bin/sh -lc node commands lose managed-service PATH during login startup.",
+      "group": "linux-node-service-path",
+      "carryForward": false
+    },
+    {
+      "sha": "200e71645671137b75f4646c2afb88008fe8e8d7",
+      "subject": "fix(agents): plugin completions fail after another plugin reloads (#168916)",
+      "sourceOrigins": [
+        "f30bfc6ccb91d399c8de585ca27029caca1fcbcf"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A retained context-engine/plugin completion reads retired generation after unrelated plugin reload.",
+      "group": "committed-simple-completion",
+      "carryForward": false
+    },
+    {
+      "sha": "5c73d82a674cae81da9156400dd602421ed431c3",
+      "subject": "fix(plugins): keep incompatible plugins inspectable (#168977)",
+      "sourceOrigins": [
+        "29f9c533ebbcdfb72d6f5fc9ed8b39fe2674b3a8"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Incompatible-plugin inspectability is a companion of excluded new Codex/runtime compatibility admission policy; do not import half of that policy.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "ad332df677b4897afb22ae6af2fd68f45e35c350",
+      "subject": "fix(gateway): distinguish superseded model reloads from failures",
+      "sourceOrigins": [
+        "b285a4e9d8915c48d3164125ee515f0f9a1a2123"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A replaced model publication creates stale restart debt when newer config/credential owner already owns publication.",
+      "group": "superseded-model-publication",
+      "carryForward": false
+    },
+    {
+      "sha": "b755f03cd5a45596e55a4a90a54ec372a3a51074",
+      "subject": "fix(gateway): avoid restart debt for replaced model publications",
+      "sourceOrigins": [
+        "9c253952601063a8eccc1f733ac55e95cc9961cc"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A replaced model publication creates stale restart debt when newer config/credential owner already owns publication.",
+      "group": "superseded-model-publication",
+      "carryForward": false
+    },
+    {
+      "sha": "7e18b3bc68f0661bd4ae2c1e8d121f4da33fc084",
+      "subject": "fix(agents): subagents lose inter-session provenance in replayed history (#169130)",
+      "sourceOrigins": [
+        "022959b6baa7aa1b85d9c99fa24a48dca6f3336c"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "The replay-loss defect is caused by durable installModelPromptProjection introduced after September. September installModelPromptTransform changes request-local data and preserves transcript/history rather than persisting body-only projection.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "b57b2fba4d11e5447644908bd71b03472e844897",
+      "subject": "fix(ui): preserve chat navigation during recovery reloads (#169194)",
+      "sourceOrigins": [
+        "de5800623ab3fbba72c44e5a207f4aa87dd1b626"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "New parseControlUiSessionReturnPath/chat-entry-route owner and its service-worker session-entry handoff are absent on September. Existing general recovery marker remains separate UI probe concern selected in #168941.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "a4837c1d6dfb7d5d7792a3266a7f2795f316f8f8",
+      "subject": "test(gateway): allow inert Codex code-mode probes under empty cron caps (#169225)",
+      "sourceOrigins": [
+        "49d2a93ffbe10b70e9524ffce666b736232b67ef"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "c3b69200a4e11e67c3a5e6524362ecddb27a7e08",
+      "subject": "fix(agents): keep inter-session envelopes as first-sent prompt bytes (#169238)",
+      "sourceOrigins": [
+        "0b9d0496f79b094c79aa22faf102293f4f7b4e70"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Final pair has only a 12-line durable projection delta, but September has no installModelPromptProjection/frozen capture owner. A corresponding old-transform envelope-prefix fix needs exact real first-send/history proof; do not import new recorder/options/SQL projection split.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "bf257d18023e213ddd07f7f5ac24928b54e982f0",
+      "subject": "fix(agents): ignore empty stream heartbeats as model progress (#145850)",
+      "sourceOrigins": [
+        "ea392ae71ec9f36e5d1600dd77fd4a8129871970"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Repeated heartbeat usage progress bug also exists on old stream, but September notifyLlmRequestActivity is signal-only (no Boolean progress dialect), loop layout differs and native HTTP/SSE regression must adapt; no public request-activity API addition permitted.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "d24cdbfd1392a48684eea72d8b6e953e964d570c",
+      "subject": "fix(agents): cancel queued CLI work promptly (#169303)",
+      "sourceOrigins": [
+        "9607478c76a4750ff3f0b40f799af59e67479e25"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A cancelled queued CLI caller stays blocked until its predecessor finishes.",
+      "group": "queued-cli-abort",
+      "carryForward": false
+    },
+    {
+      "sha": "2c400f57abf5cea1e4844eea2aa07351dcd03dca",
+      "subject": "fix: honor Windows permissions for SQLite recovery snapshots (#169397)",
+      "sourceOrigins": [
+        "99d262df8760c8f7426194730d7c86968578e74f"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "Donor sqlite-recovery-snapshot.ts owner is absent on September. Do not add newer snapshot owner to fix its Windows POSIX-bit check.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "8aa2ac63e19b4ae813be46a09bc2048e1bbf0deb",
+      "subject": "fix: switching back to an OpenAI model fails when the Codex plugin is not enabled (#169412)",
+      "sourceOrigins": [
+        "f17ac94793d416fe99fffa308814b974519403b4"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Switching to an OpenAI model is refused without Codex even though an ordinary turn runs via existing implicit fallback.",
+      "group": "openai-implicit-harness-selection",
+      "carryForward": false
+    },
+    {
+      "sha": "3e1389a8cef79a42d8aa7f76c331c84a76b1a68c",
+      "subject": "fix(update): preserve failures when cleanup reporting is unavailable (#169454)",
+      "sourceOrigins": [
+        "534d727b11e46886ec816b6e423b9c521a274b80"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Cleanup failure preservation is useful; result/recovery tests apply, but three Git cleanup/preflight/run owners conflict across old executor/recovery contract. Outcome, rollback, process-cleanup and cancellation controls need a scoped old-owner adaptation.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "9ecae99c966350297c50a1ecb6fd21e7825cb52a",
+      "subject": "fix(doctor): update rehearsal fails on installs with no configured agents (#169516)",
+      "sourceOrigins": [
+        "f379f15175a75792bf2680b159035cc5515469fe"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Explicit empty agent roster throws during update rehearsal; copied plugin roots must be admitted before collection.",
+      "group": "empty-roster-rehearsal",
+      "carryForward": false
+    },
+    {
+      "sha": "f9f417b9fde193114792bcabd3092737f29f6c22",
+      "subject": "test(gateway): wait past the server handshake deadline in Gateway e2e connects (#169479)",
+      "sourceOrigins": [
+        "e4822908bfda6aaade172729045c5f0797b5d3dc"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "5a235fc5c298b404318865988f84927bfe9a12d1",
+      "subject": "fix(gateway): resume main sessions after missed restart markers (#168651) (extracted hotfix)",
+      "sourceOrigins": [
+        "4754d394130ae9106c863e97c31392fba6bd614f"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Restart marker repair matches old listRestartRecoveryRuns but older shutdown ordering/drain guard must be preserved. Complete source owner and negative controls read; production adapter/native persistence proof still pending, not qualified.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "9f1e4410173229071a62de8f5387af5dadf8386a",
+      "subject": "fix(lmstudio): avoid fresh-session overflow after slow model loads (#168044) (extracted hotfix)",
+      "sourceOrigins": [
+        "41cd4415a17d423dbd5a2732dc1a05feb604f9aa"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Slow local model load hits a 30-second default, then inference uses an undersized context and overflows.",
+      "group": "lmstudio-slow-preload",
+      "carryForward": false
+    },
+    {
+      "sha": "dc5f1f578eb744a24d568cb1af3035ec4d336d3d",
+      "subject": "fix(agents): preserve workspace rules in safeguard compaction (#168446) (extracted hotfix)",
+      "sourceOrigins": [
+        "d7f014ae5dea9f6d0f31912dc25ff22dc2e41b44"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Safeguard compaction cannot read configured AGENTS.md sections because prepared workspace is dropped.",
+      "group": "workspace-compaction-rules",
+      "carryForward": false
+    },
+    {
+      "sha": "10bcd8e2aab6e71830a9754bd61d9b2fdd9a1e63",
+      "subject": "fix(compaction): keep provider-native compaction off for memory-flush runs (#168164) (extracted hotfix)",
+      "sourceOrigins": [
+        "77e2261b573a583ed4f0a3169bf6734f180e85e5"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Memory extraction can see a provider summary instead of the original history.",
+      "group": "memory-flush-original-history",
+      "carryForward": false
+    },
+    {
+      "sha": "5df28c7d3bfc39916866a7908109d55b38b2656f",
+      "subject": "fix: honor session MCP selections in Claude CLI turns (#168393) (extracted hotfix)",
+      "sourceOrigins": [
+        "c75be4fd9655f605805e4b13ead59703d8fb863e"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Claude CLI ignores already-supported per-session MCP selections.",
+      "group": "cli-session-mcp-overrides",
+      "carryForward": false
+    },
+    {
+      "sha": "39dba6d34231807574d8d1b8a1cc8871edc06959",
+      "subject": "fix(auto-reply): clear the auto-fallback probe when queued follow-ups switch model (#160440) (extracted hotfix)",
+      "sourceOrigins": [
+        "f499f82e74ae55661906261306ee0f3fab1168b0"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Queued follow-up can retain an old primary probe after /model changes its selection.",
+      "group": "queued-fallback-probe-retarget",
+      "carryForward": false
+    },
+    {
+      "sha": "568fec865a2c85dc491b8a37e32d36d5bb74d24f",
+      "subject": "fix(cron): classify target/payload validation errors as invalid requests (#169102) (extracted hotfix)",
+      "sourceOrigins": [
+        "78d72c97a85c9e16a0ac17edb7a91b5f246a12fc"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Invalid-request classification mismatch is confirmed in jobs-validation.ts and can be fixed without validator changes, but is a P2 diagnostic repair rather than missing P0/P1 maintenance group.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "20805b803e8242e94f42d6381a84d3e0d0443c22",
+      "subject": "fix(voice-call): keep voicecall steer stdout machine-readable (#169430) (extracted hotfix)",
+      "sourceOrigins": [
+        "8a39ccbb22457a001dbcc43f776cccc68b903bf5"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "not-affected",
+      "reason": "September voice-call has no steer CLI command; adding a machine-output classifier row cannot repair nonexistent capability.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "15f3f123c770d27300bc8dda18cfe1a7e3bbf0d4",
+      "subject": "fix: restore channel startup after stopped Tailscale failures (#162266) (extracted hotfix)",
+      "sourceOrigins": [
+        "2159bb07a62845a21150c0559b2d4b33d81bc68d"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Stopped-Tailscale classification requires absent gateway-boot-lifecycle.kernel and old synchronous breaker producer/caller adaptation. Keep managed-ingress and genuine cleanup/unclean protections; do not import new worker owner.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "e6a9022bec5c4a9ae6682e468b0be1c94a01e74d",
+      "subject": "fix(update): route migrated-no-rollback failures to update repair (#168905) (extracted hotfix)",
+      "sourceOrigins": [
+        "49ca813772fa7375850231053500dec0e1c43f41"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Migrated-no-rollback guidance is plausible, but target recovery reason/repair producer and next-action branches differ. No new recovery policy or rollback permission inferred from diagnostic edit.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "89329f6e78e902b6e95e13733c3e91aab35d2942",
+      "subject": "fix(matrix): stop the probe client after checking its identity (#168587) (extracted hotfix)",
+      "sourceOrigins": [
+        "98813c23905e68b41e5c58e72e3ee554986d7ab1"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "A private Matrix whoami probe leaves its newly created client alive.",
+      "group": "matrix-probe-client-close",
+      "carryForward": false
+    },
+    {
+      "sha": "db216f545cf3881ba9ff8d06e92b22f504b128f1",
+      "subject": "docs(changelog): refresh 2026.10.5-beta.2 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "591b7c021486d5ed6d0d271feee6f29a568bf15b",
+      "subject": "test(agents): match compatible Responses runtime carrier shape",
+      "sourceOrigins": [
+        "84459372b99a57607fbded75fa5a403d75c9e55f"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "e4c71359e8ee803a6ad0d70ca08a837d44e28480",
+      "subject": "test(lint): allowlist store writer acquisition rejection passthrough",
+      "sourceOrigins": [
+        "2d30cde9217b02fd031520746e41e626a0876417"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "21aedc5a43f97751d2d1b8e3bc72f689cb7d4bee",
+      "subject": "test(qa): recognize user-role context in private completion proof",
+      "sourceOrigins": [
+        "e674d8ec09451a8a3bcdfcc523e59efdd93700f2"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "8dfe9bea653b061c06139976fab4870c61309cff",
+      "subject": "test(tui): keep the branch's billing-error expectation after the #168500 backport",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "76748e45c7a881652b40acf9d79293910e814001",
+      "subject": "fix(codex): keep Ultrafast on resumed ChatGPT sign-in turns (#169265)",
+      "sourceOrigins": [
+        "9b5ac9968707ac3bd40eed60f82b8a04f34a637e"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Ultrafast fallback provider one-line fix fits existing thread tuple, but source explicit fast-mode enum differs from September Boolean/provider policy. P2 latency fix/test adaptation rather than a proven P0/P1 group.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "540ca34c34e76f2197e002e2f289ccb24c43a35d",
+      "subject": "fix(update): unsealed original capture warning names the affected database (#169282)",
+      "sourceOrigins": [
+        "82c903c2dd248200dc272b032ccda94605af89cb"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Warning names affected database only; donor baseline-capture module is absent. No separate P0/P1 defect or update integrity change selected.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "354806aa06413ae711952e5ef4c7bfb699a12da4",
+      "subject": "fix(update): candidate config read failure warning omits its reason (#169284)",
+      "sourceOrigins": [
+        "f67c8ffc7287d6cc13f42365542e58c65fd97245"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "d357abf71bedeb1a86e0c1fa73c27df1cd7b8c32",
+      "subject": "fix(update): a reported exit is not a new update failure (extracted hotfix)",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Failure while publishing a ledger-finalized success can reopen failure triage and claim recovery is pending.",
+      "group": "recorded-success-terminal-outcome",
+      "carryForward": false
+    },
+    {
+      "sha": "06f43d72861bea4439be09dcbeb38a676752c42d",
+      "subject": "fix(openrouter): cache-TTL pruning never arms for Grok and Gemini models (#169548)",
+      "sourceOrigins": [
+        "90ca40071254cdd6184deb58d3a14013d0b06225"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Existing explicit cache-TTL pruning family eligibility change is mechanically compatible, but is P2 cache/performance behavior, not separately established P0/P1 requirement. No default/feature expansion selected.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "e78e01582fe5759685e905227d21750b4e2c9c3b",
+      "subject": "fix(update): npm-global updates retain unrelated global packages in the updater runtime (#169551)",
+      "sourceOrigins": [
+        "48d96b4e3b6f2bd79583e0fac438ab91a3cd57c7"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "backport-recommended",
+      "reason": "Retention can copy unrelated ancestor/global packages, exhaust its I/O budget, or miss replacement under Windows native spelling.",
+      "group": "global-retained-inventory",
+      "carryForward": false
+    },
+    {
+      "sha": "1bcc66b8dadbaef9e702c00e3e809e6fab3cdfb3",
+      "subject": "fix(agents): taint turns for network results reached through Tool Search (#169560)",
+      "sourceOrigins": [
+        "4cb9f126859e1ab71290878d9ac208486cb60a63"
+      ],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "blocked",
+      "reason": "Dynamic Tool Search taint is material and old static source field exists. Donor tool-call-outcome owner is absent and private mark/copy/error/outcome chain conflicts across nine owners; complete old-loop adaptation and real execute/search/code-mode/abort/error controls required.",
+      "group": null,
+      "carryForward": true
+    },
+    {
+      "sha": "c26630c4cf4466dd728ed4ed95cceb4b8028f970",
+      "subject": "test(agents): expect reacquisition after credentials change in scoped refresh",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "796db9d5fcadb605a10da09f87dea3257296a39c",
+      "subject": "docs(changelog): add beta.1 issue fixes to 2026.10.5-beta.2 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "8ed6123845921594f4643c1914e8ceb8cfb42c07",
+      "subject": "docs(changelog): finalize 2026.10.5-beta.2 notes",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    },
+    {
+      "sha": "467e83dea27c0d9ade8e999d688de2ed656b2225",
+      "subject": "docs(changelog): bind 2026.10.5-beta.2 record to the release history",
+      "sourceOrigins": [],
+      "patchEquivalent": false,
+      "knownIntegratedSource": false,
+      "decision": "skip",
+      "reason": "Source paths are docs/tests/CI/release tooling or diagnostic-only proof input, not an independently selected September product fix. Reuse only a named selected fixture/gate companion; no release mutation.",
+      "group": null,
+      "carryForward": false
+    }
+  ],
+  "validation": "Final combined checks, exact-head review and readable SDK/config report are recorded in the companion Markdown and PR. Isolated lane results are not release qualification.",
+  "isolatedLaneProof": {
+    "newerCore": {
+      "passedCases": 531,
+      "files": 19,
+      "qualification": "bounded owning/sibling proof; registered cron context subset only"
+    },
+    "octoberTail": {
+      "passedCases": 897,
+      "files": 31,
+      "causalNegativeFailures": 46,
+      "qualification": "bounded owning/sibling proof, native handler and mocked-browser scopes remain distinct"
+    },
+    "nativeCompanions": {
+      "reconnectCases": 3,
+      "tlsPolicyCases": 14,
+      "audioLifecycleCases": 39,
+      "iosTestsExecuted": false,
+      "iosTestBuildPassed": true,
+      "deviceQualified": false
+    }
+  }
+}

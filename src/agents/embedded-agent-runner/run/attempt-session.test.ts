@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -10,10 +13,13 @@ import { registerMemoryPromptPreparation } from "../../../plugins/memory-state.j
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import compactionSafeguardExtension from "../../agent-hooks/compaction-safeguard.js";
+import { testing as safeguardTesting } from "../../agent-hooks/compaction-safeguard.test-support.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import * as toolSearch from "../../tool-search.js";
 import * as embeddedSystemPrompt from "../system-prompt.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
@@ -74,6 +80,8 @@ vi.mock("./message-tool-terminal.js", () => ({
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const attempt = {
   authStorage: { id: "auth" },
   config: {},
@@ -90,7 +98,7 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { activationError?: Error }) {
+function createInput(options?: { activationError?: Error; sessionManager?: SessionManager }) {
   const events: string[] = [];
   const settingsManager = { id: "settings" };
   const resourceLoader = {
@@ -111,7 +119,7 @@ function createInput(options?: { activationError?: Error }) {
     setActiveToolsByName,
     replaceCustomTools: vi.fn(),
   } as unknown as AgentSession;
-  const sessionManager = { id: "session-manager" };
+  const sessionManager = options?.sessionManager ?? { id: "session-manager" };
   const transcriptLifecycle = {
     withTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
   };
@@ -172,6 +180,7 @@ function createInput(options?: { activationError?: Error }) {
         deferredDirectoryToolsCallable: false,
       } as never,
       effectiveCwd: "/workspace",
+      effectiveWorkspace: "/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       initialSystemPrompt: "system prompt",
       markStage: (stage: string) => events.push(`stage:${stage}`),
@@ -211,6 +220,107 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
+    const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");
+    const sessionManager = SessionManager.inMemory(workspaceDir);
+    const fixture = createInput({ sessionManager });
+    await writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "## Compaction fixture\nWORKSPACE_RULE_MARKER\n",
+    );
+    fixture.input.effectiveWorkspace = workspaceDir;
+    fixture.input.effectiveCwd = "/sandbox";
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      model: {
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        provider: "anthropic",
+        api: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        contextWindow: 200_000,
+        maxTokens: 4_096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+      },
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              postCompactionSections: ["Compaction fixture"],
+              recentTurnsPreserve: 0,
+              qualityGuard: { enabled: false },
+            },
+          },
+        },
+      },
+    };
+    const { buildEmbeddedExtensionFactories } =
+      await vi.importActual<typeof import("../extensions.js")>("../extensions.js");
+    hoisted.buildEmbeddedExtensionFactories.mockImplementation(buildEmbeddedExtensionFactories);
+    safeguardTesting.setSummarizeInStagesForTest(async () =>
+      [
+        "## Decisions",
+        "Keep the workspace rules.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve admitted workspace context.",
+        "## Pending user asks",
+        "None.",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+    );
+    try {
+      await prepareEmbeddedAttemptAgentSession(fixture.input);
+      let handler:
+        | ((event: unknown, context: unknown) => Promise<{ compaction?: { summary: string } }>)
+        | undefined;
+      compactionSafeguardExtension({
+        on(event: string, callback: NonNullable<typeof handler>) {
+          if (event === "session_before_compact") {
+            handler = callback;
+          }
+        },
+      } as never);
+      if (!handler) {
+        throw new Error("Expected the safeguard compaction handler");
+      }
+      const result = await handler(
+        {
+          preparation: {
+            messagesToSummarize: [{ role: "user", content: "Keep workspace rules.", timestamp: 1 }],
+            turnPrefixMessages: [],
+            firstKeptEntryId: "entry-1",
+            tokensBefore: 1_000,
+            fileOps: { read: [], edited: [], written: [] },
+            settings: { reserveTokens: 1_024, keepRecentTokens: 1 },
+          },
+          customInstructions: "",
+          signal: new AbortController().signal,
+        },
+        {
+          sessionManager,
+          modelRegistry: {
+            getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "fixture-key" })),
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        compaction: {
+          summary: expect.stringContaining(
+            "<workspace-critical-rules>\n## Compaction fixture\nWORKSPACE_RULE_MARKER\n</workspace-critical-rules>",
+          ),
+        },
+      });
+    } finally {
+      safeguardTesting.setSummarizeInStagesForTest();
+    }
+  });
+
   it("cancels a hydrated directory tool's approval with its captured permission generation", async () => {
     const fixture = createInput();
     const generation = new AbortController();

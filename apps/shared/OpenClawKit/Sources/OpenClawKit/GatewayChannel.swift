@@ -79,6 +79,8 @@ public actor GatewayChannelActor {
     private let pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String, UInt64) async -> Void)?
+    /// Automatic reconnect TLS failures need the route owner's learned-pin renewal policy.
+    private let reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)?
 
     public init(
         url: URL,
@@ -91,7 +93,8 @@ public actor GatewayChannelActor {
         pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
-        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil)
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil)
     {
         self.url = url
         self.token = token
@@ -104,6 +107,7 @@ public actor GatewayChannelActor {
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
+        self.reconnectTLSFailureHandler = reconnectTLSFailureHandler
         Task { [weak self] in
             await self?.startWatchdog()
         }
@@ -193,18 +197,9 @@ public actor GatewayChannelActor {
             do {
                 try await self.connect()
             } catch {
-                if self.shouldPauseReconnectAfterAuthFailure(error) {
-                    self.reconnectPausedForAuthFailure = true
-                    let failure = error.localizedDescription
-                    self.logger.error(
-                        """
-                        gateway watchdog reconnect paused for non-recoverable auth failure \
-                        \(failure, privacy: .public)
-                        """)
+                if await self.recordAutomaticReconnectFailure(error, context: "gateway watchdog reconnect") {
                     continue
                 }
-                let wrapped = self.wrap(error, context: "gateway watchdog reconnect")
-                self.logger.error("gateway watchdog reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -1266,15 +1261,9 @@ extension GatewayChannelActor {
         do {
             try await self.connect()
         } catch {
-            if self.shouldPauseReconnectAfterAuthFailure(error) {
-                self.reconnectPausedForAuthFailure = true
-                let failure = error.localizedDescription
-                self.logger.error(
-                    "gateway reconnect paused for non-recoverable auth failure \(failure, privacy: .public)")
+            if await self.recordAutomaticReconnectFailure(error, context: "gateway reconnect") {
                 return
             }
-            let wrapped = self.wrap(error, context: "gateway reconnect")
-            self.logger.error("gateway reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             // A pre-socket provider failure leaves this generation owning retries.
             // Once a new socket exists, its disconnect transition owns the next attempt.
             if self.connectionGeneration == connectionGeneration {
@@ -1283,6 +1272,22 @@ extension GatewayChannelActor {
                 }
             }
         }
+    }
+
+    private func recordAutomaticReconnectFailure(_ error: Error, context: String) async -> Bool {
+        if self.shouldPauseReconnectAfterAuthFailure(error) {
+            self.reconnectPausedForAuthFailure = true
+            let failure = error.localizedDescription
+            self.logger.error(
+                "\(context, privacy: .public) paused for non-recoverable auth failure \(failure, privacy: .public)")
+            return true
+        }
+        let wrapped = self.wrap(error, context: context)
+        self.logger.error("\(context, privacy: .public) failed \(wrapped.localizedDescription, privacy: .public)")
+        if let tlsError = wrapped as? GatewayTLSValidationError {
+            await self.reconnectTLSFailureHandler?(tlsError)
+        }
+        return false
     }
 
     private func shouldRetryWithStoredDeviceToken(

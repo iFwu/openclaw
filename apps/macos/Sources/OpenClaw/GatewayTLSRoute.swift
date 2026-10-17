@@ -1,5 +1,22 @@
 import Foundation
 import OpenClawKit
+import OSLog
+
+enum GatewayTLSRenewalDecline: String, Sendable {
+    case configuredPin = "configured-pin"
+    case notPinMismatch = "not-pin-mismatch"
+    case systemTrustFailed = "system-trust-failed"
+    case insecureScheme = "not-wss"
+    case pinStoreMismatch = "pin-store-mismatch"
+    case hostMismatch = "host-mismatch"
+    case portMismatch = "port-mismatch"
+    case unsupportedHost = "not-loopback-or-tailscale"
+    case noTLSRoute = "no-tls-route"
+    case certificateUnavailable = "certificate-unavailable"
+    case noLearnedPin = "no-learned-pin"
+    case cancelled
+    case pinChanged = "pin-changed"
+}
 
 struct GatewayTLSRoute: Equatable, Sendable {
     let params: GatewayTLSParams
@@ -92,49 +109,92 @@ struct GatewayTLSRoute: Equatable, Sendable {
         return GatewayTLSStore.claimedFirstUseFingerprint(stableID: storeKey) == expectedFingerprint
     }
 
-    func permitsTrustedPinReplacement(
+    /// Pin renewal may refresh only learned TLS metadata, never configured trust or route identity.
+    static func hasSameTrustPolicy(_ lhs: GatewayTLSRoute?, _ rhs: GatewayTLSRoute?) -> Bool {
+        if lhs == rhs { return true }
+        guard let lhs, let rhs,
+              lhs.allowsTrustedPinReplacement, rhs.allowsTrustedPinReplacement
+        else { return false }
+        return lhs.params.required == rhs.params.required && lhs.params.storeKey == rhs.params.storeKey
+    }
+
+    func trustedPinReplacementDecline(
         url: URL,
-        failure: GatewayTLSValidationFailure) -> Bool
+        failure: GatewayTLSValidationFailure) -> GatewayTLSRenewalDecline?
     {
         let routeHost = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nonEmpty
         let challengedHost = failure.host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nonEmpty
-        guard self.allowsTrustedPinReplacement,
-              failure.kind == .pinMismatch,
-              failure.systemTrustOk,
-              url.scheme?.lowercased() == "wss",
-              failure.storeKey == self.params.storeKey,
-              let routeHost,
-              challengedHost == routeHost,
-              failure.port == (url.port ?? 443)
-        else { return false }
-
-        return LoopbackHost.isLoopback(routeHost) || routeHost == "ts.net" || routeHost.hasSuffix(".ts.net")
+        guard self.allowsTrustedPinReplacement else { return .configuredPin }
+        guard failure.kind == .pinMismatch else { return .notPinMismatch }
+        guard failure.systemTrustOk else { return .systemTrustFailed }
+        guard url.scheme?.lowercased() == "wss" else { return .insecureScheme }
+        guard failure.storeKey == self.params.storeKey else { return .pinStoreMismatch }
+        guard let routeHost, challengedHost == routeHost else { return .hostMismatch }
+        guard failure.port == (url.port ?? 443) else { return .portMismatch }
+        // Preserve the shipped September trust policy; October's broader CA-host policy is not a prerequisite.
+        guard LoopbackHost.isLoopback(routeHost) || routeHost == "ts.net" || routeHost.hasSuffix(".ts.net")
+        else { return .unsupportedHost }
+        return nil
     }
 }
 
 actor GatewayTLSRepairCoordinator {
     static let shared = GatewayTLSRepairCoordinator()
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.tls-repair")
 
     func repair(
         route: GatewayTLSRoute?,
         url: URL,
         failure: GatewayTLSValidationFailure) -> Bool
     {
-        guard let route,
-              route.permitsTrustedPinReplacement(url: url, failure: failure),
-              let storeKey = failure.storeKey,
-              let observedFingerprint = failure.observedFingerprint
-        else { return false }
+        Self.repairOnCurrentExecutor(route: route, url: url, failure: failure)
+    }
 
-        if GatewayTLSStore.loadFingerprint(stableID: storeKey) == observedFingerprint {
-            return true
-        }
+    /// Route admission and repair run on the caller's owner executor; the store owns the atomic CAS.
+    nonisolated static func repairOnCurrentExecutor(
+        route: GatewayTLSRoute?,
+        url: URL,
+        failure: GatewayTLSValidationFailure) -> Bool
+    {
+        guard let decline = self.repairDecline(route: route, url: url, failure: failure) else { return true }
+        let port = failure.port.map(String.init) ?? "default"
+        self.logger.notice(
+            """
+            gateway TLS pin renewal declined: \(decline.rawValue, privacy: .public) \
+            failure=\(failure.kind.rawValue, privacy: .public) \
+            host=\(failure.host, privacy: .public) port=\(port, privacy: .public)
+            """)
+        return false
+    }
+
+    private nonisolated static func repairDecline(
+        route: GatewayTLSRoute?,
+        url: URL,
+        failure: GatewayTLSValidationFailure) -> GatewayTLSRenewalDecline?
+    {
+        guard let route else { return .noTLSRoute }
+        if let decline = route.trustedPinReplacementDecline(url: url, failure: failure) { return decline }
+        guard let storeKey = failure.storeKey else { return .pinStoreMismatch }
+        guard let observedFingerprint = failure.observedFingerprint else { return .certificateUnavailable }
+        guard !Task.isCancelled else { return .cancelled }
+        let current = GatewayTLSStore.loadFingerprint(stableID: storeKey)
+        // Keychain reads can block; cancellation may arrive while they are in flight.
+        guard !Task.isCancelled else { return .cancelled }
+        if current == observedFingerprint { return nil }
         guard route.params.expectedFingerprint != nil,
               let failedFingerprint = failure.expectedFingerprint
-        else { return false }
-        return GatewayTLSStore.replaceFingerprint(
+        else { return .noLearnedPin }
+        if GatewayTLSStore.replaceFingerprint(
             observedFingerprint,
             ifCurrent: failedFingerprint,
             stableID: storeKey)
+        {
+            return nil
+        }
+        // A concurrent repair can win only with the identical trusted certificate.
+        guard !Task.isCancelled else { return .cancelled }
+        let winner = GatewayTLSStore.loadFingerprint(stableID: storeKey)
+        guard !Task.isCancelled else { return .cancelled }
+        return winner == observedFingerprint ? nil : .pinChanged
     }
 }

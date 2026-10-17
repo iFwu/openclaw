@@ -1,5 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
+import { readRetiredDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   UPDATE_ACTIVATION_TIMEOUT_REASON,
@@ -150,16 +150,10 @@ async function inspectStaleUpdateRuns(
     ) {
       note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
     }
-    const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(
+    const retiredWarnings = await readRetiredDeferredPluginMigrationWarnings(
       latest.steps.map((step) => step.detail),
     );
-    const warningSteps = latest.steps.filter((step) => {
-      const completedAtMs = step.detail ? resolvedWarnings.get(step.detail) : undefined;
-      return (
-        completedAtMs === undefined ||
-        completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
-      );
-    });
+    const warningSteps = latest.steps.filter((step) => !retiredWarnings.has(step.detail ?? ""));
     const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(

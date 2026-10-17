@@ -1,3 +1,4 @@
+import type { Model } from "openclaw/plugin-sdk/llm";
 import type { summarizeInStages } from "../compaction.js";
 import "./compaction-safeguard.js";
 
@@ -42,3 +43,19 @@ function getTestApi(): CompactionSafeguardTestApi {
 }
 
 export const testing = getTestApi();
+
+export function createAnthropicModelFixture(overrides: Partial<Model> = {}): Model {
+  return {
+    id: "claude-opus-4-5",
+    name: "Claude Opus 4.5",
+    provider: "anthropic",
+    api: "anthropic" as const,
+    baseUrl: "https://api.anthropic.com",
+    contextWindow: 200000,
+    maxTokens: 4096,
+    reasoning: false,
+    input: ["text"] as const,
+    cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  };
+}

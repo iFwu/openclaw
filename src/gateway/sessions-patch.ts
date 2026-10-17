@@ -97,6 +97,7 @@ import {
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import { resolveSessionPatchHarnessSelection } from "./sessions-patch-harness-runtime.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 type SessionPatchProjectionParams = {
@@ -618,12 +619,15 @@ function* projectSessionPatchSteps(
       }
       // Catalog membership does not guarantee an activatable harness. Reject before
       // committing the session so sticky defaults cannot retain an unusable selection.
-      const harnessSelection = {
-        provider: selection.provider,
-        modelId: selection.model,
-        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+      const harnessSelection = resolveSessionPatchHarnessSelection({
+        cfg,
+        selection,
         agentId: sessionAgentId,
-      };
+        sessionKey: storeKey,
+        entry: next,
+        preparedRuntime: params.preparedAgentRuntime,
+        fallbackRuntime: (provider, model) => resolveThinkingRuntime(provider, model, next),
+      });
       if (
         !readAcpSessionMetaForEntry({
           sessionKey: storeKey,

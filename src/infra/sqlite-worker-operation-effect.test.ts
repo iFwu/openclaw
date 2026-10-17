@@ -253,6 +253,56 @@ it("does not classify a completed rollback after an accepted host effect as safe
   }
 });
 
+it.each(["host", "worker"] as const)(
+  "retains an accepted host effect when %s detects a later admission timeout",
+  (timeoutOwner) => {
+    let now = process.hrtime.bigint();
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+    const effect = vi.fn(() => ({ accepted: true }));
+    const admission = createSqliteWorkerOperationAdmission((request, grant, grantEffect) => {
+      if (request.stage === "effect" && grantEffect) {
+        grantEffect(() => {}, effect);
+      } else {
+        now += 1_000_000_000n;
+        grant();
+      }
+    });
+    vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
+      if (timeout !== undefined && timeoutOwner === "worker") {
+        now += 1_000_000_000n;
+      } else {
+        admission.service();
+      }
+      return "ok";
+    });
+    const context = { port: admission.port };
+    try {
+      withSqliteWorkerOperationAdmission(context, () => {
+        expect(requestSqliteWorkerOperationEffect({})).toEqual({ accepted: true });
+        let failure: unknown;
+        try {
+          requestSqliteWorkerOperationAdmission({
+            stage: "commit",
+            facts: undefined,
+            deadlineMs: 1_000,
+          });
+        } catch (error) {
+          failure = error;
+        }
+        expect.soft(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+        settleSqliteWorkerOperationContext(context, "completed");
+      });
+      admission.service();
+      expect.soft(hasSqliteWorkerOutcomeUnknown(admission.failure)).toBe(true);
+      expect(admission.settlement).toEqual({ kind: "completed" });
+      expect(admission.committed).toBeUndefined();
+      expect(effect).toHaveBeenCalledOnce();
+    } finally {
+      admission.finish();
+    }
+  },
+);
+
 it("does not let an earlier handled domain refusal mask a later entered-effect physical close", () => {
   const prior = new Error("prior handled domain refusal");
   const admission = createSqliteWorkerOperationAdmission((request, _grant, grantEffect) => {

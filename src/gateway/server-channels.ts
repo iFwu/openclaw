@@ -56,7 +56,10 @@ import {
 } from "../plugins/http-registry.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -70,7 +73,10 @@ import {
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { channelStartFailurePatch } from "./channel-status-patches.js";
+import {
+  channelStartFailurePatch,
+  sanitizeAbortedTaskStatusPatch,
+} from "./channel-status-patches.js";
 import { waitForChannelStopGracefully } from "./channel-stop-timeout.js";
 import type {
   ChannelAccountStartOutcome,
@@ -84,6 +90,7 @@ import {
   runChannelAccountStartup,
   waitForChannelStartupHandoff,
 } from "./server-channel-startup.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 const RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,
@@ -122,38 +129,6 @@ type ChannelRuntimeStore = {
   runtimes: Map<string, ChannelAccountSnapshot>;
 };
 
-function sanitizeAbortedTaskStatusPatch(
-  patch: ChannelAccountSnapshot,
-  current: ChannelAccountSnapshot,
-): ChannelAccountSnapshot {
-  const next = { ...patch };
-  delete next.running;
-  delete next.restartPending;
-  delete next.reconnectAttempts;
-  delete next.lastStartAt;
-  delete next.lastStopAt;
-  delete next.lifecycle;
-
-  // A stale task may still emit a late "connected" heartbeat after the gateway
-  // has already aborted it and marked restart recovery pending. Do not let that
-  // old task make the stopped runtime look connected again.
-  if (next.connected === true) {
-    delete next.connected;
-    delete next.lastConnectedAt;
-    delete next.lastEventAt;
-    delete next.lastTransportActivityAt;
-  }
-
-  // Preserve actionable lifecycle diagnostics (for example a stop-timeout
-  // recovery error) against late stale-task status patches that merely clear
-  // plugin transport errors.
-  if (next.lastError === null && current.lastError) {
-    delete next.lastError;
-  }
-
-  return next;
-}
-
 type HealthMonitorConfig = {
   healthMonitor?: {
     enabled?: boolean;
@@ -177,6 +152,7 @@ type ChannelManagerOptions = {
   scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
+  resolveGatewayContext?: GatewayContextResolver;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
   channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
   /** Supply the complete createPluginRuntime().channel surface; partial stubs are unsupported. */
@@ -1156,7 +1132,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
   const startChannelInternal: ChannelManager["startChannel"] = (...args) =>
     runChannelAccountStartup(() =>
-      withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
+      withPluginRuntimeGatewayContextResolver(
+        opts.resolveGatewayContext,
+        () => withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
+        { inheritRequestScope: false },
+      ),
     );
 
   const stopChannelInRegistry = async (

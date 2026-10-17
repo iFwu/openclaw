@@ -5,12 +5,38 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  markGatewayRestartHandled,
+  resetGatewayRestartStateForInProcessRestart,
+  setGatewayRestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };
+
+export const restartTesting = {
+  resetRestartSignalState() {
+    resetGatewayRestartStateForInProcessRestart();
+    markGatewayRestartHandled();
+    setGatewayRestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
+    resetGatewayWorkAdmission();
+  },
+};
+
+export function createTestCronReconciliation() {
+  const complete = vi.fn<() => Promise<void>>(async () => {});
+  return {
+    arm: vi.fn<() => { complete: () => Promise<void> }>(() => ({ complete })),
+    complete,
+    invalidate: vi.fn(),
+  };
+}
 
 export function createTestConfigRevisionProjector(): ManagedGatewayConfigReloaderParams["configRevisionProjector"] {
   return {

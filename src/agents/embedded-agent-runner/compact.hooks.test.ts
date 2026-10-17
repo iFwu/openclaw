@@ -96,8 +96,10 @@ import {
 import {
   createCompactHooksAuthStorage,
   createCompactHooksPreparedModelRuntime,
+  mockCallArg,
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
+import { registerExplicitWorkspaceCompactionTest } from "./compact.hooks.workspace.test-support.js";
 import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -177,14 +179,6 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
     expect(actual[key]).toEqual(value);
   }
   return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
 }
 
 function plannedCompactionPluginSelections(
@@ -1096,6 +1090,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     afterEach(() => {
       vi.mocked(summaryBridge).mockReset().mockResolvedValue("summary");
       limitHistoryTurnsMock.mockImplementation(originalHistoryLimit);
+    });
+
+    registerExplicitWorkspaceCompactionTest({
+      getWorkspaceDir: () => TEST_WORKSPACE_DIR,
+      getSafeguard: () => safeguard,
+      compact: (config) => compactEmbeddedAgentSessionDirect(wrappedCompactionArgs({ config })),
     });
 
     it("returns a structured automatic retention skip without reporting compaction failure", async () => {

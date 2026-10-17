@@ -42,6 +42,7 @@ async function createToolResultHandler(
 ) {
   const factories = buildEmbeddedExtensionFactories({
     cfg: undefined,
+    workspaceDir: "/workspace",
     sessionManager: SessionManager.inMemory(),
     provider: "openai",
     modelId: "gpt-5.4",
@@ -88,6 +89,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     const sessionManager = SessionManager.inMemory();
     const factories = buildEmbeddedExtensionFactories({
       cfg: undefined,
+      workspaceDir: "/workspace",
       sessionManager,
       provider: "openai",
       modelId: "gpt-5.4",
@@ -158,6 +160,7 @@ describe("buildEmbeddedExtensionFactories", () => {
 
     const factories = buildEmbeddedExtensionFactories({
       cfg: undefined,
+      workspaceDir: "/workspace",
       sessionManager: SessionManager.inMemory(),
       provider: "openai",
       modelId: "gpt-5.4",
@@ -520,6 +523,7 @@ describe("buildEmbeddedExtensionFactories", () => {
 
     const factories = buildEmbeddedExtensionFactories({
       cfg: undefined,
+      workspaceDir: "/workspace",
       sessionManager: SessionManager.inMemory(),
       provider: "openai",
       modelId: "gpt-5.4",

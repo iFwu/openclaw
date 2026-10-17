@@ -310,18 +310,24 @@ describe("conversation reset confirmation", () => {
           ...createSessionsListResult(),
           sessions: [{ key: sessionKey, kind: "direct", sessionId: "session-1", sharingRole }],
         },
-        requestHandlers: { "chat.abort": { aborted: true } },
+        requestHandlers: { "sessions.abort": { status: "aborted" } },
       });
       const result = await dispatchChatSlashCommand(host, "stop", "", {
         sendResetMessage: vi.fn(),
       });
       expect(result).toBe(sharingRole === "owner" ? "completed" : "failed");
       expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
+      if (sharingRole === "owner") {
+        expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          key: sessionKey,
+          clearQueued: true,
+        });
+      }
     },
   );
 
   it.each([
-    ["stop", "chat.abort"],
+    ["stop", "sessions.abort"],
     ["reset", "chat.send"],
     ["clear", "sessions.reset"],
     ["compact", "sessions.compact"],

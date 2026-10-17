@@ -137,6 +137,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       getToolAbortSignal: () => toolBase.toolAbortSignal,
     },
     effectiveCwd,
+    effectiveWorkspace,
     getCurrentAttemptPluginMetadataSnapshot,
     initialSystemPrompt: state.systemPromptText,
     markStage: (stage) => prepStages.mark(stage),

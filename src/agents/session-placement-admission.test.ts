@@ -8,7 +8,11 @@ import {
   getBeforeAgentReplyAdmission,
   withBeforeAgentReplyObserver,
 } from "../plugins/before-agent-reply.js";
-import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  resetCommandLane,
+} from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
 import { closeAdmittedRunDelegatedAuthority } from "./admitted-run-context.js";
@@ -314,7 +318,14 @@ describe("local turn placement admission", () => {
       rotateAgentEventLifecycleGeneration();
     }
     try {
-      gate.resolve();
+      if (stage === "queued" && change === "cancelled") {
+        expect(getCommandLaneSnapshot(resolveSessionLane("agent:main:fenced"))).toMatchObject({
+          activeCount: 1,
+          queuedCount: 0,
+        });
+      } else {
+        gate.resolve();
+      }
       expect(await result).toMatchObject({
         name: change === "cancelled" ? "Error" : "AbortError",
       });

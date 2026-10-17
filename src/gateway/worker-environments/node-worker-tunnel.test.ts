@@ -292,6 +292,26 @@ describe("node worker tunnel manager", () => {
     }
   });
 
+  it("keeps sibling cleanup failures visible beside a disconnected node", async () => {
+    const nodeTransport = transport();
+    nodeTransport.getCurrentNode = async () => undefined;
+    const cleanupError = new Error("transfer cleanup failed");
+    const manager = await createManager(environment(), {
+      getTransport: () => nodeTransport,
+      workspaceTransfer: {
+        ...workspaceTransfer(),
+        close: vi.fn(async () => {}),
+        closeAll: vi.fn(async () => {
+          throw cleanupError;
+        }),
+      },
+    });
+
+    const failure = await manager.stopAll().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toContain(cleanupError);
+  });
+
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();
     const record = environment();

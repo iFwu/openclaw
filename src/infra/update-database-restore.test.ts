@@ -209,7 +209,11 @@ it("verifies every snapshot before moving either live database", async () => {
   await withFixture(async (fixture) => {
     await fixture.close();
     const assertUnchanged = await unchangedFiles(fixture);
-    await fs.appendFile(fixture.backup.databases[1]!.snapshotPath, "corrupt");
+    const snapshotPath = fixture.backup.databases[1]!.snapshotPath;
+    const corrupted = await fs.readFile(snapshotPath);
+    const offset = corrupted.length - 1;
+    corrupted.writeUInt8(corrupted.readUInt8(offset) ^ 1, offset);
+    await fs.writeFile(snapshotPath, corrupted);
     await expect(fixture.restore()).rejects.toThrow("Database snapshot changed");
     await assertUnchanged();
   });

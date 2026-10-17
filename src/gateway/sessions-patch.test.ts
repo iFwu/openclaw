@@ -15,36 +15,11 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
-
-async function applySessionsPatchToStore(
-  params: Omit<
-    Parameters<typeof projectSessionsPatchEntry>[0],
-    "existingEntry" | "isLabelInUse"
-  > & {
-    store: Record<string, SessionEntry>;
-    loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  },
-) {
-  const load = params.loadGatewayModelCatalog;
-  const projected = await projectSessionsPatchEntry({
-    ...params,
-    loadGatewayModelCatalogSnapshot: load
-      ? async () => {
-          const entries = await load();
-          return { entries, routeVariants: entries };
-        }
-      : undefined,
-    existingEntry: params.store[params.storeKey],
-    isLabelInUse: (label) =>
-      Object.entries(params.store).some(
-        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
-      ),
-  });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
-  }
-  return projected;
-}
+import {
+  applySessionsPatchToStore,
+  mainStoreEntry,
+  MAIN_SESSION_KEY,
+} from "./sessions-patch.test-support.js";
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionMetaForEntry: vi.fn(),
@@ -65,7 +40,6 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
-const MAIN_SESSION_KEY = "agent:main:main";
 const ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
 const ANTHROPIC_SONNET_ID = "claude-sonnet-4-6";
 const ANTHROPIC_OPUS_MODEL = "anthropic/claude-opus-4-6";
@@ -141,16 +115,6 @@ function expectPatchError(
     throw new Error(`Expected patch failure containing: ${message}`);
   }
   expect(result.error.message).toContain(message);
-}
-
-function mainStoreEntry(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
-  return {
-    [MAIN_SESSION_KEY]: {
-      sessionId: "sess",
-      updatedAt: 1,
-      ...overrides,
-    } as SessionEntry,
-  };
 }
 
 function mainAuthOverrideStore(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
@@ -1740,6 +1704,41 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.thinkingLevel).toBe("ultra");
+  });
+
+  test("accepts an OpenAI model whose implicit Codex harness has no enabled owner", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+      plugins: { entries: { codex: { enabled: false } } },
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg,
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.6-luna" },
+        loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-sol", "openai/gpt-5.6-luna"),
+      }),
+    );
+    expectModelSelection(entry, "openai", "gpt-5.6-luna");
+  });
+
+  test("rejects an explicit Codex pin that has no enabled owner", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } },
+        },
+      },
+      plugins: { entries: { codex: { enabled: false } } },
+    };
+    expectPatchError(
+      await runPatch({
+        cfg,
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.6-luna" },
+        loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-sol", "openai/gpt-5.6-luna"),
+      }),
+      'requires agent harness "codex"',
+    );
   });
 
   test("preserves stored Ultra when a model patch selects Codex Luna", async () => {

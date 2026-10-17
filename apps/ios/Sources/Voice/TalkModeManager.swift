@@ -2307,57 +2307,24 @@ final class TalkModeManager: NSObject {
         let sessionKey = self.mainSessionKey
         GatewayDiagnostics.log("talk.timeline realtime relay start attempt sessionKey=\(sessionKey)")
         let startedAt = Self.nowSeconds()
-        let relaySession = RealtimeTalkRelaySession(
-            transport: .ios(gateway: gateway, route: gatewayRoute),
-            options: RealtimeTalkRelaySession.Options(
-                sessionKey: sessionKey,
-                provider: self.realtimeProvider,
-                model: self.realtimeModelId,
-                voice: voiceChange?.voice ?? self.realtimeVoiceSelection?.selectedVoice ?? self.realtimeVoiceId,
-                supportsVoiceSelection: supportsVoiceSelection,
-                voiceChangeId: voiceChange?.changeid),
-            audioCapture: IOSRealtimeTalkAudioCapture(),
-            pcmPlayer: RealtimePCMStreamingAudioPlayer(),
-            onStatus: { [weak self] status in
-                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
-                self.handleRealtimeRelayStatus(status)
-            },
-            onIssue: { [weak self] relayIssue in
-                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
-                let issue = Self.runtimeIssue(from: relayIssue)
-                self.realtimeRelayStartIssue = issue
-                self.pendingRealtimeIssue = issue
-                self.gatewayTalkLastIssueText = issue.diagnosticSummary
-                self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
-                self.gatewayTalkActiveModeSubtitle = issue.displayMessage
-            },
-            onTermination: { [weak self] termination in
-                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
-                self.handleRealtimeRelayTermination(termination)
-            },
-            onSpeakingChanged: { [weak self] speaking in
-                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
-                self.isSpeaking = speaking
-                if speaking {
-                    self.isListening = false
-                    self.phase = .speaking
-                }
-            },
-            onInputLevel: { [weak self] level in
-                guard let self,
-                      self.realtimeRelayGeneration == relayGeneration,
-                      self.isListening
-                else { return }
-                // Same smoothing as the SFSpeech tap so route switches keep the wave feel.
-                self.micLevel = (self.micLevel * 0.80) + (level * 0.20)
-            },
-            onOutputLevel: { [weak self] level in
-                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
-                self.playbackLevel = level
-            })
-        self.realtimeRelaySession = relaySession
+        // The configured output route decides which audio engine owns playback.
         do {
             try configureOwnedRealtimeAudioSession()
+        } catch {
+            GatewayDiagnostics.log(
+                "talk.timeline realtime relay start failed elapsedMs=\(Self.elapsedMs(since: startedAt)) "
+                    + "error=\(error.localizedDescription)")
+            return .unavailable(realtimeIssue(from: error, phase: "start"))
+        }
+        let relaySession = self.makeRealtimeRelaySession(
+            gateway: gateway,
+            gatewayRoute: gatewayRoute,
+            sessionKey: sessionKey,
+            relayGeneration: relayGeneration,
+            supportsVoiceSelection: supportsVoiceSelection,
+            voiceChange: voiceChange)
+        self.realtimeRelaySession = relaySession
+        do {
             try await relaySession.start()
             guard self.realtimeRelaySession === relaySession,
                   self.realtimeRelayGeneration == relayGeneration,
@@ -2399,6 +2366,75 @@ final class TalkModeManager: NSObject {
                     + "error=\(error.localizedDescription)")
             return .unavailable(issue)
         }
+    }
+
+    private func makeRealtimeRelaySession(
+        gateway: GatewayNodeSession,
+        gatewayRoute: GatewayNodeSessionRoute,
+        sessionKey: String,
+        relayGeneration: UInt64,
+        supportsVoiceSelection: Bool,
+        voiceChange: TalkVoiceChangeEvent?) -> RealtimeTalkRelaySession
+    {
+        let voiceProcessing = TalkAudioRoute.isBuiltInOutput(
+            AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType))
+        GatewayDiagnostics.log("talk realtime audio: voiceProcessing=\(voiceProcessing)")
+        let audioCapture = IOSRealtimeTalkAudioCapture(voiceProcessing: voiceProcessing)
+        let pcmPlayer: RealtimePCMStreamingAudioPlayer
+        if voiceProcessing {
+            pcmPlayer = RealtimePCMStreamingAudioPlayer(sharedEngine: audioCapture.audioEngine)
+            audioCapture.onEngineRestarted = { pcmPlayer.resumePlaybackAfterEngineRestart() }
+        } else {
+            pcmPlayer = RealtimePCMStreamingAudioPlayer()
+        }
+        return RealtimeTalkRelaySession(
+            transport: .ios(gateway: gateway, route: gatewayRoute),
+            options: RealtimeTalkRelaySession.Options(
+                sessionKey: sessionKey,
+                provider: self.realtimeProvider,
+                model: self.realtimeModelId,
+                voice: voiceChange?.voice ?? self.realtimeVoiceSelection?.selectedVoice ?? self.realtimeVoiceId,
+                supportsVoiceSelection: supportsVoiceSelection,
+                voiceChangeId: voiceChange?.changeid),
+            audioCapture: audioCapture,
+            pcmPlayer: pcmPlayer,
+            onStatus: { [weak self] status in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.handleRealtimeRelayStatus(status)
+            },
+            onIssue: { [weak self] relayIssue in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                let issue = Self.runtimeIssue(from: relayIssue)
+                self.realtimeRelayStartIssue = issue
+                self.pendingRealtimeIssue = issue
+                self.gatewayTalkLastIssueText = issue.diagnosticSummary
+                self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
+                self.gatewayTalkActiveModeSubtitle = issue.displayMessage
+            },
+            onTermination: { [weak self] termination in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.handleRealtimeRelayTermination(termination)
+            },
+            onSpeakingChanged: { [weak self] speaking in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.isSpeaking = speaking
+                if speaking {
+                    self.isListening = false
+                    self.phase = .speaking
+                }
+            },
+            onInputLevel: { [weak self] level in
+                guard let self,
+                      self.realtimeRelayGeneration == relayGeneration,
+                      self.isListening
+                else { return }
+                // Same smoothing as the SFSpeech tap so route switches keep the wave feel.
+                self.micLevel = (self.micLevel * 0.80) + (level * 0.20)
+            },
+            onOutputLevel: { [weak self] level in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.playbackLevel = level
+            })
     }
 
     private func invalidateRealtimeVoiceSelection(preserveSelection: Bool = false) {
@@ -4604,8 +4640,8 @@ extension TalkModeManager {
     }
 
     static func configureRealtimeAudioSession(preferredInputDeviceID: String? = nil) throws {
-        // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
-        // output is less likely to be captured as fresh microphone input.
+        // Realtime Talk uses the voice-chat session mode; relay capture explicitly enables
+        // voice processing on built-in output so shared-engine playback is the echo reference.
         try self.configureAudioSession(
             mode: .voiceChat,
             preferredInputDeviceID: preferredInputDeviceID,

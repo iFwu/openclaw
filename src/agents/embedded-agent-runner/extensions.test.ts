@@ -18,7 +18,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
+function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir = "/workspace") {
   // The safeguard runtime attaches to the session manager, so tests keep the
   // same manager instance around for both factory construction and inspection.
   const sessionManager = {} as SessionManager;
@@ -61,6 +61,7 @@ describe("buildEmbeddedExtensionFactories", () => {
           defaults: { compaction: { mode: "safeguard" } },
         },
       } as OpenClawConfig,
+      workspaceDir: "/workspace",
       sessionManager,
       provider: "anthropic",
       modelId: "claude-sonnet-4-20250514",

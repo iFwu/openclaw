@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 /** Tests compaction safeguard summaries, quality audit, providers, and runtime settings. */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +28,7 @@ import {
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "./compaction-safeguard.js";
-import { testing } from "./compaction-safeguard.test-support.js";
+import { createAnthropicModelFixture, testing } from "./compaction-safeguard.test-support.js";
 
 const { compactionLogger } = vi.hoisted(() => {
   const logger = {
@@ -164,22 +164,6 @@ function stubSessionManager(): ExtensionContext["sessionManager"] {
     getSessionName: () => undefined,
   };
   return stub;
-}
-
-function createAnthropicModelFixture(overrides: Partial<Model> = {}): Model {
-  return {
-    id: "claude-opus-4-5",
-    name: "Claude Opus 4.5",
-    provider: "anthropic",
-    api: "anthropic" as const,
-    baseUrl: "https://api.anthropic.com",
-    contextWindow: 200000,
-    maxTokens: 4096,
-    reasoning: false,
-    input: ["text"] as const,
-    cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-    ...overrides,
-  };
 }
 
 function createQualityGuardSessionManager(): ExtensionContext["sessionManager"] {
@@ -1107,6 +1091,7 @@ describe("compaction-safeguard runtime registry", () => {
     buildEmbeddedExtensionFactories({
       cfg,
       sessionManager,
+      workspaceDir: "/workspace",
       provider: "anthropic",
       modelId: "claude-3-opus",
       model: {

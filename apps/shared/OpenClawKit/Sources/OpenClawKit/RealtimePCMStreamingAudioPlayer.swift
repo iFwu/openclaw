@@ -10,6 +10,7 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     typealias Completion = @Sendable () -> Void
     private let preparePlayback: (Double) throws -> Void
     private let scheduleFrame: (Data, Double, @escaping Completion) throws -> Void
+    private let startPlayback: () -> Void
     private let stopPlayback: () -> Void
     private let playbackTime: () -> Double?
 
@@ -22,17 +23,31 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     private var inputFinished = false
 
     public convenience init() {
-        let engine = AVAudioEngine()
+        self.init(engine: AVAudioEngine(), ownsEngine: true)
+    }
+
+    /// Capture owns the voice-processing engine and keeps it running during output cancellation.
+    public convenience init(sharedEngine: AVAudioEngine) {
+        self.init(engine: sharedEngine, ownsEngine: false)
+    }
+
+    private convenience init(engine: AVAudioEngine, ownsEngine: Bool) {
         let node = AVAudioPlayerNode()
         engine.attach(node)
         var format: AVAudioFormat?
         self.init(
             preparePlayback: { sampleRate in
                 node.stop()
-                engine.stop()
+                if ownsEngine { engine.stop() }
                 engine.disconnectNodeOutput(node)
+                #if os(iOS)
+                // iOS's mixer rejects Int16 input. The relay wire format remains PCM16LE.
+                let commonFormat: AVAudioCommonFormat = .pcmFormatFloat32
+                #else
+                let commonFormat: AVAudioCommonFormat = .pcmFormatInt16
+                #endif
                 guard let nextFormat = AVAudioFormat(
-                    commonFormat: .pcmFormatInt16,
+                    commonFormat: commonFormat,
                     sampleRate: sampleRate,
                     channels: 1,
                     interleaved: false)
@@ -41,33 +56,27 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                 }
                 format = nextFormat
                 engine.connect(node, to: engine.mainMixerNode, format: nextFormat)
-                engine.prepare()
-                try engine.start()
-                node.play()
+                // Capture restarts a shared engine after voice-processing reconfiguration.
+                if ownsEngine {
+                    engine.prepare()
+                    try engine.start()
+                }
             },
             scheduleFrame: { data, _, completion in
                 guard let format else {
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 2)
                 }
-                let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-                      let channel = buffer.int16ChannelData?[0]
-                else {
-                    throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
-                }
-                buffer.frameLength = frames
-                data.copyBytes(
-                    to: UnsafeMutableRawBufferPointer(
-                        start: channel,
-                        count: data.count))
+                let buffer = try Self.pcmBuffer(data: data, format: format)
                 node.scheduleBuffer(
                     buffer,
                     completionCallbackType: .dataPlayedBack)
                 { _ in completion() }
             },
+            // Starting a player node on a stopped shared engine raises an exception.
+            startPlayback: { if engine.isRunning { node.play() } },
             stopPlayback: {
                 node.stop()
-                engine.stop()
+                if ownsEngine { engine.stop() }
             },
             playbackTime: {
                 guard let renderTime = node.lastRenderTime,
@@ -80,11 +89,13 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     init(
         preparePlayback: @escaping (Double) throws -> Void,
         scheduleFrame: @escaping (Data, Double, @escaping Completion) throws -> Void,
+        startPlayback: @escaping () -> Void = {},
         stopPlayback: @escaping () -> Void,
         playbackTime: @escaping () -> Double?)
     {
         self.preparePlayback = preparePlayback
         self.scheduleFrame = scheduleFrame
+        self.startPlayback = startPlayback
         self.stopPlayback = stopPlayback
         self.playbackTime = playbackTime
     }
@@ -106,6 +117,7 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         }
         return await withCheckedContinuation { continuation in
             self.playbackContinuation = continuation
+            self.startPlayback()
             self.inputTask = Task { @MainActor [weak self] in
                 await self?.consume(stream: stream, sampleRate: sampleRate, generation: generation)
             }
@@ -118,6 +130,35 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
             finished: false,
             interruptedAt: interruptedAt), cancelInput: true)
         return interruptedAt
+    }
+
+    /// Capture calls this after a shared-engine restart, which stops attached player nodes.
+    public func resumePlaybackAfterEngineRestart() {
+        guard self.playbackContinuation != nil else { return }
+        self.startPlayback()
+    }
+
+    static func pcmBuffer(data: Data, format: AVAudioFormat) throws -> AVAudioPCMBuffer {
+        let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+            throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
+        }
+        buffer.frameLength = frames
+        if let channel = buffer.int16ChannelData?[0] {
+            data.copyBytes(to: UnsafeMutableRawBufferPointer(start: channel, count: data.count))
+        } else if let channel = buffer.floatChannelData?[0] {
+            data.withUnsafeBytes { raw in
+                for index in 0..<Int(frames) {
+                    let sample = Int16(littleEndian: raw.loadUnaligned(
+                        fromByteOffset: index * MemoryLayout<Int16>.size,
+                        as: Int16.self))
+                    channel[index] = Float(sample) / 32768
+                }
+            }
+        } else {
+            throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
+        }
+        return buffer
     }
 
     private func consume(
