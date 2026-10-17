@@ -33,6 +33,13 @@ import {
   stringFlag,
 } from "./lib/arg-utils.mts";
 import {
+  describePlanCost,
+  estimateChangedCheckPlan,
+  formatEstimatedDuration,
+  recordPlanCommandTiming,
+  resolveValidationStateDir,
+} from "./lib/changed-check-plan-estimate.mts";
+import {
   centralFullLintCommands,
   createCiLintCommands,
   fullLintOwners,
@@ -134,6 +141,16 @@ const CONTROL_UI_I18N_VERIFY_PATH_RE =
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const ROOT_TEST_TS_CONFIG = "test/tsconfig/tsconfig.test.root.json";
 const TARGETED_LINT_PATH_LIMIT = 8;
+
+// Local plan history only sharpens estimates; an unavailable state directory
+// must never fail the check itself.
+function resolvePlanTimingHistoryFile(): string | undefined {
+  try {
+    return path.join(resolveValidationStateDir(), "plan-timings.json");
+  } catch {
+    return undefined;
+  }
+}
 const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
@@ -1472,8 +1489,17 @@ export async function runChangedCheck(
       )
     : undefined;
   const timings: ChangedCheckTiming[] = [];
+  const historyFile = resolvePlanTimingHistoryFile();
   for (const command of plan.commands) {
+    const startedAt = performance.now();
     const status = await runPlanCommand(command, timings, coreTestCheck);
+    if (historyFile) {
+      try {
+        recordPlanCommandTiming(command, performance.now() - startedAt, { historyFile });
+      } catch {
+        // Estimation stays advisory; never mask the command result.
+      }
+    }
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -1511,8 +1537,18 @@ function printPlan(
     console.error(`${prefix} ${reason}`);
   }
   if (options.dryRun) {
-    for (const command of plan.commands) {
-      console.error(`${prefix} would run: ${formatPlanCommand(command)}`);
+    const estimate = estimateChangedCheckPlan(plan.commands, {
+      historyFile: resolvePlanTimingHistoryFile(),
+    });
+    const unknown = estimate.unknownCommands;
+    console.error(
+      `${prefix} estimate: ${plan.commands.length} planned command(s), total ${formatEstimatedDuration(estimate.estimatedMs)}` +
+        (unknown > 0 ? `, ${unknown} without local history` : ""),
+    );
+    for (const [index, command] of plan.commands.entries()) {
+      console.error(
+        `${prefix} would run: ${formatPlanCommand(command)}  [${describePlanCost(estimate.commands[index]!)}]`,
+      );
     }
   }
 }

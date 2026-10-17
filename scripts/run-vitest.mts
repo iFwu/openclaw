@@ -17,6 +17,7 @@ import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { recordPassingTestFiles } from "./lib/test-run-ledger.mts";
 import {
   prepareE2eVitestRuntime,
   resolveVitestCliEntry,
@@ -370,6 +371,15 @@ function collectExplicitDirectoryTargetArgs(
 
 function collectExplicitTestFileArgs(argv: string[]): string[] {
   return collectExplicitFileTargetArgs(argv, isExplicitTestFileArg);
+}
+
+// Local commit-hint evidence only: a ledger failure must never change test status.
+function recordExplicitTestRuns(files: readonly string[]): void {
+  try {
+    recordPassingTestFiles(files);
+  } catch {
+    // Ignore: the run's result stands on its own.
+  }
 }
 
 /**
@@ -1104,6 +1114,10 @@ export async function runVitest(
       failedExitCode ||= exitCode;
     }
     process.exitCode = failedExitCode;
+    if (failedExitCode === 0) {
+      // Only explicit targets prove which files actually executed and passed.
+      recordExplicitTestRuns(invocations.flatMap((args) => collectExplicitTestFileArgs(args)));
+    }
   } finally {
     try {
       await workers?.dispose().catch((error: unknown) => {
