@@ -5,9 +5,9 @@ import path from "node:path";
 import type { ChangedCheckCommand } from "./changed-ci-lint-commands.mts";
 
 /** Resource profile a planned command needs to complete on this host. */
-export type PlanBudgetProfile = "shared-host" | "dedicated-test" | "dedicated-heavy";
+type PlanBudgetProfile = "shared-host" | "dedicated-test" | "dedicated-heavy";
 
-export type PlanCostClass = "guard" | "audit" | "lint" | "typecheck" | "test" | "build";
+type PlanCostClass = "guard" | "audit" | "lint" | "typecheck" | "test" | "build";
 
 export type PlanCommandCost = {
   costClass: PlanCostClass;

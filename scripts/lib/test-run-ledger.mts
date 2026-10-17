@@ -44,7 +44,7 @@ function writeLedger(file: string, ledger: Ledger) {
 }
 
 /** Hash a path's staged blob so the ledger tracks content, not timestamps. */
-export function hashFileBytes(bytes: Buffer | string) {
+function hashFileBytes(bytes: Buffer | string) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
