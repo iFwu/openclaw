@@ -9,6 +9,7 @@ import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import { isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
+import { recordPassingTestFiles } from "./lib/test-run-ledger.mts";
 import {
   prepareE2eVitestRuntime,
   prepareVitestRuntime,
@@ -624,6 +625,14 @@ export async function runTestProjects(
     }
     if (result.exitCode !== 0) {
       process.exitCode = result.exitCode;
+    }
+    // Local commit-hint evidence only: explicit targets prove which files ran.
+    if (!process.exitCode) {
+      try {
+        recordPassingTestFiles(targetArgs);
+      } catch {
+        // Advisory only; never turn a passing suite into a failure.
+      }
     }
   } catch (error) {
     reportFailure = String(error);
