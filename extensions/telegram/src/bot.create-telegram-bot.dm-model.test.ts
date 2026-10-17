@@ -1,3 +1,4 @@
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, it, vi } from "vitest";
@@ -16,8 +17,33 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
 
 it("the registered DM picker remembers a manual selection and reports the actual scope", async () => {
   const storePath = harness.telegramBotDepsForTest.resolveStorePath(undefined, { agentId: "main" });
+  const baseUrl = "https://fixture.invalid/v1";
+  const modelCatalog: ModelCatalogEntry[] = ["gpt-4o", "gpt-5"].map((id) => ({
+    provider: "openai",
+    id,
+    name: id,
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl,
+  }));
   const cfg: OpenClawConfig = {
     agents: { defaults: { model: "openai/gpt-4o" } },
+    models: {
+      providers: {
+        openai: {
+          api: "openai-completions",
+          baseUrl,
+          models: modelCatalog.map(({ id, name }) => ({
+            id,
+            name,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
+          })),
+        },
+      },
+    },
     session: { store: storePath, dmScope: "per-channel-peer" },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], autoTopicLabel: false } },
   };
@@ -33,10 +59,7 @@ it("the registered DM picker remembers a manual selection and reports the actual
     providers: ["openai"],
     resolvedDefault: { provider: "openai", model: "gpt-4o" },
     modelNames: new Map(),
-    modelCatalog: [
-      { provider: "openai", id: "gpt-4o", name: "Original", reasoning: false },
-      { provider: "openai", id: "gpt-5", name: "Selected", reasoning: false },
-    ],
+    modelCatalog,
   });
   const bot = await createBot(false, true, cfg, true);
   for (const [index, model] of ["gpt-5", "gpt-4o"].entries()) {
@@ -56,6 +79,11 @@ it("the registered DM picker remembers a manual selection and reports the actual
         },
       },
     });
+    const receipts = apiCalls.mock.calls.filter(([method]) => method === "editMessageText");
+    expect(receipts).toHaveLength(index + 1);
+    expect(receipts.at(-1)?.[1]).toMatchObject({
+      text: expect.stringMatching(/^✅ Model /),
+    });
     const parent = getSessionEntry({ storePath, sessionKey: parentKey });
     if (model === "gpt-5") {
       expect(parent?.modelOverride).toBe("gpt-5");
@@ -68,6 +96,9 @@ it("the registered DM picker remembers a manual selection and reports the actual
   for (const [, payload] of edits) {
     expect(payload).toMatchObject({
       text: expect.stringContaining("new topics in this private chat"),
+    });
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("Runtime set to <b>openclaw</b>"),
     });
   }
   expect(cfg.agents?.defaults?.model).toBe("openai/gpt-4o");
