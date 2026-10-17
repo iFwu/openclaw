@@ -8,22 +8,71 @@ export function createTestSessionResolver(state: {
   storePathMock: string | undefined;
 }) {
   return () => {
-    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
+    const sessionEntry: SessionEntry = (state.sessionEntryMock ??= {
       sessionId: "session-1",
       updatedAt: Date.now(),
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     const sessionKey = state.resolvedSessionKeyMock ?? "agent:main:main";
     return {
       sessionId: "session-1",
       sessionKey,
       sessionEntry,
       sessionAgentId: resolveAgentIdFromSessionKey(sessionKey, "default"),
-      storePath: state.storePathMock,
+      storePath: state.storePathMock ?? "/tmp/openclaw-sessions.json",
       isNewSession: false,
       persistedThinking:
         typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
       persistedVerbose: undefined,
+    };
+  };
+}
+
+export function createTestSessionEntryReader(
+  readInWorker: typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker,
+  readEntry: (scope: Parameters<typeof readInWorker>[0]) => SessionEntry | undefined,
+): typeof readInWorker {
+  return async (scope, assertCurrent, consume) => {
+    // These two logical stores are backed by the fixture's in-memory entries.
+    // Real temporary-database cases retain the native worker and its custody.
+    if (
+      scope.storePath !== "/tmp/openclaw-sessions.json" &&
+      scope.storePath !== "/tmp/openclaw-session-store.json"
+    ) {
+      return readInWorker(scope, assertCurrent, consume);
+    }
+    assertCurrent();
+    const result = await consume(
+      { ok: true, value: readEntry(scope) },
+      { kind: "native", assertCurrent },
+    );
+    assertCurrent();
+    return result;
+  };
+}
+
+export function createTestAgentDeliveryPlan(
+  resolveContext: typeof import("../utils/delivery-context.read.js").deliveryContextFromSession,
+) {
+  return (params: {
+    accountId?: string;
+    explicitThreadId?: string | number;
+    explicitTo?: string;
+    requestedChannel?: string;
+    sessionEntry?: SessionEntry;
+  }) => {
+    const context = resolveContext(params.sessionEntry);
+    const channel = params.requestedChannel ?? context?.channel ?? "internal";
+    const to = params.explicitTo ?? context?.to;
+    const accountId = params.accountId ?? context?.accountId;
+    const threadId = params.explicitThreadId ?? context?.threadId;
+    return {
+      baseDelivery: {},
+      resolvedChannel: channel,
+      resolvedTo: to,
+      resolvedAccountId: accountId,
+      resolvedThreadId: threadId,
+      deliveryTargetMode: params.explicitTo ? "explicit" : to ? "implicit" : undefined,
     };
   };
 }
@@ -57,18 +106,25 @@ export function createTestAgentScope(
   params: {
     hasLegacyAutoFallbackWithoutOriginMock: (entry: unknown) => boolean;
     resolveAutoFallbackPrimaryProbeMock: (params: unknown) => unknown;
-    resolveEffectiveModelFallbacksMock: (...args: unknown[]) => unknown;
+    resolveModelFallbackAvailabilityMock: (...args: unknown[]) => unknown;
   },
   native: Pick<
     typeof import("./agent-scope.js"),
     | "resolveAgentModelFallbacksOverride"
     | "resolveSubagentSpawnModelFallbacksOverride"
     | "resolveModelFallbackAvailability"
+    | "modelFallbackOverrideFromAvailability"
   >,
 ) {
   return {
     resolveAgentModelFallbacksOverride: native.resolveAgentModelFallbacksOverride,
-    resolveModelFallbackAvailability: native.resolveModelFallbackAvailability,
+    resolveModelFallbackAvailability: (
+      ...args: Parameters<typeof native.resolveModelFallbackAvailability>
+    ) => {
+      params.resolveModelFallbackAvailabilityMock(...args);
+      return native.resolveModelFallbackAvailability(...args);
+    },
+    modelFallbackOverrideFromAvailability: native.modelFallbackOverrideFromAvailability,
     resolveSubagentSpawnModelFallbacksOverride: native.resolveSubagentSpawnModelFallbacksOverride,
     clearAutoFallbackPrimaryProbeSelection: vi.fn(),
     entryMatchesAutoFallbackPrimaryProbe: () => true,
@@ -88,7 +144,6 @@ export function createTestAgentScope(
       return typeof raw === "string" ? raw : raw?.primary;
     },
     resolveDefaultAgentId: () => "default",
-    resolveEffectiveModelFallbacks: params.resolveEffectiveModelFallbacksMock,
     resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
     resolveSessionAgentId: () => "default",
     resolveAgentSkillsFilter: () => undefined,
