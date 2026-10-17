@@ -4,7 +4,9 @@ import { prepareTelegramTopicLabel, runTelegramTopicLabelOnce } from "./auto-top
 import {
   createBot,
   createContext,
+  deliverReplies,
   describeTelegramDispatch,
+  dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   generateTopicLabel,
   loadSessionStore,
@@ -73,16 +75,33 @@ describeTelegramDispatch("DM topic labels", () => {
   });
 
   it("defers slash-prefixed input until real content even after a command ran a turn", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true, counts: { block: 0, final: 1, tool: 0 } };
+    });
     const bot = createBot();
     const editForumTopic = vi.spyOn(bot.api, "editForumTopic");
     const context = createContext();
     const sessionKey = "agent:main:telegram:direct:123:thread:123:777";
+    context.route.agentId = "main";
+    context.route.sessionKey = sessionKey;
     context.ctxPayload = {
       ...context.ctxPayload,
       CommandAuthorized: true,
       SessionKey: sessionKey,
-      RawBody: "  /unknown arguments",
     };
+    const setMessage = (text: string, id: number) => {
+      Object.assign(context.ctxPayload, {
+        Body: text,
+        BodyForAgent: text,
+        BodyForCommands: text,
+        CommandBody: text,
+        RawBody: text,
+        MessageSid: String(id),
+      });
+      context.msg.message_id = id;
+    };
+    setMessage("  /unknown arguments", 456);
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "command-first" },
     });
@@ -98,7 +117,7 @@ describeTelegramDispatch("DM topic labels", () => {
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "command-first", systemSent: true },
     });
-    context.ctxPayload.RawBody = "/model openai/example";
+    setMessage("/model openai/example", 457);
     await dispatchWithContext({
       bot,
       context,
@@ -112,18 +131,20 @@ describeTelegramDispatch("DM topic labels", () => {
       renamed.resolve();
       return true;
     });
-    context.ctxPayload.RawBody = "Investigate invoice processing";
+    setMessage("Investigate invoice processing", 458);
     await dispatchWithContext({
       bot,
       context,
       streamMode: "off",
       telegramCfg: { autoTopicLabel: true },
     });
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(3);
+    expect(deliverReplies).toHaveBeenCalledTimes(3);
     await renamed.promise;
     expect(generateTopicLabel).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ userMessage: "Investigate invoice processing" }),
     );
-    context.ctxPayload.RawBody = "Continue investigating";
+    setMessage("Continue investigating", 459);
     await dispatchWithContext({
       bot,
       context,

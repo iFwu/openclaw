@@ -171,6 +171,7 @@ export async function runForkCiCheckTask(
         ...process.env,
         OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
         OPENCLAW_VITEST_MAX_WORKERS: "1",
+        OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
       },
     });
   }
