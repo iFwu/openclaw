@@ -701,9 +701,11 @@ async function handleTelegramModelCallback(params: {
       ? "reset to default"
       : `changed to <b>${escapeTelegramHtml(selection.provider)}/${escapeTelegramHtml(selection.model)}</b>`;
     const runtimeText = `Runtime set to <b>${escapeTelegramHtml(applied.agentRuntime)}</b>${isDefaultSelection ? " from configured policy" : ""}.`;
-    const scopeText = isDefaultSelection
-      ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
-      : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
+    const scopeText = applied.dmTopicDefaultUpdated
+      ? `Model selection saved for this topic and new topics in this private chat. ${defaultAuthProfileNotice ?? ""} ${runtimeText} The agent default in openclaw.json is unchanged.`
+      : isDefaultSelection
+        ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
+        : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
     await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
       parse_mode: "HTML",
     });

@@ -61,8 +61,12 @@ export function formatModelSelectionScopeAck(params: {
   isDefault: boolean;
   label: string;
   configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
+  dmTopicDefaultUpdated?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
 }): string {
+  if (params.dmTopicDefaultUpdated && !params.stickyModelSelectionTarget) {
+    return `Model set to ${params.label} for this session and new topics in this Telegram private chat; configured default unchanged.`;
+  }
   if (params.isDefault && !params.stickyModelSelectionTarget) {
     return `Session model reset to configured default (${params.label}).`;
   }

@@ -21,6 +21,7 @@ import {
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { withTelegramDmModelSelection } from "../../sessions/telegram-dm-model-selection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -128,25 +129,33 @@ function createSessionPatchHandler(
         });
         void preparingOperator.catch(() => {});
       }
-      const executed = await executeSessionPatchMutations({
-        client,
-        context,
-        diagnostics,
-        operatorAuthority: preparingOperator,
-        patch,
-        targets: targets.map((target) => ({
-          ...target,
-          commitGuard: createCommitGuard(target.key.trim(), () => {
-            assertCurrent();
-            if (request.many) {
-              sessionMutationAuthorization?.assertTargetCurrent({
-                sessionKey: target.key.trim(),
-                ...(target.agentId ? { agentId: target.agentId } : {}),
-              });
-            }
-          }),
-        })),
-      });
+      const execute = () =>
+        executeSessionPatchMutations({
+          client,
+          context,
+          diagnostics,
+          operatorAuthority: preparingOperator,
+          patch,
+          targets: targets.map((target) => ({
+            ...target,
+            commitGuard: createCommitGuard(target.key.trim(), () => {
+              assertCurrent();
+              if (request.many) {
+                sessionMutationAuthorization?.assertTargetCurrent({
+                  sessionKey: target.key.trim(),
+                  ...(target.agentId ? { agentId: target.agentId } : {}),
+                });
+              }
+            }),
+          })),
+        });
+      const executed =
+        patch.model === undefined
+          ? await execute()
+          : await withTelegramDmModelSelection(
+              targets.map((target) => target.key),
+              execute,
+            );
       if (!executed.ok) {
         respond(false, undefined, executed.error);
         return;

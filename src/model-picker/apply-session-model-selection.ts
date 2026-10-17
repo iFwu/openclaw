@@ -46,6 +46,10 @@ import {
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  rememberTelegramDmModelSelection,
+  withTelegramDmModelSelection,
+} from "../sessions/telegram-dm-model-selection.js";
 
 export type SessionModelSelectionRequest = {
   provider: string;
@@ -79,6 +83,7 @@ export type ApplySessionModelSelectionParams = {
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
   markLiveSwitchPending: true;
+  rememberForNewDmTopics?: boolean;
 };
 
 export type InternalApplySessionModelSelectionParams = ApplySessionModelSelectionParams & {
@@ -95,6 +100,7 @@ export type ApplySessionModelSelectionResult =
       changed: boolean;
       contextTokens: number;
       configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
+      dmTopicDefaultUpdated?: true;
       runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
       thinkingRemap?: {
         from: ThinkLevel;
@@ -197,7 +203,15 @@ function resolveActivePlacementModelSelectionError(params: {
 }
 
 /** Applies one validated picker selection to the authoritative live session. */
-export async function applySessionModelSelectionInternal(
+export function applySessionModelSelectionInternal(
+  params: InternalApplySessionModelSelectionParams,
+): Promise<ApplySessionModelSelectionResult> {
+  return withTelegramDmModelSelection([params.sessionKey], () =>
+    applySessionModelSelection(params),
+  );
+}
+
+async function applySessionModelSelection(
   params: InternalApplySessionModelSelectionParams,
 ): Promise<ApplySessionModelSelectionResult> {
   const startingStoreEntry = params.sessionStore[params.sessionKey];
@@ -441,19 +455,6 @@ export async function applySessionModelSelectionInternal(
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
   const changed = applied.changed || thinkingRemap !== undefined;
-  operatorScope?.assertCurrent();
-  assertOperatorModelAllowed(operatorAuthority, request);
-  const configuredDefaultUpdate =
-    params.canPersistStickyModelSelection === true &&
-    (!request.isDefault || params.stickyModelSelectionTarget)
-      ? persistStickyModelSelectionBestEffort({
-          agentId: params.agentId,
-          model: effectiveModelRef,
-          // The shipped SDK opt-in resolves its effective layer inside the config mutation.
-          // Ordinary chat callers supply an authorized target or leave persistence disabled.
-          target: params.stickyModelSelectionTarget ?? "effective",
-        })
-      : undefined;
   if (changed) {
     emitSessionLifecycleEvent({
       sessionKey: params.sessionKey,
@@ -490,6 +491,35 @@ export async function applySessionModelSelectionInternal(
     });
   }
 
+  const dmTopicDefaultUpdated =
+    params.rememberForNewDmTopics !== false &&
+    (await rememberTelegramDmModelSelection({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      sessionStore: params.sessionStore,
+      selection: request,
+      assertCurrent: () => {
+        const error = validateSelection();
+        if (error) throw new Error(error);
+      },
+    }));
+
+  const currentError = validateSelection();
+  if (currentError) return { status: "rejected", reason: "not-allowed", message: currentError };
+  operatorScope?.assertCurrent();
+  assertOperatorModelAllowed(operatorAuthority, request);
+  const configuredDefaultUpdate =
+    params.canPersistStickyModelSelection === true &&
+    (!request.isDefault || params.stickyModelSelectionTarget)
+      ? persistStickyModelSelectionBestEffort({
+          agentId: params.agentId,
+          model: effectiveModelRef,
+          // The shipped SDK opt-in resolves its effective layer inside the config mutation.
+          // Ordinary chat callers supply an authorized target or leave persistence disabled.
+          target: params.stickyModelSelectionTarget ?? "effective",
+        })
+      : undefined;
   const contextProvider = resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: agentRuntime,
@@ -510,6 +540,7 @@ export async function applySessionModelSelectionInternal(
       modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
     ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
+    ...(dmTopicDefaultUpdated ? { dmTopicDefaultUpdated: true as const } : {}),
     ...(applied.runtimeChange ? { runtimeChange: applied.runtimeChange } : {}),
     ...(thinkingRemap ? { thinkingRemap } : {}),
   };

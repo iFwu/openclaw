@@ -82,6 +82,19 @@ describe("mixed inline directives / model selection", () => {
   let lifecycleEvents: SessionLifecycleEvent[];
   let unsubscribeLifecycle: () => void;
 
+  it("does not reacquire its parent lease while acknowledging ignored mixed directives", async () => {
+    for (const topic of [42, 43]) {
+      const { result } = await applyMixedDirectives({
+        body: "Please reply\n/trace raw",
+        sessionKey: `agent:main:telegram:direct:123:thread:123:${topic}`,
+      });
+      expect(result).toMatchObject({
+        kind: "continue",
+        directiveAck: { text: expect.stringContaining("restricted to owners") },
+      });
+    }
+  });
+
   beforeEach(() => {
     lifecycleEvents = [];
     unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));

@@ -8,7 +8,6 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
-import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -22,6 +21,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { withTelegramDmModelSelection } from "../../sessions/telegram-dm-model-selection.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -32,6 +32,7 @@ import {
   maybeHandleUnexpectedDirectiveArguments,
   resolveInvalidExecDirectiveMessage,
 } from "./directive-handling.arguments.js";
+import { persistDirectiveModelDefaults } from "./directive-handling.model-defaults.js";
 import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
@@ -64,7 +65,10 @@ import {
 import { refreshQueuedFollowupSession } from "./queue.js";
 
 /** Handles inline directives that can be acknowledged without a model turn. */
-export async function handleDirectiveOnly(
+export const handleDirectiveOnly = (params: HandleDirectiveOnlyParams) =>
+  withTelegramDmModelSelection([params.sessionKey], () => handleDirectiveOnlyCore(params));
+
+async function handleDirectiveOnlyCore(
   params: HandleDirectiveOnlyParams,
 ): Promise<ReplyPayload | undefined> {
   const {
@@ -105,7 +109,7 @@ export async function handleDirectiveOnly(
       ignoredDirective,
       persistenceState: params.persistenceState,
       applyRemainingDirectives: (remainingDirectives) =>
-        handleDirectiveOnly({ ...params, directives: remainingDirectives }),
+        handleDirectiveOnlyCore({ ...params, directives: remainingDirectives }),
     });
   const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
   if (directives.hasTraceDirective && !params.senderIsOwner && !delegatedTraceAllowed) {
@@ -435,7 +439,7 @@ export async function handleDirectiveOnly(
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;
-  let configuredDefaultUpdate: ReturnType<typeof persistStickyModelSelectionBestEffort> | undefined;
+  let modelDefaults: Awaited<ReturnType<typeof persistDirectiveModelDefaults>> = {};
   const touchedSessionFields = resolveDirectiveTouchedSessionFields({
     directives,
     allowPrivilegedPersistence,
@@ -512,21 +516,6 @@ export async function handleDirectiveOnly(
         return rejectModelTransaction(errorText);
       }
     }
-    if (
-      modelSelection &&
-      params.canPersistStickyModelSelection === true &&
-      params.stickyModelSelectionTarget
-    ) {
-      const modelError = modelResolution.validateModelSelection?.();
-      if (modelError) {
-        return rejectModelTransaction(modelError);
-      }
-      configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
-        agentId: activeAgentId,
-        model: `${modelSelection.provider}/${modelSelection.model}`,
-        target: params.stickyModelSelectionTarget,
-      });
-    }
     // List projections must observe committed settings, not only model selections.
     const sessionSettingsUpdated = directiveFieldsUpdated || shouldRemapUnsupportedThinkLevel;
     if (sessionKey && (sessionSettingsUpdated || modelSelectionUpdated)) {
@@ -565,6 +554,15 @@ export async function handleDirectiveOnly(
           agentRuntime: resolveThinkingRuntime(sessionEntry),
         },
       });
+    }
+    modelDefaults = await persistDirectiveModelDefaults({
+      ...params,
+      agentId: activeAgentId,
+      modelSelection,
+      validateSelection,
+    });
+    if (modelDefaults.errorText) {
+      return rejectModelTransaction(modelDefaults.errorText);
     }
   }
   if (modelSelection) {
@@ -665,7 +663,7 @@ export async function handleDirectiveOnly(
       formatModelSelectionScopeAck({
         isDefault: modelSelection.isDefault,
         label: labelWithAlias,
-        configuredDefaultUpdate,
+        ...modelDefaults,
         ...(params.stickyModelSelectionTarget
           ? { stickyModelSelectionTarget: params.stickyModelSelectionTarget }
           : {}),

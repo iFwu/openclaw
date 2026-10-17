@@ -23,7 +23,10 @@ import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
+import {
+  canPersistSessionDirectiveDefaults,
+  formatModelSelectionScopeAck,
+} from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -407,6 +410,15 @@ export async function applyInlineDirectiveOverrides(params: {
         const applied = await (
           await directivePersistLoader.load()
         ).applySessionModelSelection({
+          rememberForNewDmTopics:
+            directives.modelScope !== "session" &&
+            canPersistSessionDirectiveDefaults({
+              messageProvider: ctx.Provider,
+              surface: ctx.Surface,
+              gatewayClientScopes: ctx.GatewayClientScopes,
+              commandAuthorized: command.isAuthorizedSender,
+              senderIsOwner: command.senderIsOwner,
+            }),
           cfg,
           agentId,
           sessionKey,
@@ -451,6 +463,7 @@ export async function applyInlineDirectiveOverrides(params: {
             isDefault: modelSelection.isDefault,
             label: labelWithAlias,
             configuredDefaultUpdate: applied.configuredDefaultUpdate,
+            dmTopicDefaultUpdated: applied.dmTopicDefaultUpdated,
             ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           }),
           applied.thinkingRemap

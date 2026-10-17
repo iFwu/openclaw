@@ -2,6 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { prepareTelegramTopicLabel, runTelegramTopicLabelOnce } from "./auto-topic-label.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -224,7 +225,8 @@ function scheduleDmTopicLabel(params: {
   cfg: DispatchTelegramMessageParams["cfg"];
   context: TelegramMessageContext;
   isFirstTurnInSession: boolean;
-  telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
+  autoTopicConfig: ReturnType<typeof resolveAutoTopicLabelConfig>;
+  labelState?: { key: string; sessionId?: string; isCurrent: () => boolean };
 }) {
   const { context } = params;
   const isDmTopic =
@@ -236,23 +238,18 @@ function scheduleDmTopicLabel(params: {
     context.ctxPayload.RawBody ?? context.ctxPayload.Body ?? "",
     500,
   );
-  if (!userMessage.trim()) {
+  if (!userMessage.trim() || userMessage.trimStart().startsWith("/")) {
     return;
   }
-  const directAutoTopicLabel =
-    context.groupConfig && "autoTopicLabel" in context.groupConfig
-      ? context.groupConfig.autoTopicLabel
-      : undefined;
-  const autoTopicConfig = resolveAutoTopicLabelConfig(
-    directAutoTopicLabel,
-    params.telegramCfg.autoTopicLabel,
-  );
+  const autoTopicConfig = params.autoTopicConfig;
   if (!autoTopicConfig) {
     return;
   }
   const topicThreadId = context.threadSpec.id!;
-  void (async () => {
-    try {
+  if (!params.labelState) return;
+  void runTelegramTopicLabelOnce({
+    ...params.labelState,
+    run: async () => {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
@@ -260,17 +257,12 @@ function scheduleDmTopicLabel(params: {
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
       });
-      if (!label) {
-        logVerbose("auto-topic-label: LLM returned empty label");
-        return;
-      }
-      logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+      if (!label || !params.labelState?.isCurrent()) return false;
       await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
       logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
-    } catch (err) {
-      logVerbose(`auto-topic-label: failed: ${String(err)}`);
-    }
-  })();
+      return true;
+    },
+  }).catch((err) => logVerbose(`auto-topic-label: failed: ${String(err)}`));
 }
 
 export const dispatchTelegramMessage = async (
@@ -356,20 +348,41 @@ export const dispatchTelegramMessage = async (
   };
 
   let isFirstTurnInSession = false;
+  let topicLabelKey: string | undefined;
+  let topicLabelSessionId: string | undefined;
   let dispatchWasSuperseded: boolean;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
+  const autoTopicConfig = isDmTopic
+    ? resolveAutoTopicLabelConfig(
+        dispatchContext.groupConfig && "autoTopicLabel" in dispatchContext.groupConfig
+          ? dispatchContext.groupConfig.autoTopicLabel
+          : undefined,
+        telegramCfg.autoTopicLabel,
+      )
+    : null;
   try {
     await prepareTelegramSticker({ cfg, context: dispatchContext });
-    if (isDmTopic) {
+    if (autoTopicConfig) {
       try {
         const sessionKey = dispatchContext.ctxPayload.SessionKey;
         if (sessionKey) {
-          isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-            .entry?.systemSent;
+          const { entry, storePath } = loadFreshSessionEntry(
+            dispatchContext.route.agentId,
+            sessionKey,
+          );
+          topicLabelKey = JSON.stringify([storePath, dispatchContext.route.accountId, sessionKey]);
+          topicLabelSessionId = entry?.sessionId;
+          isFirstTurnInSession = await prepareTelegramTopicLabel({
+            key: topicLabelKey,
+            sessionId: topicLabelSessionId,
+            firstTurn: !entry?.systemSent,
+            userMessage:
+              dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "",
+          });
         } else {
           logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
         }
@@ -514,12 +527,34 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
+  loadFreshSessionEntry.clear();
+  const labelSessionKey = isFirstTurnInSession ? dispatchContext.ctxPayload.SessionKey : undefined;
+  const labelSessionId =
+    topicLabelSessionId ??
+    (labelSessionKey
+      ? loadFreshSessionEntry(dispatchContext.route.agentId, labelSessionKey).entry?.sessionId
+      : undefined);
   scheduleDmTopicLabel({
     bot,
     cfg,
     context: dispatchContext,
     isFirstTurnInSession,
-    telegramCfg,
+    autoTopicConfig,
+    labelState:
+      topicLabelKey && labelSessionKey
+        ? {
+            key: topicLabelKey,
+            sessionId: labelSessionId,
+            isCurrent: () => {
+              loadFreshSessionEntry.clear();
+              return (
+                !isDispatchSuperseded() &&
+                loadFreshSessionEntry(dispatchContext.route.agentId, labelSessionKey).entry
+                  ?.sessionId === labelSessionId
+              );
+            },
+          }
+        : undefined,
   });
   status.finalizeInBackground(
     {

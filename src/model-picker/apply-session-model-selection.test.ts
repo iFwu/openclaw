@@ -16,6 +16,7 @@ import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
+import { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
 import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
 // Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
@@ -85,6 +86,50 @@ beforeEach(() => {
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection", () => {
+  it.each([false, true])(
+    "remembers a DM topic selection unless explicitly session-only=%s",
+    async (sessionOnly) => {
+      const parentKey = "agent:main:telegram:direct:123";
+      const sessionKey = `${parentKey}:thread:123:42`;
+      const pinnedKey = `${parentKey}:thread:123:41`;
+      const parent = createEntry({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      });
+      const sessionEntry = createEntry();
+      const sibling = createEntry({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      });
+      const sessionStore = {
+        [parentKey]: parent,
+        [sessionKey]: sessionEntry,
+        [pinnedKey]: sibling,
+      };
+      const result = await applySessionModelSelection(
+        createParams({
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          rememberForNewDmTopics: !sessionOnly,
+        }),
+      );
+      expect(result.status).toBe("applied");
+      expect(
+        resolveStoredModelOverride({
+          sessionKey: `${parentKey}:thread:123:43`,
+          sessionStore,
+          defaultProvider: "anthropic",
+        }),
+      ).toMatchObject(
+        sessionOnly
+          ? { provider: "anthropic", model: "claude-opus-4-6", source: "parent" }
+          : { provider: "openai", model: "gpt-4o", source: "parent" },
+      );
+      expect(sibling.modelOverride).toBe("claude-opus-4-6");
+      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    },
+  );
   it.each([false, true])("uses configured default only with reset intent=%s", async (reset) => {
     const modelCatalog = [
       { provider: "fixture", id: "automatic", name: "Automatic" },

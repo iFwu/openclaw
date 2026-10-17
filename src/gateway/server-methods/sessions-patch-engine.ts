@@ -700,12 +700,11 @@ export async function executeSessionPatchMutations(params: {
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
-    targets: activePrepared.flatMap((target) => {
-      const outcome = outcomes[target.index];
-      return outcome?.ok && outcome.applied
-        ? [{ target, entry: outcome.entry, accessChanged: outcome.accessChanged }]
-        : [];
-    }),
+    targets: activePrepared,
+    outcomes,
+    operatorAuthority,
+    mutationTargets,
+    storage: preparation.storage,
   });
   timing?.finish();
 

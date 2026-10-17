@@ -1,14 +1,26 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntryCommitContext } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { rememberTelegramDmModelSelection } from "../../sessions/telegram-dm-model-selection.js";
+import {
+  isAgentSessionModelPatchOrigin,
+  isSessionStatusModelPatchOrigin,
+} from "../session-model-patch-origin.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
-import type { GroupAdmissionResult } from "./sessions-patch-types.js";
+import type {
+  GroupAdmissionResult,
+  PreparedPatchTarget,
+  MutationOutcome,
+  MutationTarget,
+} from "./sessions-patch-types.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -18,19 +30,27 @@ export async function publishSessionPatchEffects(params: {
   context: GatewayRequestContext;
   callerScopes: readonly string[];
   callerCanManageCron: boolean;
-  targets: Array<{
-    accessChanged: boolean;
-    entry: SessionEntry;
-    target: {
-      canonicalKey: string;
-      fullPatch: SessionsPatchParams;
-      requestedAgentId?: string;
-      targetAgentId: string;
-    };
-  }>;
+  targets: readonly PreparedPatchTarget[];
+  outcomes: readonly (MutationOutcome | undefined)[];
+  operatorAuthority?: { assertCurrent: () => void };
+  mutationTargets: readonly MutationTarget[];
+  storage: ReadonlyMap<number, { assertCurrent: () => void }>;
 }): Promise<void> {
   const archivedSessionKeys = new Set<string>();
-  for (const { target, entry, accessChanged } of params.targets) {
+  for (const target of params.targets) {
+    const outcome = params.outcomes[target.index];
+    if (!outcome?.ok || !outcome.applied) continue;
+    const { entry, accessChanged } = outcome;
+    const assertCurrent = () => {
+      params.operatorAuthority?.assertCurrent();
+      const guard = expectDefined(
+        params.mutationTargets[target.index],
+        "patch authority",
+      ).commitGuard;
+      const error = guard();
+      if (error) throw new SessionMutationAuthorizationChangedError(error);
+      params.storage.get(target.index)?.assertCurrent();
+    };
     triggerSessionPatchHook({
       cfg: params.cfg,
       sessionEntry: entry,
@@ -57,6 +77,24 @@ export async function publishSessionPatchEffects(params: {
       },
       { accessChanged },
     );
+    if (
+      params.callerScopes.includes("operator.admin") &&
+      target.fullPatch.model !== undefined &&
+      target.fullPatch.modelSelectionScope !== "session" &&
+      !isAgentSessionModelPatchOrigin() &&
+      !isSessionStatusModelPatchOrigin()
+    ) {
+      await rememberTelegramDmModelSelection({
+        agentId: target.targetAgentId,
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+        assertCurrent,
+        selection: {
+          ...resolveSessionModelRef(params.cfg, entry, target.targetAgentId),
+          isDefault: entry.modelOverrideSource === "default",
+        },
+      });
+    }
     if (typeof target.fullPatch.archived === "boolean") {
       params.context.sessionActivitySummaries?.handleLifecycle({
         sessionKey: target.canonicalKey,
