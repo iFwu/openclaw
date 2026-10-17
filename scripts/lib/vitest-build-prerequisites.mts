@@ -230,12 +230,15 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
-  {
-    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+  ...[
+    "extensions/telegram/src/bot.create-telegram-bot.dm-model.test.ts",
+    "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "extensions",
-  },
+  })),
   ...[
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
