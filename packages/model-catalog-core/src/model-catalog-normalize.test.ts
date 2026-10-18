@@ -260,6 +260,7 @@ describe("model catalog normalization", () => {
         },
       },
       compat: {
+        codexProxyMode: true,
         supportsPromptCacheKey: true,
         toolSchemaProfile: "strict",
         toolCallArgumentsEncoding: "json",

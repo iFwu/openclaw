@@ -5,6 +5,7 @@
  */
 import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
+import { assertCodexProxyTransportSupported } from "../providers/openai-chatgpt-responses-request.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
@@ -71,7 +72,24 @@ function createSupportedTransportStreamFn(
 ): StreamFn | undefined {
   switch (model.api) {
     case "openai-responses":
+      return createOpenAIResponsesTransportStreamFn();
     case "openai-chatgpt-responses":
+      if (
+        model.compat &&
+        "codexProxyMode" in model.compat &&
+        model.compat.codexProxyMode === true
+      ) {
+        assertCodexProxyTransportSupported(model);
+        return async (requestModel, context, options) => {
+          const { streamSimpleOpenAICodexResponses } =
+            await import("../providers/openai-chatgpt-responses.js");
+          return streamSimpleOpenAICodexResponses(
+            { ...requestModel, api: "openai-chatgpt-responses" },
+            context,
+            options,
+          );
+        };
+      }
       return createOpenAIResponsesTransportStreamFn();
     case "openai-completions":
       return createOpenAICompletionsTransportStreamFn();

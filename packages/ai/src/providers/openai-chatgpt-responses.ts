@@ -1,4 +1,3 @@
-import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
 import {
   extractErrorCodeOrErrno,
@@ -47,6 +46,7 @@ import {
 import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseRetryAfterSeconds,
+  sha256Hex,
 } from "../transports/transport-utils.js";
 import type {
   AssistantMessage,
@@ -77,6 +77,14 @@ import {
   CodexProtocolError,
   parseOpenAIChatGptResponsesSse,
 } from "./openai-chatgpt-responses-protocol.js";
+import {
+  assertCodexProxyTransportSupported,
+  buildSSEHeaders,
+  buildWebSocketHeaders,
+  createCodexRequestId,
+  resolveCodexUrl,
+  resolveCodexWebSocketUrl,
+} from "./openai-chatgpt-responses-request.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { readOpenAIMisalignmentReview } from "./openai-provider-refusal.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
@@ -97,21 +105,6 @@ type DynamicImport = (specifier: string) => Promise<unknown>;
 
 const dynamicImport: DynamicImport = (specifier) => import(specifier);
 
-type ProcessWithOsBuiltinModule = typeof process & {
-  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-    return null;
-  }
-  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const os = loadNodeOs();
-
-const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
@@ -271,7 +264,12 @@ export const streamOpenAICodexResponses: StreamFunction<
       const modelHeaders = resolveAiTransportHeaderSentinels(model.headers);
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
-      const accountId = extractOpenAICodexAccountId(apiKey);
+      const proxyMode = model.compat?.codexProxyMode === true;
+      if (proxyMode) {
+        assertCodexProxyTransportSupported(model);
+      }
+      const requestUrl = resolveCodexUrl(model.baseUrl, proxyMode);
+      const accountId = proxyMode ? undefined : extractOpenAICodexAccountId(apiKey);
       const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
         let body = buildRequestBody(model, context, options, replayMode);
         const nextBody = await options?.onPayload?.(body, model);
@@ -301,10 +299,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       const requestOptions =
         activeSignal === options?.signal ? options : { ...options, signal: activeSignal };
       const transport = options?.transport || "auto";
-      const websocketDisabledForSession =
-        transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
-
-      if (transport !== "sse" && !websocketDisabledForSession) {
+      if (transport !== "sse") {
         const websocketHeaders = buildWebSocketHeaders(
           modelHeaders,
           optionHeaders,
@@ -312,16 +307,29 @@ export const streamOpenAICodexResponses: StreamFunction<
           apiKey,
           sessionId || createCodexRequestId(),
         );
+        const websocketUrl = resolveCodexWebSocketUrl(requestUrl);
+        const connectionIdentity = getWebSocketConnectionIdentity(
+          websocketUrl,
+          websocketHeaders,
+          model,
+        );
+        const websocketDisabledForSession =
+          transport === "auto" &&
+          options?.sessionId !== undefined &&
+          websocketSseFallbackSessions.get(options.sessionId) === connectionIdentity;
         let websocketStarted = false;
         let websocketRequestSent = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
+          if (websocketDisabledForSession) {
+            break;
+          }
           const activeAttempt = semanticAttempt;
           websocketStarted = false;
           websocketRequestSent = false;
           try {
             const terminal = await processWebSocketStream(
-              resolveCodexWebSocketUrl(model.baseUrl),
+              websocketUrl,
               activeAttempt.request,
               websocketHeaders,
               output,
@@ -394,11 +402,14 @@ export const streamOpenAICodexResponses: StreamFunction<
             if (aborted || (isCodexNonTransportError(error) && !connectionLimitBeforeStart)) {
               throw error;
             }
+            // A proxy may have accepted a sent request even without emitting an event.
+            const canFallbackToSse =
+              transport === "auto" && !websocketStarted && (!proxyMode || !websocketRequestSent);
             appendAssistantMessageDiagnostic(
               output,
               createAssistantMessageDiagnostic("provider_transport_failure", error, {
                 configuredTransport: transport,
-                fallbackTransport: transport === "auto" && !websocketStarted ? "sse" : undefined,
+                fallbackTransport: canFallbackToSse ? "sse" : undefined,
                 eventsEmitted: websocketStarted,
                 phase: websocketStarted
                   ? "after_message_stream_start"
@@ -408,9 +419,9 @@ export const streamOpenAICodexResponses: StreamFunction<
               }),
             );
             if (transport === "auto" && options?.sessionId) {
-              websocketSseFallbackSessions.add(options.sessionId);
+              websocketSseFallbackSessions.set(options.sessionId, connectionIdentity);
             }
-            if (websocketStarted || transport !== "auto") {
+            if (!canFallbackToSse) {
               throw error;
             }
             break;
@@ -454,7 +465,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             activeSignal?.throwIfAborted();
             lifecycle.assertCurrent();
           }
-          attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
+          attemptResponse = await fetch(requestUrl, {
             method: "POST",
             headers: sseHeaders,
             body: sseBody,
@@ -737,29 +748,6 @@ function resolveCodexServiceTier(
   return responseServiceTier ?? requestServiceTier;
 }
 
-function resolveCodexUrl(baseUrl?: string): string {
-  const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_CODEX_BASE_URL;
-  const normalized = raw.replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses")) {
-    return normalized;
-  }
-  if (normalized.endsWith("/codex")) {
-    return `${normalized}/responses`;
-  }
-  return `${normalized}/codex/responses`;
-}
-
-function resolveCodexWebSocketUrl(baseUrl?: string): string {
-  const url = new URL(resolveCodexUrl(baseUrl));
-  if (url.protocol === "https:") {
-    url.protocol = "wss:";
-  }
-  if (url.protocol === "http:") {
-    url.protocol = "ws:";
-  }
-  return url.toString();
-}
-
 type CodexProviderRefusalCategory = "bio" | "cyber" | "misalignment";
 
 /**
@@ -818,7 +806,6 @@ function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
   return error instanceof CodexApiError && error.code === WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 }
 
-const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const SESSION_WEBSOCKET_MAX_AGE_MS = 55 * 60 * 1000;
 
@@ -840,6 +827,7 @@ interface CachedWebSocketContinuationState {
 
 interface CachedWebSocketConnection {
   socket: WebSocketLike;
+  identity: string;
   busy: boolean;
   createdAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
@@ -852,7 +840,7 @@ type WebSocketConstructor = new (
 ) => WebSocketLike;
 
 const websocketSessionCache = new Map<string, CachedWebSocketConnection>();
-const websocketSseFallbackSessions = new Set<string>();
+const websocketSseFallbackSessions = new Map<string, string>();
 let cachedWebsocket: WebSocketConstructor | null = null;
 
 export function resetOpenAICodexWebSocketStateForTest(): void {
@@ -887,8 +875,19 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
 
-function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
-  return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
+function getWebSocketConnectionIdentity(
+  url: string,
+  headers: Headers,
+  model: Model<"openai-chatgpt-responses">,
+): string {
+  return sha256Hex(
+    JSON.stringify([
+      url,
+      model.provider,
+      model.id,
+      [...headers].toSorted(([a], [b]) => a.localeCompare(b)),
+    ]),
+  );
 }
 
 async function getWebSocketConstructor(): Promise<WebSocketConstructor | null> {
@@ -1079,6 +1078,7 @@ async function acquireWebSocket(
   url: string,
   headers: Headers,
   sessionId: string | undefined,
+  identity: string,
   signal?: AbortSignal,
 ): Promise<{
   socket: WebSocketLike;
@@ -1103,8 +1103,8 @@ async function acquireWebSocket(
       clearTimeout(cached.idleTimer);
       cached.idleTimer = undefined;
     }
-    if (!cached.busy && isWebSocketSessionExpired(cached)) {
-      closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
+    if (!cached.busy && (cached.identity !== identity || isWebSocketSessionExpired(cached))) {
+      closeWebSocketSilently(cached.socket, 1000, "connection_identity_or_age_changed");
       deleteOwnedWebSocketSession(sessionId, cached);
       expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
@@ -1140,7 +1140,7 @@ async function acquireWebSocket(
   }
 
   const socket = await connectWebSocket(url, headers, signal);
-  const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
+  const entry: CachedWebSocketConnection = { socket, identity, busy: true, createdAt: Date.now() };
   // A concurrent winner keeps the cache; this socket then remains transient.
   const ownsCache = setOwnedWebSocketSession(sessionId, entry, expectedCacheValue);
   return {
@@ -1425,6 +1425,7 @@ async function processWebSocketStream(
     url,
     headers,
     options?.sessionId,
+    getWebSocketConnectionIdentity(url, headers, model),
     options?.signal,
   );
   let keepConnection = true;
@@ -1642,77 +1643,6 @@ export function extractOpenAICodexAccountId(token: string): string {
     return accountId;
   }
   throw new Error("Failed to extract accountId from token");
-}
-
-function createCodexRequestId(): string {
-  const crypto = globalThis.crypto;
-  if (typeof crypto?.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  if (typeof crypto?.getRandomValues === "function") {
-    const bytes = crypto.getRandomValues(new Uint8Array(16));
-    const suffix = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    return `codex_${suffix}`;
-  }
-  throw new Error("Secure random request id generation is unavailable");
-}
-
-function buildBaseCodexHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
-  token: string,
-): Headers {
-  const headers = new Headers(initHeaders);
-  for (const [key, value] of Object.entries(additionalHeaders || {})) {
-    headers.set(key, value);
-  }
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("chatgpt-account-id", accountId);
-  headers.set("originator", "openclaw");
-  const userAgent = os
-    ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
-    : "openclaw (browser)";
-  headers.set("User-Agent", userAgent);
-  return headers;
-}
-
-function buildSSEHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
-  token: string,
-  sessionId?: string,
-): Headers {
-  const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
-  headers.set("OpenAI-Beta", "responses=experimental");
-  headers.set("accept", "text/event-stream");
-  headers.set("content-type", "application/json");
-
-  if (sessionId) {
-    headers.set("session_id", sessionId);
-    headers.set("x-client-request-id", sessionId);
-  }
-
-  return headers;
-}
-
-function buildWebSocketHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
-  token: string,
-  requestId: string,
-): Headers {
-  const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
-  headers.delete("accept");
-  headers.delete("content-type");
-  headers.delete("OpenAI-Beta");
-  headers.delete("openai-beta");
-  headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
-  headers.set("x-client-request-id", requestId);
-  headers.set("session_id", requestId);
-  return headers;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -67,7 +67,13 @@ function isDefaultOpenClawStreamFnForModel(
 }
 
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
-  return model.provider === "openai" && model.api === "openai-chatgpt-responses";
+  return (
+    model.api === "openai-chatgpt-responses" &&
+    (model.provider === "openai" ||
+      (model.compat !== undefined &&
+        "codexProxyMode" in model.compat &&
+        model.compat.codexProxyMode === true))
+  );
 }
 
 function resolveOpenClawNativeCodexResponsesStreamFn(params: {

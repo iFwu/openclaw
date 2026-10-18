@@ -119,6 +119,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "When true, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard (fetchWithSsrFGuard). Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (64:ff9b:1::/48) origins; set this to false to opt out of that trust. OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use true only for operator-controlled self-hosted endpoints that must reach private origins outside the configured baseUrl origin.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+  "models.providers.*.models[].compat.codexProxyMode":
+    "Explicit opt-in for openai-chatgpt-responses through a custom Codex-compatible proxy. Uses the proxy bearer key without a ChatGPT account header and appends /responses to baseUrl unless already present. Default false; official OpenAI/ChatGPT hosts are rejected. Transport remains controlled separately by model params.",
   "models.providers.*.models[].agentRuntime":
     "Optional low-level agent runtime policy for this specific model. Model runtime policy overrides the provider runtime policy.",
   "models.providers.*.models[].agentRuntime.id":

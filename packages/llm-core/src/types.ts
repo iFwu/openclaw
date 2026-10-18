@@ -572,6 +572,8 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Use the ChatGPT/Codex adapter with a proxy key and a custom /responses endpoint. Default: false; not allowed on official OpenAI/ChatGPT hosts. */
+  codexProxyMode?: boolean;
   /** Explicit opt-in for service_tier and Fast mode on a compatible Responses endpoint. */
   supportsServiceTier?: boolean;
   /** Whether the compatible route accepts prompt_cache_key. Unknown proxy routes default to false. */

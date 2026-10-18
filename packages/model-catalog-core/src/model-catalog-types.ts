@@ -32,6 +32,8 @@ export function isModelCatalogThinkingFormat(value: string): value is ModelCatal
 
 /** Compatibility flags and provider-specific routing metadata for one model. */
 export type ModelCatalogCompatConfig = {
+  /** Explicit proxy-key and /responses endpoint mode for the ChatGPT/Codex adapter. */
+  codexProxyMode?: boolean;
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;

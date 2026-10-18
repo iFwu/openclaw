@@ -43,6 +43,26 @@ describe("ModelsConfigSchema", () => {
       }
     },
   );
+  it.each([undefined, false, true, "true"])(
+    "preserves only an explicit boolean Codex proxy mode (%s)",
+    (codexProxyMode) => {
+      const result = ModelsConfigSchema.safeParse({
+        providers: {
+          "fixture-proxy": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://proxy.example/v1",
+            models: [{ id: "fixture", name: "fixture", compat: { codexProxyMode } }],
+          },
+        },
+      });
+      expect(result.success).toBe(codexProxyMode !== "true");
+      if (result.success) {
+        expect(result.data?.providers?.["fixture-proxy"]?.models?.[0]?.compat?.codexProxyMode).toBe(
+          codexProxyMode,
+        );
+      }
+    },
+  );
   it("preserves a SecretRef-only bundled overlay without custom provider fields", () => {
     const apiKey = { source: "file", provider: "x", id: "/runway" };
     const parsed = ModelsConfigSchema.parse({ providers: { runway: { apiKey } } });

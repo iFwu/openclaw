@@ -372,6 +372,74 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
   </Accordion>
 
+  <Accordion title="Codex-compatible proxies with API keys">
+    Set model-level `compat.codexProxyMode: true` together with
+    `api: "openai-chatgpt-responses"` to use the embedded ChatGPT/Codex adapter
+    through a trusted proxy that accepts ordinary bearer keys at `/responses`.
+    The option defaults to `false` and has no effect on `openai-responses`.
+    It does not select the Codex CLI or app-server runtime.
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "codex-proxy": {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-chatgpt-responses",
+            apiKey: "${CODEX_PROXY_API_KEY}",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5 via proxy",
+                reasoning: true,
+                input: ["text", "image"],
+                compat: { codexProxyMode: true },
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "codex-proxy/gpt-5.5": {
+              agentRuntime: { id: "openclaw" },
+              params: { transport: "websocket-cached" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    In proxy mode, `https://proxy.example/v1` becomes
+    `https://proxy.example/v1/responses`; an explicit `/responses` endpoint is
+    preserved. WebSocket mode uses the equivalent `ws:` or `wss:` URL.
+    The proxy key is sent as `Authorization: Bearer ...`, without extracting
+    an OAuth account id or sending `chatgpt-account-id`. Official OpenAI and
+    ChatGPT hosts are rejected in this mode; leave it off for normal OAuth.
+    Proxy URLs must use HTTP(S), without URL credentials, query, or fragment.
+
+    Transport remains a separate choice: `sse`, `websocket`,
+    `websocket-cached`, or `auto`. This controls only OpenClaw's connection to
+    the proxy, not the proxy's upstream transport. Cached connections and
+    continuation state are isolated by session, endpoint, credentials, model,
+    and handshake headers. In proxy `auto` mode, SSE fallback is allowed
+    before WebSocket dispatch, not after an unacknowledged request has been
+    sent. Abort and provider errors are not blindly replayed.
+
+    Use this only with a proxy that implements the Codex Responses event and
+    tool-result contracts. A generic Responses endpoint is not sufficient
+    evidence of compatibility. Fast mode and thinking settings remain
+    separate; this option does not change them or enable server-side storage.
+    Managed `request.proxy`, `request.tls`, and `localService` combinations
+    are not supported in Codex proxy mode and fail explicitly rather than
+    dropping those settings or switching adapters. Keep `openai-responses`
+    for routes that require them. Explicit provider-plugin streams retain
+    their existing priority.
+
+  </Accordion>
+
   <Accordion title="Native vs OpenAI-compatible routes">
     OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints
     differently from generic OpenAI-compatible `/v1` proxies:

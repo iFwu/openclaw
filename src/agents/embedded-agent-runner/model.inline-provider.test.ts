@@ -1,8 +1,53 @@
-import { describe, expect, it } from "vitest";
-import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { createLlmRuntime } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildInlineProviderModels, completeInlineProviderModel } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("executes a configured Codex proxy model through the registered API adapter", async () => {
+    const provider = {
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://proxy.example/v1",
+      models: [{ ...makeModel("fixture-model"), compat: { codexProxyMode: true } }],
+    };
+    const [inline] = buildInlineProviderModels({ "fixture-proxy": provider });
+    if (!inline) {
+      throw new Error("missing configured proxy model");
+    }
+    const runtimeModel = completeInlineProviderModel(inline, provider);
+    const runtime = createLlmRuntime();
+    registerBuiltInApiProviders(runtime.registry);
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: { id: "resp_proxy", status: "completed", output: [] },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await runtime
+      .streamSimple(
+        runtimeModel,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        },
+        { apiKey: "fixture-proxy-key", transport: "sse" },
+      )
+      .result();
+    expect(result).toMatchObject({
+      stopReason: "stop",
+      provider: "fixture-proxy",
+      model: "fixture-model",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example/v1/responses");
+  });
+
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
     expect(
       buildInlineProviderModels({

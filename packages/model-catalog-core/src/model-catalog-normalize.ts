@@ -306,6 +306,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   }
   const compat: ModelCatalogCompatConfig = {};
   const booleanFields = [
+    "codexProxyMode",
     "supportsStore",
     "supportsPromptCacheKey",
     "supportsDeveloperRole",
