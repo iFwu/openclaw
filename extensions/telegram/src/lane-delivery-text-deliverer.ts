@@ -98,6 +98,8 @@ type DeliverLaneTextParams = {
   /** Target before caller-side recovery; omitted uses the incoming payload. */
   replyTargetBeforeRecovery?: Readonly<Pick<ReplyPayload, "replyToId">>;
   infoKind: string;
+  /** Unaccepted preview content retained across a physical message reposition. */
+  previewTextBeforeRotation?: string;
   buttons?: TelegramInlineButtons;
   finalizePreview?: boolean;
   durable?: boolean;
@@ -433,6 +435,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     payload: initialPayload,
     replyTargetBeforeRecovery = initialPayload,
     infoKind,
+    previewTextBeforeRotation,
     buttons,
     finalizePreview: requestedFinalizePreview,
     durable: requestedDurable,
@@ -449,8 +452,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const promptContextSequence =
       suppliedPromptContextSequence ?? params.createPromptContextSequence();
     const originalReplyToId = replyTargetBeforeRecovery.replyToId;
-    let reply = resolveSendableOutboundReplyParts(payload, { text });
     const isDurableFinal = infoKind === "final";
+    if (isDurableFinal && previewTextBeforeRotation !== undefined) {
+      text = await resolveTranscriptBackedChannelFinalText({
+        payload,
+        finalText: text,
+        resolveCandidateText: async () => previewTextBeforeRotation,
+      });
+      payload = params.applyTextToPayload(payload, text);
+    }
+    let reply = resolveSendableOutboundReplyParts(payload, { text });
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
     const durable = requestedDurable ?? isDurableFinal;
     let streamedErrorDraftText =
@@ -459,12 +470,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       payload.isError === true &&
       laneName === "answer" &&
       lane.stream &&
-      lane.hasStreamedMessage &&
+      (lane.hasStreamedMessage || previewTextBeforeRotation !== undefined) &&
       !lane.finalized &&
       !reply.hasMedia &&
       text.trim()
         ? (() => {
             const existing = (
+              previewTextBeforeRotation ||
               lane.lastPartialText ||
               lane.stream?.lastDeliveredText() ||
               ""
@@ -636,7 +648,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     // Accepted pagination pages remain visible. If bounded final retries exhaust,
     // deliver only the unaccepted suffix so fallback cannot duplicate the prefix.
     const deliveryResult = await params.sendPayload(
-      params.applyTextToPayload(payload, retainedFinalContent?.sourceText ?? text),
+      params.applyTextToPayload(
+        payload,
+        retainedFinalContent?.sourceText ?? streamedErrorDraftText ?? text,
+      ),
       {
         afterAcceptedDraft,
         durable,

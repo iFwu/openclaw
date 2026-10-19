@@ -49,6 +49,99 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   } = http;
 
   it.each([
+    { mode: "partial", noticeKind: "isStatusNotice" },
+    { mode: "progress", noticeKind: "isStatusNotice" },
+    { mode: "block", noticeKind: "isCompactionNotice" },
+    { mode: "progress", noticeKind: "isFallbackNotice" },
+  ] as const)(
+    "keeps a $noticeKind notice separate and the final answer last in $mode mode",
+    async ({ mode, noticeKind }) => {
+      const notice = "New topic started without the preceding conversation.";
+      const finalText = "The investigation is complete and this is the final report.";
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onBlockReply?.({ text: notice, [noticeKind]: true });
+          await waitForBotApiCall(
+            (call) => call.method === "sendMessage" && call.fields.text === notice,
+          );
+          await options?.onAssistantMessageStart?.();
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            phase: "end",
+            progressText: "Checking the evidence before the final report.",
+          });
+        },
+        {
+          mode,
+          toolProgress: false,
+          telegramCfg: {
+            streaming: { mode, progress: { commentary: true, persist: true } },
+          },
+          finalReply: { text: finalText },
+        },
+      );
+      const visible = [...visibleMessages.values()];
+      expect(visible).toContain(notice);
+      expect(visible.at(-1)).toBe(finalText);
+      const noticeSend = acceptedCalls.find(
+        (call) => call.method === "sendMessage" && call.fields.text === notice,
+      );
+      expect(noticeSend).toBeDefined();
+      expect(
+        acceptedCalls.filter(
+          (call) => call.method === "editMessageText" && call.fields.message_id === 1,
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("preserves an accepted block across real post-delivery boundary callbacks", async () => {
+    const first = setReplyPayloadMetadata(
+      { text: "The first accepted assistant answer must stay visible." },
+      { assistantMessageIndex: 0 },
+    );
+    const finalText = "The second assistant answer is the terminal result.";
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onBlockReply?.(first, { assistantMessageIndex: 0 });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && call.fields.text === first.text,
+        );
+        await options?.onAssistantMessageStart?.();
+        await options?.onPartialReply?.({ text: finalText });
+      },
+      { mode: "partial", toolProgress: false, finalReply: { text: finalText } },
+    );
+    expect([...visibleMessages.values()]).toEqual([first.text, finalText]);
+  });
+
+  it("does not spend the first answer's reply target on a status notice", async () => {
+    const context = http.createContext();
+    const finalText = "The first actual answer still replies to the incoming message.";
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onBlockReply?.({
+          text: "An independent new-topic status notice.",
+          isStatusNotice: true,
+        });
+      },
+      {
+        mode: "partial",
+        toolProgress: false,
+        replyToMode: "first",
+        context,
+        finalReply: { text: finalText },
+      },
+    );
+    const finalSend = acceptedCalls.find(
+      (call) => call.method === "sendMessage" && call.fields.text === finalText,
+    );
+    expect(finalSend?.fields.reply_parameters).toMatchObject({
+      message_id: context.msg.message_id,
+    });
+  });
+
+  it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
     { hook: "message_sent", mode: "partial" },

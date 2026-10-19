@@ -81,8 +81,11 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   requires a separate `sendMessage`. OpenClaw uses `sendMessage` plus
   `editMessageText`, then finalizes in place so the user sees one persistent
   answer.
-- Streaming owns one visible preview message. Edit it forward. Do not send an
-  extra final bubble unless the final edit genuinely failed.
+- Streaming owns one visible answer preview message. Finalize it in place only
+  while it is the turn's newest message. If a later notice, progress page, or reasoning
+  message intervenes, move the answer to the end before finalizing; retire an
+  unaccepted preview without deleting accepted blocks. Status notices never
+  enter the answer-preview lane.
 - Keep the first-preview debounce. If a provider sends token-sized deltas,
   coalesce them into cumulative preview text instead of removing the debounce.
 - Respect Telegram limits in the Telegram layer. Text over 4096 chars chains

@@ -98,6 +98,9 @@ function progressContext(
   });
 }
 
+const deliveryFailureNotice =
+  "回复发送未成功或尚未确认。你下次在当前话题发消息时，会尝试补发已保存的正文；不会重新执行原任务。";
+
 const progressConfig = {
   streaming: { mode: "progress", progress: { toolProgress: true } },
 } as const;
@@ -109,6 +112,34 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it("does not append late fast-mode progress after an accepted final", async () => {
+    const { bot, messages, sendMessage } = await setupObservedProgressTransport();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "The final answer is complete." },
+          { kind: "final" },
+        );
+        const sentBeforeLateProgress = sendMessage.mock.calls.length;
+        expect(
+          await replyOptions?.onToolResult?.({
+            text: "Fast mode is now enabled.",
+            channelData: { openclawProgressKind: "fast-mode-auto" },
+          }),
+        ).toBe(false);
+        expect(sendMessage).toHaveBeenCalledTimes(sentBeforeLateProgress);
+        return { queuedFinal: true };
+      },
+    );
+    await dispatchWithContext({
+      bot,
+      context: progressContext(),
+      streamMode: "progress",
+      telegramCfg: progressConfig,
+    });
+    expect([...messages.values()]).toEqual(["The final answer is complete."]);
   });
 
   it.each([
@@ -152,10 +183,15 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       });
       await vi.advanceTimersByTimeAsync(5_000);
 
-      expect([...messages.values()]).toEqual([expect.stringMatching(/Exec|chat history/i)]);
+      expect([...messages.values()]).toEqual([
+        expect.stringContaining("Exec"),
+        deliveryFailureNotice,
+      ]);
       expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
       expect(replyResolver).toHaveBeenCalledOnce();
-      expect(deliverReplies).not.toHaveBeenCalled();
+      expect(deliverReplies.mock.calls.flatMap(([params]) => params.replies)).toEqual([
+        { text: deliveryFailureNotice, isError: true },
+      ]);
       expect(deleteMessage).not.toHaveBeenCalled();
       expect(failedStatus.setError).toHaveBeenCalledOnce();
       expect(failedStatus.setDone).not.toHaveBeenCalled();
@@ -223,7 +259,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(result).toEqual({ kind: "completed" });
-    expect([...messages.values()]).toEqual([expect.stringMatching(/chat history/i)]);
+    expect([...messages.values()]).toEqual([deliveryFailureNotice]);
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
     expect(replyResolver).toHaveBeenCalledOnce();
@@ -298,11 +334,11 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(result).toEqual({ kind: "completed" });
-    expect([...messages.values()]).toEqual([prefix, expect.stringMatching(/chat history/i)]);
+    expect([...messages.values()]).toEqual([prefix, deliveryFailureNotice]);
     expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
       prefix,
       tail,
-      expect.stringMatching(/chat history/i),
+      deliveryFailureNotice,
     ]);
     expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledOnce();
     expect(replyResolver).toHaveBeenCalledOnce();
@@ -499,7 +535,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         expect(status.setError).not.toHaveBeenCalled();
       } else {
         expect(visible.some(([, text]) => text === second)).toBe(false);
-        expect(visible.some(([, text]) => text.includes("OpenClaw chat history"))).toBe(true);
+        expect(visible.some(([, text]) => text.includes(deliveryFailureNotice))).toBe(true);
         expect(sendMessage.mock.calls.filter(([, text]) => text === second)).toHaveLength(1);
         expect(status.setError).toHaveBeenCalledOnce();
         expect(status.setDone).not.toHaveBeenCalled();

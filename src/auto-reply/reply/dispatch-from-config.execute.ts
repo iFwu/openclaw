@@ -146,6 +146,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 onPartialReply: deferFinalTtsText
                   ? undefined
                   : wrapProgressCallback(params.replyOptions?.onPartialReply, {
+                      waitForDirectBlockReplyDelivery: true,
                       onVisible: (payload) => {
                         if (hasOutboundReplyContent(payload, { trimText: true })) {
                           didDeliverVisiblePartialReply = true;
@@ -158,6 +159,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
                 onAssistantMessageStart: wrapProgressCallback(
                   params.replyOptions?.onAssistantMessageStart,
+                  { waitForDirectBlockReplyDelivery: true },
                 ),
                 onQueuedFollowupSettled: async () => {
                   // Retained block callbacks only enqueue; cleanup must join their

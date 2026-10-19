@@ -165,7 +165,14 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           dispatcherOptions: {
             ...replyPipeline,
             humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
-            beforeDeliver: async (payload) => payload,
+            beforeDeliver: async (payload, info) => {
+              if (info.kind === "block" && turn.answerLane.stream) {
+                await enqueueDraftEvent(turn, async () => {
+                  await prepareQueuedAnswerBlock(turn, payload, info);
+                });
+              }
+              return payload;
+            },
             onBeforeDeliverCancelled: (payload, info) =>
               handleBeforeDeliverCancelled(turn, payload, info),
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
@@ -217,17 +224,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                     });
                   }
                 : undefined,
-            onBlockReplyQueued: turn.answerLane.stream
-              ? (payload, blockContext) => {
-                  const queued = enqueueDraftEvent(turn, async () => {
-                    await prepareQueuedAnswerBlock(turn, payload, blockContext);
-                  });
-                  return queued.then(() => false);
-                }
-              : undefined,
             onReasoningStream: turn.reasoningLane.stream
               ? (payload) => {
                   const queued = enqueueDraftEvent(turn, async () => {
+                    if (turn.previewLifecycle.finalStarted) {
+                      return;
+                    }
                     if (turn.splitReasoningOnNextStream) {
                       repositionLaneForNewMessage(turn, turn.reasoningLane);
                       turn.splitReasoningOnNextStream = false;
@@ -336,7 +338,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               if (updatedDraft) {
                 return true;
               }
-              if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
+              if (
+                !turn.previewLifecycle.finalStarted &&
+                isFastModeAutoProgressPayload(payload) &&
+                !canPushToolProgress(turn)
+              ) {
                 return (await sendPayload(turn, payload)).visibleReplySent;
               }
               return false;

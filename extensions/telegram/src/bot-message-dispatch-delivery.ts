@@ -15,13 +15,11 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { copyReplyPayloadMetadata, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  resetLaneState,
-  rotateAnswerLaneAfterQueuedBlocksSettle,
-} from "./bot-message-dispatch-draft.js";
+import { prepareAnswerLaneForFinal } from "./bot-message-dispatch-draft.js";
 import {
   applyQuoteReplyTarget,
   applyTextToPayload,
+  isTelegramStatusNotice,
   projectPayloadForDelivery,
   usesNativeTelegramQuote,
 } from "./bot-message-dispatch-payload.js";
@@ -148,6 +146,8 @@ export async function sendPayload(
   const finalReplyTargetId = resolveTelegramReplyId(targetedPayload.replyToId);
   const targetsDifferentMessage =
     finalReplyTargetId != null && finalReplyTargetId !== turn.draftReplyToMessageId;
+  const consumesReplyTarget =
+    isSingleUseReplyToMode(turn.replyToMode) && !isTelegramStatusNotice(payload);
   const consumedSingleUseReply =
     (options?.afterAcceptedDraft === true ||
       sourceTurn.replyTargetState.consumed ||
@@ -155,7 +155,7 @@ export async function sendPayload(
       [sourceTurn.progressLane, ...Object.values(sourceTurn.lanes)].some((lane) =>
         lane.stream?.hasConsumedReplyTarget(),
       )) &&
-    isSingleUseReplyToMode(turn.replyToMode) &&
+    consumesReplyTarget &&
     !targetsDifferentMessage;
   const deliverablePayload = consumedSingleUseReply
     ? copyReplyPayloadMetadata(
@@ -167,16 +167,12 @@ export async function sendPayload(
     : targetedPayload;
   const effectiveReplyToMode = consumedSingleUseReply ? "off" : turn.replyToMode;
   const observeAcceptedReplyTarget = () => {
-    if (
-      isSingleUseReplyToMode(turn.replyToMode) &&
-      !consumedSingleUseReply &&
-      !targetsDifferentMessage
-    ) {
+    if (consumesReplyTarget && !consumedSingleUseReply && !targetsDifferentMessage) {
       sourceTurn.replyTargetState.consumed = true;
     }
   };
   const reservedReplyTarget =
-    isSingleUseReplyToMode(turn.replyToMode) &&
+    consumesReplyTarget &&
     turn.draftReplyToMessageId !== undefined &&
     !consumedSingleUseReply &&
     !targetsDifferentMessage;
@@ -250,6 +246,7 @@ export async function sendPayload(
         return await failPromptContextSequence(projectionSequence, durable.error);
       }
       if (durable.status === "handled_visible") {
+        turn.deliveryState.noteMessageIds(durable.delivery.receipt?.platformMessageIds ?? []);
         observeAcceptedReplyTarget();
         turn.deliveryState.markDelivered();
         return { ...durable.delivery, visibleReplySent: true };
@@ -286,6 +283,7 @@ export async function sendPayload(
         return { visibleReplySent: false, suppression: { reason: "no_visible_result" } };
       }
       observeAcceptedReplyTarget();
+      turn.deliveryState.noteMessageIds(result.receipt?.platformMessageIds ?? []);
       try {
         await projectionSequence.finish();
       } catch (error) {
@@ -310,6 +308,12 @@ export async function sendPayload(
     }
   } catch (error) {
     // Unknown send custody keeps the quote reserved across subsequent lanes.
+    if (isChannelPartialDeliveryError(error)) {
+      turn.deliveryState.noteMessageIds([
+        ...(error.deliveryResult.messageIds ?? []),
+        ...(error.deliveryResult.receipt?.platformMessageIds ?? []),
+      ]);
+    }
     if (
       reservedReplyTarget &&
       !isSafeToRetrySendError(error) &&
@@ -508,23 +512,20 @@ export async function deliverFinalAnswerText(
     applyTextToPayload(finalPayload, finalText),
   );
   const promptContextSequence = createPromptContextSequence(turn, source);
-  const isFollowUp = turn.previewLifecycle.finalDelivered;
-  if (isFollowUp) {
-    turn.answerLane.stream?.forceNewMessage();
-    resetLaneState(turn, turn.answerLane);
-  } else if (!turn.activeAnswerDraftIsToolProgressOnly) {
-    await rotateAnswerLaneAfterQueuedBlocksSettle(turn);
-  }
+  const previewTextBeforeRotation = await prepareAnswerLaneForFinal(turn);
   const result = await turn.deliverLaneText({
     laneName: "answer",
     text: finalText,
     payload: finalPayload,
     replyTargetBeforeRecovery: answerPayload,
     infoKind: "final",
+    previewTextBeforeRotation,
     finalizePreview: !turn.activeAnswerDraftIsToolProgressOnly,
     buttons,
     allowStream:
-      (turn.streamMode !== "progress" || turn.answerLane.hasStreamedMessage) &&
+      (turn.streamMode !== "progress" ||
+        turn.answerLane.hasStreamedMessage ||
+        previewTextBeforeRotation !== undefined) &&
       !turn.activeAnswerDraftIsToolProgressOnly &&
       (!usesNativeTelegramQuote(turn, finalPayload) ||
         (turn.replyQuoteText == null &&

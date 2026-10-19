@@ -142,6 +142,143 @@ describe("Telegram independent progress and answer streams through HTTP", () => 
     };
   }
 
+  it.each(["notice", "question", "reasoning"] as const)(
+    "places the final after a %s sent behind its answer preview",
+    async (laterMessage) => {
+      const { streams, telegramDeps } = captureStreams();
+      const finalText = "The terminal answer follows every intervening message.";
+      let previewId: number | undefined;
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: answer });
+          await streams[0]?.flush();
+          previewId = streams[0]?.messageId();
+          expect(previewId).toEqual(expect.any(Number));
+          if (laterMessage !== "reasoning") {
+            await options?.onBlockReply?.({
+              text: "An independent status notice after the answer preview.",
+              ...(laterMessage === "notice"
+                ? { isStatusNotice: true }
+                : {
+                    channelData: {
+                      askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
+                    },
+                  }),
+            });
+            await http.waitForBotApiCall(
+              (call) =>
+                call.method === "sendMessage" &&
+                String(call.fields.text).includes("independent status"),
+            );
+          } else {
+            await options?.onReasoningStream?.({
+              text: "<think>Later reasoning evidence that must appear before the final answer.</think>",
+            });
+            await streams[1]?.flush();
+            expect(streams[1]?.messageId()).toBeGreaterThan(previewId!);
+            await options?.onReasoningEnd?.();
+          }
+        },
+        {
+          mode: "partial",
+          toolProgress: false,
+          telegramDeps,
+          cfg: { agents: { defaults: { reasoningDefault: "stream" } } },
+          finalReply: { text: finalText },
+        },
+      );
+      const visible = [...visibleMessages];
+      expect(visible.at(-1)?.[1]).toBe(finalText);
+      expect(visible.at(-1)?.[0]).toBeGreaterThan(previewId!);
+      expect(visibleMessages.has(previewId!)).toBe(false);
+    },
+  );
+
+  it.each(["truncated", "error", "fallback"] as const)(
+    "retains preview content when moving a %s final behind a notice",
+    async (outcome) => {
+      const { streams, telegramDeps } = captureStreams();
+      const preview =
+        "This is the complete generated answer with all the original details and enough continuation to recover the result.";
+      const error = "The provider failed. Please retry.";
+      const expected = outcome !== "truncated" ? `${preview}\n\n${error}` : preview;
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: preview });
+          await streams[0]?.flush();
+          await options?.onBlockReply?.({
+            text: "Independent notice after generated content.",
+            isStatusNotice: true,
+          });
+          await http.waitForBotApiCall(
+            (call) =>
+              call.method === "sendMessage" &&
+              call.fields.text === "Independent notice after generated content.",
+          );
+          if (outcome === "fallback") {
+            let rejected = false;
+            http.respondToCall = (call) => {
+              if (
+                !rejected &&
+                call.method === "sendMessage" &&
+                String(call.fields.text).includes(error)
+              ) {
+                rejected = true;
+                return { error_code: 400, description: "Bad Request: preview rejected" };
+              }
+              return undefined;
+            };
+          }
+        },
+        {
+          mode: "partial",
+          toolProgress: false,
+          telegramDeps,
+          finalReply:
+            outcome !== "truncated"
+              ? { text: error, isError: true }
+              : { text: `${preview.slice(0, 55)}…` },
+        },
+      );
+      expect([...visibleMessages.values()]).toEqual([
+        "Independent notice after generated content.",
+        expected,
+      ]);
+    },
+  );
+
+  it("places the final after a partly accepted independent notice", async () => {
+    const { streams, telegramDeps } = captureStreams();
+    const finalText = "The final answer follows the accepted status pages.";
+    http.respondToCall = (call) =>
+      call.method === "sendMessage" && String(call.fields.text).includes("REJECT-LATE")
+        ? { error_code: 400, description: "Bad Request: chat not found" }
+        : undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onPartialReply?.({ text: answer });
+        await streams[0]?.flush();
+        await options?.onBlockReply?.({
+          text: `${"Accepted late status part. ".repeat(5)}\n\nREJECT-LATE`,
+          isStatusNotice: true,
+        });
+        await options?.onAssistantMessageStart?.();
+      },
+      {
+        mode: "partial",
+        toolProgress: false,
+        telegramDeps,
+        textLimit: 80,
+        finalReply: { text: finalText },
+        allowErrors: true,
+      },
+    );
+    const visible = [...visibleMessages.values()];
+    expect(visible.some((text) => text.includes("Accepted late status part."))).toBe(true);
+    expect(visible.at(-1)).toBe(finalText);
+    expect(visible).not.toContain(answer);
+  });
+
   it.each([false, true])(
     "finalizes the cumulative answer in place (persist %s)",
     async (persist) => {

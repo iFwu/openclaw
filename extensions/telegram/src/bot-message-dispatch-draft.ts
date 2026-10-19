@@ -6,6 +6,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { isTelegramStatusNotice } from "./bot-message-dispatch-payload.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -330,6 +331,45 @@ export async function prepareAnswerLaneForText(turn: Turn): Promise<boolean> {
   return true;
 }
 
+export async function prepareAnswerLaneForFinal(turn: Turn): Promise<string | undefined> {
+  // Drain other lanes before choosing the final position; their pending pages
+  // must not appear below an answer finalized in an older preview.
+  await turn.progressLane.stream?.flush();
+  await turn.reasoningLane.stream?.flush();
+  await turn.answerLane.stream?.waitForInFlight();
+  for (const lane of [turn.progressLane, turn.reasoningLane, turn.answerLane]) {
+    const messageId = lane.stream?.messageId();
+    turn.deliveryState.noteMessageIds([
+      ...(typeof messageId === "number" ? [String(messageId)] : []),
+      ...lane.retainedPromptContextPages.map((page) => String(page.messageId)),
+    ]);
+  }
+  const isFollowUp = turn.previewLifecycle.finalDelivered;
+  if (isFollowUp) {
+    turn.answerLane.stream?.forceNewMessage();
+    resetLaneState(turn, turn.answerLane);
+  } else if (!turn.activeAnswerDraftIsToolProgressOnly) {
+    await rotateAnswerLaneAfterQueuedBlocksSettle(turn);
+  }
+  const previewId = turn.answerLane.stream?.messageId();
+  const latestMessageId = turn.deliveryState.latestMessageId();
+  if (
+    typeof previewId === "number" &&
+    typeof latestMessageId === "number" &&
+    previewId < latestMessageId
+  ) {
+    const recoveryText =
+      !turn.answerLane.finalized &&
+      !turn.activeAnswerBlockDelivery &&
+      !turn.activeAnswerDraftIsToolProgressOnly
+        ? turn.answerLane.lastPartialText || turn.answerLane.stream?.lastDeliveredText()
+        : undefined;
+    await rotateAnswerLaneForNewMessage(turn);
+    return recoveryText;
+  }
+  return undefined;
+}
+
 export async function prepareAnswerLaneForToolProgress(turn: Turn): Promise<void> {
   if (turn.answerLane.finalized) {
     turn.answerLane.stream?.forceNewMessage();
@@ -504,6 +544,8 @@ export async function prepareQueuedAnswerBlock(
   blockContext?: BlockReplyContext,
 ): Promise<void> {
   if (
+    isTelegramStatusNotice(payload) ||
+    payload.channelData?.askUser !== undefined ||
     payload.isCommentary === true ||
     !splitTextIntoLaneSegments(turn, { text: payload.text }, payload.isReasoning).segments.some(
       (segment) => segment.lane === "answer",

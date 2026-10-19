@@ -6,11 +6,9 @@ import type {
   LivePreviewDeliveryResult,
   OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
-  resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -28,6 +26,7 @@ import {
   isQueuedAnswerBlock,
   prepareAnswerLaneForText,
   prepareAnswerLaneForToolProgress,
+  retireAnswerLane,
   resetLaneState,
   rotateAnswerLaneForNewMessage,
   splitTextIntoLaneSegments,
@@ -35,9 +34,11 @@ import {
 } from "./bot-message-dispatch-draft.js";
 import {
   applyTextToPayload,
+  isTelegramStatusNotice,
   normalizeDeliveryPayload,
   normalizePreparedDeliveryPayload,
   formatTelegramGroupThreadReply,
+  resolvePayloadTelegramControls,
 } from "./bot-message-dispatch-payload.js";
 import {
   handleItemEvent,
@@ -51,20 +52,12 @@ import type {
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
 import {
-  appendTelegramDroppedControlFallback,
-  resolveTelegramInlineButtons,
-  type TelegramDroppedControl,
-  type TelegramInlineButtons,
-} from "./button-types.js";
-import {
   buildTelegramErrorScopeKey,
   resolveTelegramErrorPolicy,
   shouldSuppressTelegramError,
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
-import { markTelegramDroppedControlFallback } from "./interactive-fallback.js";
 import { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
-import { resolveTelegramTargetChatType } from "./targets.js";
 
 type BufferedDispatchParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -80,41 +73,6 @@ function toTelegramVisiblePartialDeliveryError(error: unknown): unknown {
     : createChannelPartialDeliveryError(error, { visibleReplySent: true });
 }
 
-function resolvePayloadTelegramControls(
-  turn: Turn,
-  payload: ReplyPayload,
-): { payload: ReplyPayload; buttons: TelegramInlineButtons | undefined } {
-  const telegramData = payload.channelData?.telegram as
-    | { buttons?: TelegramInlineButtons }
-    | undefined;
-  const droppedControls: TelegramDroppedControl[] = [];
-  const buttons = resolveTelegramInlineButtons(
-    {
-      buttons: telegramData?.buttons,
-      presentation: normalizeMessagePresentation(payload.presentation),
-      interactive: payload.interactive,
-    },
-    {
-      allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
-      onDroppedControl: (control) => droppedControls.push(control),
-      questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
-    },
-  );
-  const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);
-  const fallback = appendTelegramDroppedControlFallback("", droppedControls);
-  const normalizedPayload =
-    text === (payload.text ?? "") ? payload : applyTextToPayload(payload, text);
-  return {
-    payload: fallback
-      ? markTelegramDroppedControlFallback(
-          normalizedPayload,
-          text === fallback ? "" : text.slice(0, -fallback.length - 2),
-          text,
-        )
-      : normalizedPayload,
-    buttons,
-  };
-}
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return payload.channelData?.execApproval !== undefined;
 }
@@ -191,6 +149,9 @@ async function settleTerminalNoVisibleDelivery(
   info: Parameters<NonNullable<Deliver>>[1],
   options?: { abandonBufferedFinal?: boolean },
 ): Promise<LivePreviewDeliveryResult> {
+  if (info.kind === "block") {
+    dropQueuedAnswerBlockRotation(turn, {}, info.assistantMessageIndex);
+  }
   if (options?.abandonBufferedFinal) {
     resetReasoningStepState(turn);
   } else if (info.kind === "final") {
@@ -292,6 +253,9 @@ async function deliverReplyWithNormalization(
   info: Parameters<NonNullable<Deliver>>[1],
   normalizePayload: typeof normalizeDeliveryPayload,
 ): Promise<LivePreviewDeliveryResult> {
+  if (info.kind === "final") {
+    await turn.draftEventQueue;
+  }
   if (turn.isSuperseded()) {
     return await settleTerminalNoVisibleDelivery(turn, info, { abandonBufferedFinal: true });
   }
@@ -332,6 +296,20 @@ async function deliverReplyWithNormalization(
   }
   const telegramButtons = controls.buttons;
   const reply = resolveSendableOutboundReplyParts(effectivePayload);
+  if (isTelegramStatusNotice(effectivePayload)) {
+    // Status notices have independent custody; an answer preview must never adopt them.
+    const result = await sendPayload(turn, effectivePayload, {
+      durable: info.kind === "final",
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+      onMediaAccepted,
+    });
+    if (info.kind === "final") {
+      await observeFinalDelivery(turn, result, effectivePayload.isError === true);
+    }
+    return toTelegramReplyDeliveryResult(turn, result.visibleReplySent, undefined, result);
+  }
   if (effectivePayload.isCommentary === true && turn.streamMode === "progress") {
     if (
       !reply.hasMedia &&
@@ -662,6 +640,15 @@ export function handleReplySkip(
   if (info.kind === "block") {
     void enqueueDraftEvent(turn, async () => {
       dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+      if (
+        info.reason === "silent" &&
+        info.assistantMessageIndex !== undefined &&
+        !turn.activeAnswerBlockDelivery &&
+        !turn.answerLane.finalized &&
+        turn.answerLane.hasStreamedMessage
+      ) {
+        await retireAnswerLane(turn);
+      }
     });
   }
   if (payload.isError === true) {
