@@ -133,6 +133,7 @@ export function resolvePayloadTelegramControls(
   turn: Turn,
   payload: ReplyPayload,
 ): { payload: ReplyPayload; buttons: TelegramInlineButtons | undefined } {
+  // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.
   const telegramData = payload.channelData?.telegram as
     | { buttons?: TelegramInlineButtons }
     | undefined;

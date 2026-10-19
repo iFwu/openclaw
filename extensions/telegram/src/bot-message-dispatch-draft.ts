@@ -303,7 +303,7 @@ async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
   return true;
 }
 
-export async function rotateAnswerLaneAfterQueuedBlocksSettle(turn: Turn): Promise<boolean> {
+async function rotateAnswerLaneAfterQueuedBlocksSettle(turn: Turn): Promise<boolean> {
   if (!turn.rotateAnswerLaneWhenQueuedBlocksSettle || turn.queuedAnswerBlockRotations.length > 0) {
     return false;
   }
