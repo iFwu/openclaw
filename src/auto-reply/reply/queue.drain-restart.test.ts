@@ -161,7 +161,12 @@ describe("followup queue failure isolation", () => {
     const broken = createRun({ prompt: "overflow" });
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "overflow" },
-      target: { agentId: "main", sessionKey: key, sessionId: "preparation" },
+      target: {
+        agentId: "main",
+        sessionKey: key,
+        sessionId: "preparation",
+        sessionEntry: undefined,
+      },
     });
     broken.userTurnTranscriptRecorder = recorder;
     for (const run of [broken, createRun({ prompt: "healthy" })]) {
