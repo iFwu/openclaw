@@ -66,6 +66,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-message-read.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { SessionPendingInputCollectionError } from "./session-pending-input-custody-error.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -139,7 +140,7 @@ export function bindSessionPendingInputSources(
     ...new Set(
       receipts.flatMap((receipt) => {
         if (receipt.state === "consumed") {
-          throw new Error("Collected input has already been consumed");
+          throw new SessionPendingInputCollectionError("Collected input has already been consumed");
         }
         const owner = receiptOwners.get(receipt);
         return owner ? (owner.sources ?? [owner]) : [];
@@ -161,7 +162,7 @@ export function bindSessionPendingInputSources(
         source.idempotencyKey === idempotencyKey,
     )
   ) {
-    throw new Error("Collected input requires one exact session and a distinct aggregate identity");
+    throw new SessionPendingInputCollectionError();
   }
   // Collected framing still passes storage redaction; its staged sources have
   // already passed approval and must not run through another plugin hook.

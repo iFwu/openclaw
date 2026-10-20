@@ -18,6 +18,8 @@ type FollowupQueueState = {
   draining: boolean;
   /** Exact operational drain generation; recovery may retire only this owner. */
   drainOwner?: object;
+  /** Consecutive dispatch failures; successful dispatch resets the retry budget. */
+  drainFailureCount?: number;
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;

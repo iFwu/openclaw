@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
@@ -10,6 +11,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { SessionPendingInputCollectionError } from "../../config/sessions/session-pending-input-custody-error.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -59,14 +61,14 @@ describe("followup queue durable input consumption", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  const createStagedRun = async (runId: string) => {
+  const createStagedRun = async (runId: string, sourceScope = scope()) => {
     const beforeMessageWrite = vi.fn((params: { message: PersistedUserTurnMessage }) => ({
       ...params.message,
       content: `${runId} approved`,
     }));
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: `${runId} private source`, idempotencyKey: `${runId}:user` },
-      target: { ...scope(), sessionEntry: undefined },
+      target: { ...sourceScope, sessionEntry: undefined },
       beforeMessageWrite,
       updateMode: "none",
     });
@@ -97,6 +99,52 @@ describe("followup queue durable input consumption", () => {
     }
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
+
+  it("isolates a mixed-session collect batch without weakening custody or replaying it", async () => {
+    const foreignScope = { ...scope(), sessionKey: `${sessionKey}-foreign`, sessionId: "foreign" };
+    await upsertSessionEntryCore(foreignScope, { sessionId: foreignScope.sessionId, updatedAt: 1 });
+    const first = await createStagedRun("local-source");
+    const second = await createStagedRun("foreign-source", foreignScope);
+    const settled = createDeferred();
+    let settledCount = 0;
+    for (const { run } of [first, second]) {
+      run.turnAdoptionLifecycle!.onSettled = () => {
+        if (++settledCount === 2) {
+          settled.resolve();
+        }
+      };
+      enqueueFollowupRun(sessionKey, run, { mode: "collect", debounceMs: 0 });
+    }
+    const failures: unknown[] = [];
+    const drain = vi.fn(async (run: FollowupRun) => {
+      try {
+        await run.userTurnTranscriptRecorder?.resolveMessage();
+      } catch (error) {
+        failures.push(error);
+        throw error;
+      }
+    });
+    scheduleFollowupDrain(sessionKey, drain);
+    await settled.promise;
+    expect(drain).toHaveBeenCalledOnce();
+    expect(failures[0]).toBeInstanceOf(SessionPendingInputCollectionError);
+    for (const target of [scope(), foreignScope]) {
+      expect(listSessionPendingInputs(target).items).toMatchObject([{ state: "cancelled" }]);
+      expect(await loadTranscriptEvents(target)).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "message" })]),
+      );
+    }
+    const healthy = createDeferred();
+    enqueueFollowupRun(sessionKey, createQueueTestRun({ prompt: "healthy successor" }), {
+      mode: "followup",
+      debounceMs: 0,
+    });
+    scheduleFollowupDrain(sessionKey, async (run) => {
+      expect(run.prompt).toBe("healthy successor");
+      healthy.resolve();
+    });
+    await healthy.promise;
+  });
 
   it("settles an exact Stop source only after its canonical input is retained as cancelled", async () => {
     const { run } = await createStagedRun("retained-stop");
@@ -378,7 +426,9 @@ describe("followup queue durable input consumption", () => {
   );
 
   it("retains elided and retried overflow sources until their summary commits", async () => {
-    const sources = await Promise.all(["first", "second", "third"].map(createStagedRun));
+    const sources = await Promise.all(
+      ["first", "second", "third"].map((id) => createStagedRun(id)),
+    );
     const settings = {
       mode: "followup" as const,
       debounceMs: 0,

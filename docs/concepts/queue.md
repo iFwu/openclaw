@@ -185,6 +185,31 @@ attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
 
+## Failed followup dispatches
+
+A collected-input identity refusal is terminal for that batch: the queue retains
+its exact-session and distinct-aggregate checks, removes only the failed sources
+from automatic dispatch, and lets later inputs proceed. Other unexpected dispatch
+failures receive at most three attempts, with abortable 1-second and 2-second
+backoffs. Waiting for turn admission or a reversible restart fence does not spend
+this failure budget.
+
+Preparation records its exact source ownership before grouping or rendering.
+If that ownership cannot be established, automatic draining pauses without
+choosing an unrelated input to cancel. Cancellation cleanup is not successful
+dispatch and neither resets the failure budget nor emits recovery.
+
+Stopping a failed batch settles its source lifecycles and preserves native pending
+input custody as cancelled or interrupted where available. It does not mark the
+request successful or automatically replay its effects. Operators can inspect the
+retained input before deciding whether to resend it.
+
+A terminal failure emits `followup queue drain stopped for <session-key>` with a
+stable reason and attempt count. A later successful dispatch in that exact queue
+emits `followup queue drain recovered for <session-key>`; that success does not
+prove that earlier failed requests were fulfilled. An empty ingress queue or a
+healthy Gateway alone is not evidence of followup progress.
+
 ## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).

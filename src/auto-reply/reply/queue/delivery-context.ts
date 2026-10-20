@@ -299,8 +299,17 @@ export function resolveOverflowSummaryInboundEventKind(
     : undefined;
 }
 
+const overflowRetrySources = resolveGlobalSingleton(
+  Symbol.for("openclaw.overflowRetrySources"),
+  () => new WeakMap<FollowupRun, FollowupRun>(),
+);
+
+export function resolveFollowupRetrySource(source: FollowupRun): FollowupRun {
+  return overflowRetrySources.get(source) ?? source;
+}
+
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
-  return {
+  const retry: FollowupRun = {
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     admissionSessionId: source.admissionSessionId,
@@ -337,4 +346,6 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
       : {}),
     run: source.run,
   };
+  overflowRetrySources.set(retry, resolveFollowupRetrySource(source));
+  return retry;
 }

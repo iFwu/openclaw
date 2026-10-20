@@ -1,11 +1,12 @@
 // Tests queue drain restart behavior when follow-up runs chain together.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { SessionPendingInputCollectionError } from "../../config/sessions/session-pending-input-custody-error.js";
 import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
@@ -16,6 +17,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -33,6 +35,183 @@ import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.j
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
+
+describe("followup queue failure isolation", () => {
+  const key = "agent:main:queue-failure-isolation";
+  const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+  beforeEach(() => {
+    resetGatewayWorkAdmission();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    clearSessionQueues([key]);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    resetGatewayWorkAdmission();
+  });
+
+  it("stops an invalid input once without blocking its healthy successor", async () => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const settled = vi.fn();
+    const invalid = createRun({ prompt: "invalid" });
+    invalid.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled: settled };
+    enqueueFollowupRun(key, invalid, settings);
+    enqueueFollowupRun(key, createRun({ prompt: "healthy" }), settings);
+    const calls: string[] = [];
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run.prompt);
+      // Bound the unfixed implementation so its immediate retry loop cannot hang the test.
+      if (calls.length > 5) {
+        clearSessionQueues([key]);
+      }
+      if (run.prompt === "invalid") {
+        throw new SessionPendingInputCollectionError("invalid sources");
+      }
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual(["invalid", "healthy"]);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(
+      `followup queue drain stopped for ${key}: reason=collected-input-identity attempts=1`,
+    );
+    expect(log).toHaveBeenCalledWith(`followup queue drain recovered for ${key}`);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("bounds ordinary failures with backoff and releases the following input", async () => {
+    enqueueFollowupRun(key, createRun({ prompt: "broken" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "healthy" }), settings);
+    const calls: Array<{ prompt: string; at: number }> = [];
+    const start = Date.now();
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push({ prompt: run.prompt, at: Date.now() - start });
+      if (calls.length > 5) {
+        clearSessionQueues([key]);
+      }
+      if (run.prompt === "broken") {
+        throw new Error("temporary storage failure");
+      }
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual([
+      { prompt: "broken", at: 0 },
+      { prompt: "broken", at: 1000 },
+      { prompt: "broken", at: 3000 },
+      { prompt: "healthy", at: 3000 },
+    ]);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("cancels a backoff without dispatching the failed input again", async () => {
+    enqueueFollowupRun(key, createRun({ prompt: "broken" }), settings);
+    const run = vi.fn(async () => {
+      if (run.mock.calls.length > 5) {
+        clearSessionQueues([key]);
+      }
+      throw new Error("temporary storage failure");
+    });
+    scheduleFollowupDrain(key, run);
+    await vi.advanceTimersByTimeAsync(0);
+    clearSessionQueues([key]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(run).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("does not retire a sibling that shares runtime metadata with a failed source", async () => {
+    const broken = createRun({ prompt: "broken" });
+    const healthy = { ...broken, prompt: "healthy" };
+    enqueueFollowupRun(key, broken, settings);
+    enqueueFollowupRun(key, healthy, settings);
+    const calls: string[] = [];
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run.prompt);
+      if (run === broken) {
+        throw new SessionPendingInputCollectionError("invalid sources");
+      }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["broken", "healthy"]);
+  });
+
+  it("retires failed overflow retry carriers without blocking ordinary input", async () => {
+    for (const prompt of ["overflow", "healthy"]) {
+      enqueueFollowupRun(key, createRun({ prompt }), {
+        ...settings,
+        cap: 1,
+        dropPolicy: "summarize",
+      });
+    }
+    const calls: string[] = [];
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run.prompt);
+      if (run.prompt !== "healthy") {
+        throw new SessionPendingInputCollectionError("invalid sources");
+      }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe("healthy");
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("attributes overflow preparation refusal to its source, not a healthy pending input", async () => {
+    const broken = createRun({ prompt: "overflow" });
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "overflow" },
+      target: { agentId: "main", sessionKey: key, sessionId: "preparation" },
+    });
+    broken.userTurnTranscriptRecorder = recorder;
+    for (const run of [broken, createRun({ prompt: "healthy" })]) {
+      enqueueFollowupRun(key, run, { ...settings, cap: 1, dropPolicy: "summarize" });
+    }
+    const prepare = vi.spyOn(recorder, "getPendingInputMessage").mockImplementation(() => {
+      if (prepare.mock.calls.length > 5) {
+        clearSessionQueues([key]);
+      }
+      throw new SessionPendingInputCollectionError("summary preparation refused");
+    });
+    const drain = vi.fn(async (run: FollowupRun) => {
+      expect(run.prompt).toBe("healthy");
+    });
+    scheduleFollowupDrain(key, drain);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+    expect(drain.mock.calls[0]?.[0]).toMatchObject({ prompt: "healthy" });
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("does not reset a retry budget or report recovery for cancellation cleanup", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    enqueueFollowupRun(key, createRun({ prompt: "broken" }), settings);
+    let attempts = 0;
+    scheduleFollowupDrain(key, async (run) => {
+      if (run.prompt === "cancelled") {
+        return;
+      }
+      attempts++;
+      if (attempts > 5) {
+        clearSessionQueues([key]);
+      } else {
+        const controller = new AbortController();
+        enqueueFollowupRun(
+          key,
+          { ...createRun({ prompt: "cancelled" }), abortSignal: controller.signal },
+          settings,
+        );
+        controller.abort();
+      }
+      throw new Error("temporary storage failure");
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(attempts).toBe(3);
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("followup queue drain recovered"));
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+});
 
 describe("followup queue drain restart after idle window", () => {
   it("keeps a detached drain on a live root after its enqueue request returns", async () => {

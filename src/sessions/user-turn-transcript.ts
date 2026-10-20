@@ -14,6 +14,7 @@ import {
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
+import { assertCollectedInputSourceCount } from "../config/sessions/session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createUserTurnAdmissionWrite } from "./user-turn-transcript-admission-write.js";
 import {
@@ -307,9 +308,7 @@ export function createUserTurnTranscriptRecorder(
       const sources = params.pendingInputSources.flatMap(
         (source) => pendingInputReceipts.get(source)?.() ?? [],
       );
-      if (sources.length > 0 && sources.length !== params.pendingInputSources.length) {
-        throw new Error("Collected input cannot mix staged and unstaged source approval");
-      }
+      assertCollectedInputSourceCount(sources.length, params.pendingInputSources.length);
       pendingInput = bindSessionPendingInputSources(sources, resolved);
       if (pendingInput) {
         message = pendingInput.message;
