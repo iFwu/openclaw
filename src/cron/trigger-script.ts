@@ -7,7 +7,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { bindAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
@@ -62,7 +62,7 @@ import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.j
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { prepareCronPromptRunAdmission } from "./isolated-agent/run-admission.js";
 import {
   resolveCronActiveRuntimeConfig,
@@ -156,7 +156,7 @@ type CachedTriggerRuntime = PreparedTriggerRuntime & {
 };
 
 function resolveTriggerAgentId(config: OpenClawConfig, agentId?: string): string {
-  return agentId?.trim() ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
+  return resolveCronJobEffectiveAgentId({ agentId }, tryResolveAmbientOwnerAgentId(config));
 }
 
 async function prepareTriggerRuntime(
@@ -382,10 +382,14 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     const catalogRef = createToolSearchCatalogRef();
     let admission: ReturnType<typeof prepareCronPromptRunAdmission> | undefined;
     try {
+      const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
       const request = {
-        runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
+        runtimeConfig,
         jobId: params.job.id,
-        agentId: params.job.agentId,
+        agentId: resolveCronJobEffectiveAgentId(
+          params.job,
+          tryResolveAmbientOwnerAgentId(runtimeConfig),
+        ),
         toolsAllow: params.job.payload.toolsAllow,
         scheduledToolPolicy: resolveCronScheduledToolPolicy({
           toolsAllow: params.job.payload.toolsAllow,

@@ -10,6 +10,8 @@ import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agent
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
+import { createCronScriptRuntime as createJobScriptRuntime } from "./trigger-script.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
@@ -69,6 +71,63 @@ function createCronTriggerEvaluator(deps: EvaluatorDeps) {
 }
 
 describe("cron trigger script evaluator", () => {
+  it.each(["trigger", "payload"] as const)(
+    "uses the canonical cron execution owner for %s in an explicit agent fleet",
+    async (mode) => {
+      const base: OpenClawConfig = {
+        agents: { entries: { main: {}, work: {} } },
+      };
+      for (const [scope, systemAgent, expected] of [
+        [{ agentId: "main", sessionKey: "agent:work:cron:bound" }, "work", "main"],
+        [{ sessionKey: "agent:work:cron:bound" }, "main", "work"],
+        [{}, "work", "work"],
+        [{}, undefined, undefined],
+      ] as const) {
+        const config: OpenClawConfig = {
+          ...base,
+          agents: {
+            ...base.agents,
+            ...(systemAgent ? { defaults: { systemAgent: { agentId: systemAgent } } } : {}),
+          },
+        };
+        const prepareRuntime = vi.fn(async (params: PrepareParams) => ({
+          createTools: () => [],
+          context: {
+            config,
+            agentId: params.agentId!,
+            sessionKey: `agent:${params.agentId}:cron:owner-test:trigger`,
+          },
+        }));
+        const runtime = createJobScriptRuntime({
+          config,
+          prepareRuntime,
+          runHeadless: async () => completed({ value: { fire: false } }),
+        });
+        const job = makeCronJob({
+          id: "owner-test",
+          ...scope,
+          payload:
+            mode === "trigger"
+              ? { kind: "command", argv: ["true"] }
+              : { kind: "script", script: "return {}" },
+        });
+        const result =
+          mode === "trigger"
+            ? await runtime.evaluateTrigger({ job, script: "return { fire: false }", state: null })
+            : await runtime.executePayload({ job });
+        if (expected) {
+          expect(result.kind).toBe(mode === "trigger" ? "evaluated" : "completed");
+          expect(prepareRuntime).toHaveBeenCalledWith(
+            expect.objectContaining({ agentId: expected }),
+          );
+        } else {
+          expect(result).toMatchObject({ kind: "error", error: expect.stringContaining("owner") });
+          expect(prepareRuntime).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
   it("cancels the real headless worker and bridge when its evaluation catalog closes", async () => {
     const entered = createDeferred();
     const release = createDeferred();
