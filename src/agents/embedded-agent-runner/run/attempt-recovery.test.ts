@@ -317,6 +317,84 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "Provider returned an incomplete or malformed tool call",
+    "Provider completed tool call with malformed JSON arguments",
+  ])(
+    "continues settled work after a pre-dispatch tool-call rejection: %s",
+    async (errorMessage) => {
+      // Live shape: a cron run settled ~20 tool calls, then the provider streamed a call
+      // whose arguments failed to parse. The rejected call never ran; prior tools did.
+      const fixture = await recoverAfterTransportDrop({
+        errorMessage,
+        diagnostics: [],
+        content: [],
+        usage: createMockUsage(27_000, 512),
+      });
+
+      expect(fixture.recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
+      expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+      expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+        includeToolFailureInstruction: false,
+      });
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+      expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(fixture.onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ phase: "retrying", reason: "rejected_tool_call" }),
+        }),
+      );
+    },
+  );
+
+  it("keeps repeated tool-call rejections inside the existing retry budget", async () => {
+    const { recover, failoverRetryController } = await recoverAfterTransportDrop({
+      errorMessage: "Provider returned an incomplete or malformed tool call",
+      diagnostics: [],
+      content: [],
+    });
+    failoverRetryController.observeAttempt({ providerRetryMaxRetries: 1 });
+
+    expect(await recover()).toEqual({ action: "proceed" });
+    expect(failoverRetryController.transientRetryCount).toBe(1);
+  });
+
+  it("leaves a silent replay-safe tool-call rejection to the resubmit owner", async () => {
+    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+      errorMessage: "Provider returned an incomplete or malformed tool call",
+      diagnostics: [],
+      content: [],
+      noTools: true,
+      replaySafe: true,
+    });
+    expect(recovery).toEqual({ action: "proceed" });
+    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, TransportDropScenario]>([
+    ["a tool result is missing", { missingToolResult: true }],
+    ["a lifecycle item remains active", { activeCount: 1 }],
+    ["asynchronous tool work remains", { asyncStarted: true }],
+    ["a tool intentionally ended the turn", { terminate: true }],
+    ["approval is pending", { didSendDeterministicApprovalPrompt: true }],
+    ["the harness owns transport recovery", { pluginHarnessOwnsTransport: true }],
+    ["the attempt yielded", { yieldDetected: true }],
+    ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
+    ["the error is not a pre-dispatch rejection", { errorMessage: "Tool schema mismatch" }],
+  ])("does not continue after a tool-call rejection when %s", async (_label, scenario) => {
+    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+      await recoverAfterTransportDrop({
+        errorMessage: "Provider returned an incomplete or malformed tool call",
+        diagnostics: [],
+        content: [],
+        ...scenario,
+      });
+    expect(recovery).toEqual({ action: "proceed" });
+    expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
+    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+  });
+
   it.each(["validation", "success"])(
     "does not recover stale overflow after a completed %s response",
     async (completed) => {

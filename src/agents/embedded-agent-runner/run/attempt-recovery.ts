@@ -31,7 +31,11 @@ import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-s
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { buildErrorAgentMeta } from "./helpers.js";
-import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import {
+  isPreDispatchToolCallRejection,
+  resolveSettledToolBatchEvidence,
+  shouldRetrySilentErrorAssistantTurn,
+} from "./incomplete-turn-recovery.js";
 import {
   resolveModelContinuationEvidence,
   type createModelContinuationCallbacks,
@@ -187,6 +191,21 @@ export async function recoverEmbeddedRunAttempt(input: {
     (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
     attempt.itemLifecycle.activeCount === 0 &&
     toolsAllowContinuation;
+  // The transport discarded a malformed call before dispatch, so it has no effects.
+  // Silent replay-safe turns keep the resubmit/fallback owner in assistant-failure;
+  // otherwise continuing the transcript cannot repeat settled or visible work.
+  const rejectedToolCallFailure = Boolean(
+    recoveryAssistant?.stopReason === "error" &&
+    isPreDispatchToolCallRejection(recoveryAssistant) &&
+    !isTerminalAssistantError(recoveryAssistant) &&
+    !runtime.pluginHarnessOwnsTransport &&
+    !terminalInterrupted &&
+    !promptError &&
+    (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
+    attempt.itemLifecycle.activeCount === 0 &&
+    toolsAllowContinuation &&
+    !shouldRetrySilentErrorAssistantTurn({ attempt, assistant: recoveryAssistant }),
+  );
   // A model idle timeout after settled tools can resume their recorded results.
   // Side effects still forbid replaying the original prompt or switching models.
   const canContinueSettledIdleTimeout =
@@ -386,7 +405,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "timeout_recovery");
     return retry();
   }
-  const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
+  const recoveryReason = outputLimitFailure
+    ? "output_limit"
+    : rejectedToolCallFailure
+      ? "rejected_tool_call"
+      : failureReason;
   // The finished attempt has released its tools. Continue its transcript, including
   // partial output and uncertain effects; never resubmit the original user request.
   if (
@@ -424,7 +447,9 @@ export async function recoverEmbeddedRunAttempt(input: {
           data: {
             phase: "retrying",
             message:
-              reason === "rate_limit" || reason === "output_limit"
+              reason === "rate_limit" ||
+              reason === "output_limit" ||
+              reason === "rejected_tool_call"
                 ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
                 : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
             retryAttempt,
@@ -463,7 +488,10 @@ export async function recoverEmbeddedRunAttempt(input: {
     }
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({
-      lastRetryFailoverReason: outputLimitFailure ? input.lastRetryFailoverReason : failureReason,
+      lastRetryFailoverReason:
+        outputLimitFailure || rejectedToolCallFailure
+          ? input.lastRetryFailoverReason
+          : failureReason,
     });
   }
   if (

@@ -83,14 +83,23 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
   if (content.every((block) => block.type === "text" && !block.text.trim())) {
     // Rejected arguments can consume tokens without output; the preceding guards own replay safety.
-    return (
-      !hasPositiveOutputTokenUsage(assistant) ||
-      assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
-      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)
-    );
+    return !hasPositiveOutputTokenUsage(assistant) || isPreDispatchToolCallRejection(assistant);
   }
 
   return hasOnlyAssistantReasoningContent(assistant);
+}
+
+/** Transport rejected the model's tool call before dispatch; no tool ran for it. */
+export function isPreDispatchToolCallRejection(
+  assistant: Pick<
+    NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>,
+    "errorCode" | "errorMessage"
+  >,
+): boolean {
+  return (
+    assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+    isPreDispatchToolCallRejectionMessage(assistant.errorMessage)
+  );
 }
 
 function shouldSkipNonVisibleTurnRetry(params: {
