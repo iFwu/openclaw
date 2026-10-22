@@ -65,7 +65,16 @@ export type EmbeddedRunFailoverRetryController = ReturnType<
   typeof createEmbeddedRunFailoverRetryController
 >;
 type AuthRetryTrace = TraceAttempt & { reason: FailoverReason };
-type TransientRetryReason = FailoverReason | "output_limit";
+// Non-outage continuations: an output ceiling, or a malformed call the transport
+// rejected before dispatch. Both resume the settled transcript under the shared count budget.
+type ContinuationRetryReason = "output_limit" | "rejected_tool_call";
+type TransientRetryReason = FailoverReason | ContinuationRetryReason;
+
+function isContinuationRetryReason(
+  reason: TransientRetryReason,
+): reason is ContinuationRetryReason {
+  return reason === "output_limit" || reason === "rejected_tool_call";
+}
 
 type RateLimitAuthProfileContext = {
   failoverProvider: string;
@@ -299,7 +308,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retry.reason !== "overloaded" &&
         retry.reason !== "server_error" &&
         retry.reason !== "timeout" &&
-        retry.reason !== "output_limit"
+        !isContinuationRetryReason(retry.reason)
       ) {
         recordDecision("rejected", "non_transient");
         return false;
@@ -343,16 +352,18 @@ export function createEmbeddedRunFailoverRetryController(input: {
       }
       const nowMs = Date.now();
       const retryWindowStartMs = transientRetryWindowStartMs ?? nowMs;
-      if (retry.reason !== "output_limit") {
+      if (!isContinuationRetryReason(retry.reason)) {
         transientRetryWindowStartMs = retryWindowStartMs;
       }
       const delayMs = resolveTransientRetryDelayMs({
         retryNumber: retryCount + 1,
         retryAfterMs: retry.retryAfterMs,
-        // Reaching an output ceiling can take minutes of useful generation.
-        // Keep its count budget and run deadline without the outage time window.
+        // Continuations follow minutes of useful generation, not an outage.
+        // Keep their count budget and run deadline without the outage time window.
         elapsedMs:
-          rateLimit || retry.reason === "output_limit" ? undefined : nowMs - retryWindowStartMs,
+          rateLimit || isContinuationRetryReason(retry.reason)
+            ? undefined
+            : nowMs - retryWindowStartMs,
       });
       if (delayMs === undefined) {
         recordDecision("rejected", "retry_delay_unavailable");
