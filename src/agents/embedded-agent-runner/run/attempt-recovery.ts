@@ -194,7 +194,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   // The transport discarded a malformed call before dispatch, so it has no effects.
   // Silent replay-safe turns keep the resubmit/fallback owner in assistant-failure;
   // otherwise continuing the transcript cannot repeat settled or visible work.
-  const rejectedToolCallFailure = Boolean(
+  const rejectedToolCallFailure =
     recoveryAssistant?.stopReason === "error" &&
     isPreDispatchToolCallRejection(recoveryAssistant) &&
     !isTerminalAssistantError(recoveryAssistant) &&
@@ -204,8 +204,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
     attempt.itemLifecycle.activeCount === 0 &&
     toolsAllowContinuation &&
-    !shouldRetrySilentErrorAssistantTurn({ attempt, assistant: recoveryAssistant }),
-  );
+    !shouldRetrySilentErrorAssistantTurn({ attempt, assistant: recoveryAssistant });
   // A model idle timeout after settled tools can resume their recorded results.
   // Side effects still forbid replaying the original prompt or switching models.
   const canContinueSettledIdleTimeout =
