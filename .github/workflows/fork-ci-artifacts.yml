@@ -5,6 +5,16 @@ on:
     branches: [ifwu-fork]
   workflow_dispatch:
     inputs:
+      verification_base:
+        description: Base commit for focused source verification (empty skips verification)
+        type: string
+        default: ""
+        required: false
+      verification_tests:
+        description: Space-separated test paths to run on GitHub (requires verification_base)
+        type: string
+        default: ""
+        required: false
       verify_download:
         description: Verify downloaded artifacts on a fresh runner
         type: boolean
@@ -24,6 +34,66 @@ env:
   OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0"
 
 jobs:
+  verify:
+    if: github.repository == 'iFwu/openclaw' && github.event_name == 'workflow_dispatch' && inputs.verification_base != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VERIFICATION_BASE: ${{ inputs.verification_base }}
+      VERIFICATION_TESTS: ${{ inputs.verification_tests }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.8.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          cache-mode: "off"
+      - name: Prepare focused verification scope
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const base = process.env.VERIFICATION_BASE;
+          if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('verification_base must be a full commit SHA');
+          execFileSync('git', ['merge-base', '--is-ancestor', base, 'HEAD']);
+          const changed = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', '-z', base, 'HEAD'], {encoding:'utf8'}).split('\0').filter(Boolean);
+          const sources = changed.filter(p => p.endsWith('.ts') && p.startsWith('src/'));
+          const tests = process.env.VERIFICATION_TESTS.trim().split(/\s+/).filter(Boolean);
+          if (!sources.length || !tests.length) throw new Error('Source paths and explicit regression tests are required');
+          for (const p of [...sources, ...tests]) {
+            if (!/^src\/[a-zA-Z0-9_./-]+\.ts$/.test(p) || p.split('/').includes('..') || !fs.statSync(p).isFile()) throw new Error(`Invalid source path: ${p}`);
+          }
+          if (tests.some(p => !p.endsWith('.test.ts'))) throw new Error('Expected test file paths');
+          const root = '.artifacts/fork-verification';
+          fs.mkdirSync(root, {recursive:true});
+          fs.writeFileSync(`${root}/scope.json`, JSON.stringify({sources,tests}));
+          fs.writeFileSync(`${root}/tsconfig.json`, JSON.stringify({extends:'../../test/tsconfig/tsconfig.core.test.shard.json',compilerOptions:{incremental:false},include:[...new Set([...sources,...tests])].map(p=>'../../'+p),exclude:[]}));
+          console.log(JSON.stringify({base,head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),sources,tests},null,2));
+          NODE
+      - name: Type check changed source and regression dependency graph
+        run: node scripts/run-tsgo.mjs -p .artifacts/fork-verification/tsconfig.json
+      - name: Type-aware lint and formatting
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const {sources} = JSON.parse(fs.readFileSync('.artifacts/fork-verification/scope.json','utf8'));
+          execFileSync('node',['scripts/run-oxlint.mjs','--tsconfig','config/tsconfig/oxlint.core.json',...sources],{stdio:'inherit'});
+          execFileSync('pnpm',['exec','oxfmt','--check',...sources],{stdio:'inherit'});
+          NODE
+      - name: Run selected regression suites
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const {tests} = JSON.parse(fs.readFileSync('.artifacts/fork-verification/scope.json','utf8'));
+          execFileSync('node',['scripts/run-vitest.mjs',...tests],{stdio:'inherit'});
+          NODE
+
   build:
     if: github.repository == 'iFwu/openclaw'
     runs-on: ubuntu-24.04
