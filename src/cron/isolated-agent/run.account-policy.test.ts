@@ -12,6 +12,7 @@ import {
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
 import { stop } from "../service/ops-lifecycle.js";
+import { update } from "../service/ops-mutations.js";
 import { list } from "../service/ops-read.js";
 import type { CronEvent } from "../service/state.js";
 import { onTimer } from "../service/timer-scheduler.js";
@@ -55,6 +56,8 @@ describe("scheduled account policy outcomes", () => {
     fails: boolean;
     ownerSessionKey?: string;
     callerOrigin?: NonNullable<CronStoredJob["toolsAllowProvenance"]>["callerOrigin"];
+    missingOrigin?: boolean;
+    reschedule?: boolean;
   }>([
     { name: "removed named account", accountId: "removed", toolsAllow: ["read"], fails: true },
     { name: "configured named account", accountId: "work", toolsAllow: ["read"], fails: false },
@@ -71,6 +74,15 @@ describe("scheduled account policy outcomes", () => {
       callerOrigin: { kind: "external", channel: "whatsapp" },
     },
     {
+      name: "rescheduled DM account without delivery",
+      accountId: "work",
+      toolsAllow: ["read"],
+      fails: false,
+      reschedule: true,
+      ownerSessionKey: "agent:main:whatsapp:direct:sender",
+      callerOrigin: { kind: "external", channel: "whatsapp" },
+    },
+    {
       name: "removed DM account without delivery",
       accountId: "removed",
       toolsAllow: ["read"],
@@ -80,6 +92,7 @@ describe("scheduled account policy outcomes", () => {
     },
     {
       name: "DM account without creator origin",
+      missingOrigin: true,
       accountId: "work",
       toolsAllow: ["read"],
       fails: true,
@@ -87,6 +100,7 @@ describe("scheduled account policy outcomes", () => {
     },
     {
       name: "DM account with malformed creator origin",
+      missingOrigin: true,
       accountId: "work",
       toolsAllow: ["read"],
       fails: true,
@@ -102,6 +116,8 @@ describe("scheduled account policy outcomes", () => {
       fails,
       ownerSessionKey = "agent:main:whatsapp:group:team",
       callerOrigin,
+      missingOrigin = false,
+      reschedule = false,
     }) => {
       const { storePath } = fixtures.makeStorePath();
       const cfg: OpenClawConfig = { channels: { whatsapp: { accounts: { work: {} } } } };
@@ -152,6 +168,16 @@ describe("scheduled account policy outcomes", () => {
       });
       try {
         await list(state);
+        if (reschedule) {
+          const dueAt = Date.now() + 60_000;
+          await update(state, job.id, {
+            schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+          });
+          expect(
+            (await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance?.callerOrigin,
+          ).toEqual(callerOrigin);
+          vi.setSystemTime(dueAt);
+        }
         await onTimer(state);
         const persisted = (await loadCronStore(storePath)).jobs[0];
         const history = readCronRunHistoryPageForTests({
@@ -173,7 +199,11 @@ describe("scheduled account policy outcomes", () => {
         ]);
         if (fails) {
           const reason = persisted?.state.lastError;
-          expect(reason).toContain(`Scheduled account "${accountId}" is unavailable`);
+          expect(reason).toContain(
+            missingOrigin
+              ? `Scheduled origin for account "${accountId}" is unavailable`
+              : `Scheduled account "${accountId}" is unavailable`,
+          );
           expect(history.entries[0]?.error).toBe(reason);
           expect(history.entries[0]?.diagnostics?.summary).toContain(reason);
           expect(persisted?.state.lastDiagnosticSummary).toContain(reason);

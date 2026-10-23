@@ -99,6 +99,37 @@ function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
   return resolveCronJobConfigRevision(executableJob);
 }
 
+/** Schedule and failure reporting do not change an external caller's channel identity. */
+function externalCallerInputsUnchanged(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  scheduleRetentionIsImplicit = false,
+): boolean {
+  const isTimed = (job: CronStoredJob) =>
+    job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron";
+  if (
+    !isDeepStrictEqual(previous.schedule, next.schedule) &&
+    !(isTimed(previous) && isTimed(next))
+  ) {
+    return false;
+  }
+  const implicitRetentionTransition =
+    scheduleRetentionIsImplicit &&
+    isTimed(previous) &&
+    isTimed(next) &&
+    previous.schedule.kind !== next.schedule.kind &&
+    (previous.schedule.kind === "at" || next.schedule.kind === "at");
+  return (
+    resolveCronRequesterExecutionRevision(previous) ===
+      resolveCronRequesterExecutionRevision({
+        ...next,
+        schedule: previous.schedule,
+        failureAlert: previous.failureAlert,
+        ...(implicitRetentionTransition ? { deleteAfterRun: previous.deleteAfterRun } : {}),
+      }) && isDeepStrictEqual(previous.state.triggerState, next.state.triggerState)
+  );
+}
+
 /** Rebinds or clears authenticated requester facts after the complete mutation is known. */
 export function reconcileCronChannelRequesterAuthority(params: {
   job: CronStoredJob;
@@ -108,6 +139,8 @@ export function reconcileCronChannelRequesterAuthority(params: {
   reauthorize?: boolean;
   /** Explicit cap replacement may refresh caller origin without changing the definition. */
   reauthorizeCallerOrigin?: boolean;
+  /** The mutation omitted deleteAfterRun, so a timed schedule conversion owns retention. */
+  scheduleRetentionIsImplicit?: boolean;
 }): void {
   const { job, previousJob } = params;
   if (
@@ -151,7 +184,9 @@ export function reconcileCronChannelRequesterAuthority(params: {
     (!acceptsCallerOriginCapture || params.toolsAllowProvenance?.callerOrigin === undefined) &&
     previousJob &&
     cronJobUsesToolRuntime(job) &&
-    executionUnchanged
+    (executionUnchanged ||
+      (resolveCronAuthenticatedCallerOrigin(previousJob)?.kind === "external" &&
+        externalCallerInputsUnchanged(previousJob, job, params.scheduleRetentionIsImplicit)))
   ) {
     callerOrigin = resolveCronAuthenticatedCallerOrigin({
       ...job,
@@ -197,6 +232,27 @@ export function reconcileCronChannelRequesterAuthority(params: {
     job.toolsAllowProvenance = { version: 1, source: "authenticated-requester", channelRequester };
   } else {
     delete job.toolsAllowProvenance;
+  }
+}
+
+/** Refuse to replace a runnable external account job with one that cannot resolve its source. */
+export function assertCronCallerOriginMutation(previous: CronStoredJob, next: CronStoredJob): void {
+  if (
+    next.enabled &&
+    cronJobUsesToolRuntime(next) &&
+    resolveCronAuthenticatedCallerOrigin(previous)?.kind === "external" &&
+    resolveCronScheduledToolPolicy({
+      toolsAllow: next.payload.toolsAllow,
+      scheduledToolPolicy: next.scheduledToolPolicy,
+      owner: next.owner,
+    })?.mode === "account" &&
+    !resolveCronAuthenticatedCallerOrigin(next)
+  ) {
+    throw new TypeError(
+      "Automation update would invalidate its authenticated source channel. " +
+        "Reauthorize the change from the intended creator account before enabling it; " +
+        "the previous job was not changed.",
+    );
   }
 }
 

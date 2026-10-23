@@ -49,14 +49,12 @@ import { toPublicCronJob } from "../cron/public-job.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
-import { applyJobPatch } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { skillCollectionReviewMonitorAgentId } from "../cron/skill-collection-review-monitor.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type {
   CronDeliveryTrace,
@@ -133,6 +131,7 @@ import {
 } from "./server-cron-notifications.js";
 import { toPluginCronJob } from "./server-cron-plugin-job.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
+import { shouldStopCronStreamSource } from "./server-cron.stream-update-validation.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   invalidateSessionAutomationIndex,
@@ -1236,6 +1235,7 @@ export function buildGatewayCronService(params: {
     current: CronJob,
     patch: Parameters<CronService["update"]>[1],
     nowMs: number,
+    opts?: Parameters<CronService["update"]>[2],
   ): Promise<void> | undefined => {
     if (
       current.schedule.kind !== "stream" ||
@@ -1245,16 +1245,13 @@ export function buildGatewayCronService(params: {
     }
     // Validate before fencing the owner. A rejected conditional or malformed
     // update must leave the live source and its buffered events untouched.
-    const validated = structuredClone(current);
-    applyJobPatch(validated, patch, {
-      defaultAgentId: cron.getDefaultAgentId(),
-      scheduleValidationNowMs: nowMs,
-      cronConfig: params.cfg.cron,
-    });
     if (
-      validated.enabled &&
-      validated.schedule.kind === "stream" &&
-      cronStreamScheduleKey(validated.schedule) === cronStreamScheduleKey(current.schedule)
+      !shouldStopCronStreamSource(current, patch, {
+        defaultAgentId: cron.getDefaultAgentId(),
+        nowMs,
+        cronConfig: params.cfg.cron,
+        options: opts,
+      })
     ) {
       return undefined;
     }
@@ -1322,7 +1319,7 @@ export function buildGatewayCronService(params: {
   ) => {
     let lifecycleStop: Promise<void> | undefined;
     const routeAfterValidation = (current: CronJob, nowMs: number) => {
-      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs, opts);
     };
     const beforeUpdate = precondition
       ? async (current: CronJob, nowMs: number) => {
