@@ -23,14 +23,17 @@ vi.mock("../channels/plugins/session-conversation.js", () => ({
   }),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: () => ({
-    config: {
-      listAccountIds: (config: OpenClawConfig) => [
-        "default",
-        ...Object.keys(config.channels?.whatsapp?.accounts ?? {}),
-      ],
-    },
-  }),
+  getLoadedChannelPlugin: (channel: string) =>
+    channel === "whatsapp"
+      ? {
+          config: {
+            listAccountIds: (config: OpenClawConfig) => [
+              "default",
+              ...Object.keys(config.channels?.whatsapp?.accounts ?? {}),
+            ],
+          },
+        }
+      : undefined,
 }));
 
 async function storedSession(
@@ -119,10 +122,14 @@ describe("resolveGroupToolPolicy group context validation", () => {
     ).toEqual({ allow: ["read"] });
   });
 
-  it.each(["agent:main:whatsapp:group:safe-room", "agent:main:main"])(
-    "reports unavailable scheduled authority for %s before tool construction",
-    (sessionKey) => {
-      const params = { config, sessionKey, accountId: "removed", requireConfiguredAccount: true };
+  it.each([
+    { sessionKey: "agent:main:whatsapp:group:safe-room" },
+    { sessionKey: "agent:main:main", messageProvider: "whatsapp" },
+    { sessionKey: "agent:main:main", messageProvider: "missing-channel" },
+  ])(
+    "reports unavailable scheduled authority for $sessionKey / $messageProvider before tool construction",
+    (context) => {
+      const params = { config, ...context, accountId: "removed", requireConfiguredAccount: true };
       expect(resolveGroupToolPolicyOutcome(params)).toMatchObject({
         kind: "account-unavailable",
         accountId: "removed",
@@ -134,7 +141,34 @@ describe("resolveGroupToolPolicy group context validation", () => {
     },
   );
 
-  it("preserves intentional deny-all policy for a configured scheduled account", () => {
+  it.each([
+    "agent:main:main",
+    "agent:main:whatsapp:work:direct:alice",
+    "agent:main:whatsapp:direct:alice",
+  ])("reports missing scheduled origin without inferring a channel from %s", (sessionKey) => {
+    const params = {
+      config: { channels: { whatsapp: { accounts: { work: {} } } } },
+      sessionKey,
+      accountId: "work",
+      requireConfiguredAccount: true,
+    };
+    expect(resolveGroupToolPolicyOutcome(params)).toMatchObject({
+      kind: "origin-unavailable",
+      accountId: "work",
+      message: expect.stringContaining("the source channel is missing"),
+    });
+    expect(() => resolveGroupToolPolicy(params)).toThrow(
+      "Recreate this automation from the intended account to restore its origin",
+    );
+  });
+
+  it.each([
+    { sessionKey: "agent:main:whatsapp:group:safe-room" },
+    {
+      sessionKey: "agent:main:main",
+      spawnedBy: "agent:main:whatsapp:group:safe-room",
+    },
+  ])("preserves configured scheduled group policy for $sessionKey", (context) => {
     expect(
       resolveGroupToolPolicyOutcome({
         config: {
@@ -145,7 +179,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
             },
           },
         },
-        sessionKey: "agent:main:whatsapp:group:safe-room",
+        ...context,
         accountId: "work",
         requireConfiguredAccount: true,
       }),

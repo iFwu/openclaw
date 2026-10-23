@@ -546,6 +546,7 @@ export function resolveEffectiveToolPolicy(params: {
 
 type GroupToolPolicyOutcome =
   | { kind: "resolved"; policy?: SandboxToolPolicy }
+  | { kind: "origin-unavailable"; accountId: string; message: string }
   | { kind: "account-unavailable"; accountId: string; message: string };
 
 function unavailableScheduledAccount(accountId: string): GroupToolPolicyOutcome {
@@ -596,7 +597,11 @@ export function resolveGroupToolPolicyOutcome(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? unavailableScheduledAccount(accountId)
+      ? {
+          kind: "origin-unavailable",
+          accountId,
+          message: `Scheduled origin for account "${accountId}" is unavailable: the source channel is missing. Recreate this automation from the intended account to restore its origin.`,
+        }
       : { kind: "resolved" };
   }
   let plugin;
@@ -661,7 +666,7 @@ export function resolveGroupToolPolicy(
   params: Parameters<typeof resolveGroupToolPolicyOutcome>[0],
 ): SandboxToolPolicy | undefined {
   const outcome = resolveGroupToolPolicyOutcome(params);
-  if (outcome.kind === "account-unavailable") {
+  if (outcome.kind !== "resolved") {
     throw new Error(outcome.message);
   }
   return outcome.policy;

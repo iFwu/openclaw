@@ -498,6 +498,99 @@ describe("CronService authenticated channel requester", () => {
 });
 
 describe("CronService authenticated caller origin", () => {
+  it.each(["update", "declaration"] as const)(
+    "preserves external source on reschedule and rejects source loss before %s commits",
+    async (mutation) => {
+      const { storePath } = await makeStorePath();
+      const cron = createCronService(storePath);
+      const declaration = requesterDeclaration();
+      const provenance: CronToolsAllowProvenance = {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "external", channel: "discord" },
+        channelRequester,
+      };
+      try {
+        const created = await cron.add(declaration, {
+          scheduledToolPolicy: requesterPolicy,
+          toolsAllowProvenance: provenance,
+        });
+        const schedule = { kind: "every" as const, everyMs: 120_000, anchorMs: Date.now() };
+        if (mutation === "update") {
+          await cron.update(created.id, { schedule });
+        } else {
+          await cron.add({ ...declaration, schedule });
+        }
+        const rescheduled = (await loadCronStore(storePath)).jobs[0]!;
+        expect(rescheduled.schedule).toEqual(schedule);
+        expect(rescheduled.toolsAllowProvenance?.callerOrigin).toEqual(provenance.callerOrigin);
+        expect(rescheduled.toolsAllowProvenance?.channelRequester).toBeUndefined();
+        expect(rescheduled.scheduledToolPolicy).toEqual(requesterPolicy);
+        expect(rescheduled.delivery).toEqual(declaration.delivery);
+
+        const payload = {
+          kind: "agentTurn" as const,
+          message: "Different instructions",
+          toolsAllow: ["message"],
+        };
+        const mutate = (authenticated: boolean) =>
+          mutation === "update"
+            ? cron.update(
+                created.id,
+                { payload },
+                authenticated ? { toolsAllowProvenance: provenance } : undefined,
+              )
+            : cron.add(
+                { ...declaration, schedule, payload },
+                authenticated ? { toolsAllowProvenance: provenance } : undefined,
+              );
+        await expect(mutate(false)).rejects.toThrow(
+          "would invalidate its authenticated source channel",
+        );
+        expect((await loadCronStore(storePath)).jobs[0]).toEqual(rescheduled);
+        await mutate(true);
+        expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(payload);
+      } finally {
+        cron.stop();
+      }
+    },
+  );
+
+  it("preserves external source across implicit recurring and one-shot retention transitions", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    const provenance: CronToolsAllowProvenance = {
+      version: 1,
+      source: "final-executable-surface",
+      callerOrigin: { kind: "external", channel: "discord" },
+    };
+    try {
+      const created = await cron.add(requesterDeclaration({ declarationKey: undefined }), {
+        scheduledToolPolicy: requesterPolicy,
+        toolsAllowProvenance: provenance,
+      });
+      await cron.update(created.id, {
+        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+      });
+      const once = (await loadCronStore(storePath)).jobs[0]!;
+      expect(once.deleteAfterRun).toBe(true);
+      expect(once.toolsAllowProvenance?.callerOrigin).toEqual(provenance.callerOrigin);
+      await cron.update(created.id, { schedule: { kind: "every", everyMs: 120_000 } });
+      const recurring = (await loadCronStore(storePath)).jobs[0]!;
+      expect(recurring.deleteAfterRun).toBeUndefined();
+      expect(recurring.toolsAllowProvenance?.callerOrigin).toEqual(provenance.callerOrigin);
+      await expect(
+        cron.update(created.id, {
+          schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+          deleteAfterRun: true,
+        }),
+      ).rejects.toThrow("would invalidate its authenticated source channel");
+      expect((await loadCronStore(storePath)).jobs[0]).toEqual(recurring);
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("persists local creation, clears executable edits, and permits explicit reauthorization", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);

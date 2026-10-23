@@ -39,6 +39,7 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs-scheduling.js";
 import {
+  assertCronCallerOriginMutation,
   consumeRuntimeAuthorityMutationOptions,
   cronJobMessageActionAuthorityInputsEqual,
   cronJobMessageToolAuthorityInputsEqual,
@@ -276,7 +277,9 @@ export async function add(
         previousJob: existing,
         toolsAllowProvenance: opts?.toolsAllowProvenance,
         reauthorize: true,
+        scheduleRetentionIsImplicit: normalizedInput.deleteAfterRun === undefined,
       });
+      assertCronCallerOriginMutation(existing, nextJob);
       const includeEnabled = opts?.enabledExplicit === true;
       if (
         isDeepStrictEqual(
@@ -467,7 +470,9 @@ async function updateLoadedJob(params: {
     reauthorize: patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
     reauthorizeCallerOrigin:
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    scheduleRetentionIsImplicit: patch.deleteAfterRun === undefined,
   });
+  assertCronCallerOriginMutation(job, nextJob);
   const snapshot = snapshotStoreForRollback(state);
   await persistUpdatedJob({
     state,

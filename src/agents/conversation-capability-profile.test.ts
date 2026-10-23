@@ -523,7 +523,11 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
 
       if (origin === "unknown" || !configured) {
         for (const resolve of [conversationTools, webSearch, harnessTools]) {
-          expect(resolve).toThrow('Scheduled account "work" is unavailable');
+          expect(resolve).toThrow(
+            origin === "unknown"
+              ? 'Scheduled origin for account "work" is unavailable'
+              : 'Scheduled account "work" is unavailable',
+          );
         }
         return;
       }

@@ -53,6 +53,7 @@ import {
   registerGatewayCronHandoffTests,
   registerGatewayCronReceiptTests,
 } from "./server-cron.receipts.test-support.js";
+import { registerGatewayCronStreamUpdateTests } from "./server-cron.stream-updates.test-support.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -1664,44 +1665,11 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
-    const watched = createWatchedRun();
-    const { cancel, detachOutput } = watched;
-    const { spawn } = mockCronSupervisor(watched);
-    const cfg = createCronConfig("server-cron-stream-rejected-update");
-    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    const state = loadCronService(cfg);
-
-    try {
-      const added = await addSystemEventJob(state, "stream source", "event", {
-        schedule: { kind: "stream", command: ["source"] },
-        sessionTarget: "main",
-      });
-      const streamJob = "job" in added ? added.job : added;
-      const sourceIdentity = streamJob.state.streamSourceIdentity;
-      await expect(
-        state.cron.updateWithPrecondition(streamJob.id, { enabled: false }, () => {
-          throw new Error("revision mismatch");
-        }),
-      ).rejects.toThrow("revision mismatch");
-      await expect(
-        state.cron.update(streamJob.id, {
-          schedule: { kind: "stream", command: [] },
-        }),
-      ).rejects.toThrow("non-empty command argv array");
-      await state.cron.update(streamJob.id, {
-        schedule: { kind: "stream", command: ["source"] },
-      });
-
-      expect(spawn).toHaveBeenCalledOnce();
-      expect(cancel).not.toHaveBeenCalled();
-      expect(detachOutput).not.toHaveBeenCalled();
-      expect(state.cron.getJob(streamJob.id)?.enabled).toBe(true);
-      expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
-    } finally {
-      await state.stopStreamWatchers?.();
-      state.cron.stop();
-    }
+  registerGatewayCronStreamUpdateTests({
+    createWatchedRun,
+    mockCronSupervisor,
+    createCronConfig,
+    loadCronService,
   });
 
   it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {

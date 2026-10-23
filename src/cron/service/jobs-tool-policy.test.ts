@@ -3,6 +3,7 @@ import type { CronStoredJob } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   reconcileToolsAllowAuthority,
+  reconcileCronChannelRequesterAuthority,
 } from "./jobs-tool-policy.js";
 
 function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
@@ -141,4 +142,147 @@ describe("account read authority inputs", () => {
       }),
     ).toBe(false);
   });
+});
+
+describe("external scheduled origin across operator edits", () => {
+  function externalJob(): CronStoredJob {
+    return {
+      id: "external-reminder",
+      name: "reminder",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "at", at: "2030-01-01T12:00:00.000Z" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Report progress", toolsAllow: ["message"] },
+      owner: {
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:123",
+        accountId: "secondary",
+      },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:ops:telegram:direct:123",
+        ownerAccountId: "secondary",
+      },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "external", channel: "telegram" },
+        channelRequester: {
+          version: 1,
+          channel: "telegram",
+          accountId: "secondary",
+          senderId: "123",
+        },
+      },
+      delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "secondary" },
+      state: {},
+    };
+  }
+
+  it.each(["schedule", "failureAlert"] as const)(
+    "keeps external channel on %s edits without retaining requester execution authority",
+    (field) => {
+      const previousJob = externalJob();
+      const job = structuredClone(previousJob);
+      if (field === "schedule") {
+        job.schedule = { kind: "at", at: "2030-01-01T13:00:00.000Z" };
+      } else {
+        job.failureAlert = { after: 1, channel: "telegram", to: "-123", accountId: "default" };
+      }
+      reconcileCronChannelRequesterAuthority({ job, previousJob });
+      expect(job.toolsAllowProvenance?.callerOrigin).toEqual({
+        kind: "external",
+        channel: "telegram",
+      });
+      expect(job.toolsAllowProvenance?.channelRequester).toBeUndefined();
+      expect(job.scheduledToolPolicy).toEqual(previousJob.scheduledToolPolicy);
+      expect(job.delivery).toEqual(previousJob.delivery);
+      expect(cronJobMessageActionAuthorityInputsEqual(previousJob, job)).toBe(false);
+    },
+  );
+
+  it.each(["stream", "on-exit"] as const)(
+    "never treats %s command changes as rescheduling",
+    (kind) => {
+      const previousJob = externalJob();
+      previousJob.schedule =
+        kind === "stream" ? { kind, command: ["source"] } : { kind, command: "source" };
+      const unchangedSource = structuredClone(previousJob);
+      unchangedSource.failureAlert = { after: 1 };
+      reconcileCronChannelRequesterAuthority({ job: unchangedSource, previousJob });
+      expect(unchangedSource.toolsAllowProvenance?.callerOrigin).toEqual({
+        kind: "external",
+        channel: "telegram",
+      });
+      const job = structuredClone(previousJob);
+      job.schedule =
+        kind === "stream"
+          ? { kind, command: ["different-source"] }
+          : { kind, command: "different-source" };
+      reconcileCronChannelRequesterAuthority({ job, previousJob });
+      expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "unknown" });
+    },
+  );
+
+  it("does not ignore explicit retention changes during timed schedule conversion", () => {
+    const previousJob = externalJob();
+    previousJob.schedule = { kind: "every", everyMs: 60_000 };
+    const job = structuredClone(previousJob);
+    job.schedule = { kind: "at", at: "2030-01-01T13:00:00.000Z" };
+    job.deleteAfterRun = true;
+    reconcileCronChannelRequesterAuthority({
+      job,
+      previousJob,
+      scheduleRetentionIsImplicit: false,
+    });
+    expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "unknown" });
+  });
+
+  it("does not preserve local read authority when rescheduled", () => {
+    const previousJob = externalJob();
+    previousJob.toolsAllowProvenance = {
+      version: 1,
+      source: "final-executable-surface",
+      callerOrigin: { kind: "local" },
+    };
+    const job = structuredClone(previousJob);
+    job.schedule = { kind: "at", at: "2030-01-01T13:00:00.000Z" };
+    reconcileCronChannelRequesterAuthority({ job, previousJob });
+    expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "unknown" });
+  });
+
+  it.each(["payload", "delivery", "owner", "cap", "unknown"] as const)(
+    "does not recover external origin across %s changes",
+    (field) => {
+      const previousJob = externalJob();
+      if (field === "unknown") {
+        previousJob.toolsAllowProvenance = {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "unknown" },
+        };
+      }
+      const job = structuredClone(previousJob);
+      job.schedule = { kind: "at", at: "2030-01-01T13:00:00.000Z" };
+      if (field === "payload") {
+        job.payload = { kind: "agentTurn", message: "Do different work", toolsAllow: ["message"] };
+      }
+      if (field === "delivery") {
+        job.delivery = { mode: "announce", channel: "telegram", to: "456" };
+      }
+      if (field === "owner") {
+        job.owner = { sessionKey: "agent:ops:telegram:direct:456", accountId: "other" };
+      }
+      if (field === "cap") {
+        job.payload.toolsAllow = ["message", "exec"];
+      }
+      reconcileCronChannelRequesterAuthority({ job, previousJob });
+      expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "unknown" });
+      expect(job.toolsAllowProvenance?.channelRequester).toBeUndefined();
+    },
+  );
 });
