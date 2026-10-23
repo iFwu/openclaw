@@ -43,6 +43,7 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { isDmTopicManuallyNamed, setDmTopicName } from "./dm-topic-name.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -252,6 +253,9 @@ function scheduleDmTopicLabel(params: {
   void runTelegramTopicLabelOnce({
     ...params.labelState,
     run: async () => {
+      if (await isDmTopicManuallyNamed(params.bot, context.chatId, topicThreadId)) {
+        return true;
+      }
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
@@ -262,8 +266,21 @@ function scheduleDmTopicLabel(params: {
       if (!label || !params.labelState?.isCurrent()) {
         return false;
       }
-      await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
-      logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
+      const renamed = await setDmTopicName({
+        bot: params.bot,
+        chatId: context.chatId,
+        threadId: topicThreadId,
+        name: label,
+        manual: false,
+        assertCurrent: () => {
+          if (!params.labelState?.isCurrent()) {
+            throw new Error("Topic label generation is no longer current");
+          }
+        },
+      });
+      if (renamed) {
+        logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
+      }
       return true;
     },
   }).catch((err: unknown) => logVerbose(`auto-topic-label: failed: ${String(err)}`));

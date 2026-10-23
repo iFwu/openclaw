@@ -355,9 +355,9 @@ async function resolveTelegramCommandAuth(params: {
   };
 }
 
-export async function prepareTelegramCommandDispatch(
+export async function prepareTelegramCommandAuthorization(
   params: TelegramCommandExecutorParams & { requireAuth: boolean },
-): Promise<TelegramCommandDispatch | null> {
+) {
   const telegramDeps = params.telegramDeps ?? defaultTelegramNativeCommandDeps;
   const runtimeCfg = telegramDeps.getRuntimeConfig();
   const runtimeTelegramCfg = resolveTelegramAccount({
@@ -384,9 +384,23 @@ export async function prepareTelegramCommandDispatch(
     resolveTelegramGroupConfig: params.resolveTelegramGroupConfig,
     requireAuth: params.requireAuth,
   });
+  return auth ? { ...auth, runtimeCfg, runtimeTelegramCfg, telegramDeps } : null;
+}
+
+export async function prepareTelegramCommandDispatch(
+  params: TelegramCommandExecutorParams & { requireAuth: boolean },
+): Promise<TelegramCommandDispatch | null> {
+  const auth = await prepareTelegramCommandAuthorization(params);
   if (!auth) {
     return null;
   }
+  const { runtimeCfg, runtimeTelegramCfg } = auth;
+  const turnSettings = resolveTelegramMessageTurnSettings({
+    accountId: params.accountId,
+    cfg: runtimeCfg,
+    telegramCfg: runtimeTelegramCfg,
+    opts: params.opts,
+  });
   const { route, bindingMode } = auth;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
@@ -452,9 +466,6 @@ export async function prepareTelegramCommandDispatch(
   });
   return {
     ...params,
-    telegramDeps,
-    runtimeCfg,
-    runtimeTelegramCfg,
     ...auth,
     threadParams: buildTelegramThreadParams(auth.threadSpec),
     nativeCommandRuntime,

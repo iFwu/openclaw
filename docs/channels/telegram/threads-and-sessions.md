@@ -58,6 +58,22 @@ How forum topics map to sessions, agents, and ACP bindings.
   </Accordion>
 </AccordionGroup>
 
+## Rename a private-chat topic
+
+Send `/rename <new title>` inside a bot private-chat topic to change its Telegram
+name. With native commands enabled, `/rename` also appears in the command menu.
+The command runs without a model call and does not rename, reset, or replace the
+OpenClaw session. `/name` continues to name only the OpenClaw session.
+
+Titles support Unicode and spaces, with a limit of 128 characters. Without a title,
+`/rename` displays usage. The command requires normal command authorization and
+honors `actions.editForumTopic`. It does not rename group topics or channel direct
+message topics, and never falls back to another topic.
+
+Manual names take precedence over automatic first-turn labels, including labels
+already being generated. This preference is retained in the existing bounded
+persistent topic cache (2,048 recently used entries per bot).
+
 ## Bot-created forum topics
 
 Set `requireMentionInBotThreads` on a group or topic to override mention gating only in forum topics created by the receiving bot. `false` allows unmentioned messages to start turns there; `true` requires a mention, including for replies to the bot. Omission preserves existing behavior. A topic setting wins over the selected group setting. The same paths are available under `channels.telegram.accounts.<accountId>.groups`.

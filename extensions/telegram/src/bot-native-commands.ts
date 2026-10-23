@@ -33,6 +33,14 @@ const loadTelegramPluginCommandExecutor = createLazyRuntimeModule(
   () => import("./bot-native-command-plugins.js"),
 );
 
+const loadTelegramRenameCommandExecutor = createLazyRuntimeModule(
+  () => import("./bot-native-command-rename.js"),
+);
+const renameCommand: TelegramMenuCommand = {
+  command: "rename",
+  description: "Rename the current Telegram private-chat topic.",
+};
+
 type TelegramNativeCommandContext = Context & { match?: string };
 
 type RegisterTelegramNativeCommandsParams = Omit<
@@ -75,7 +83,9 @@ export const registerTelegramNativeCommands = ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? telegramDeps.listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      ? telegramDeps
+          .listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+          .filter((command) => normalizeTelegramCommandName(command.name) !== renameCommand.command)
       : [];
   const pluginCommandRuntime = createPluginCommandRuntime();
   const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
@@ -94,6 +104,7 @@ export const registerTelegramNativeCommands = ({
       (command) => normalizeTelegramCommandName(command.name),
     ),
   );
+  reservedCommands.add(renameCommand.command);
   for (const command of skillCommands) {
     reservedCommands.add(normalizeTelegramCommandName(command.name));
   }
@@ -143,6 +154,7 @@ export const registerTelegramNativeCommands = ({
   const fullCommandCatalog = buildCappedTelegramMenuCommands({
     allCommands: [
       ...customCommands,
+      ...(nativeEnabled ? [renameCommand] : []),
       ...nativeMenuCommands.filter((command) => !command.isAlias),
       ...(nativeEnabled
         ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
@@ -226,6 +238,22 @@ export const registerTelegramNativeCommands = ({
     telegramDeps,
     opts,
   });
+  if (nativeEnabled) {
+    nativeCommandNames.set(renameCommand.command, renameCommand.command);
+    bot.command(renameCommand.command, async (ctx) => {
+      if (shouldSkipUpdate(ctx) || !ctx.message) {
+        return;
+      }
+      const { executeTelegramRenameCommand } = await loadTelegramRenameCommandExecutor();
+      await executeTelegramRenameCommand(
+        buildExecutorParams({
+          botUser: ctx.me,
+          msg: ctx.message,
+          rawText: typeof ctx.match === "string" ? ctx.match.trim() : "",
+        }),
+      );
+    });
+  }
   let handleLoginCallback:
     | ((
         botUser: Context["me"],

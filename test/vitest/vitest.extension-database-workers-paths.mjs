@@ -372,6 +372,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot-message-dispatch.recovery.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-dispatch.reply-targets.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-dispatch.topic-label.test.ts",
+  "extensions/telegram/src/bot-native-command-rename.test.ts",
+  "extensions/telegram/src/dm-topic-name.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.auth.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.concurrency.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.delivery.test.ts",

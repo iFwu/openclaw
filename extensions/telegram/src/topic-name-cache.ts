@@ -9,6 +9,7 @@ const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  manuallyNamed?: boolean;
   creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
@@ -154,6 +155,7 @@ export async function updateTopicName(
   const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
   const merged: TopicEntry = {
     name: patch.name ?? existing?.name ?? "",
+    ...((patch.manuallyNamed ?? existing?.manuallyNamed) ? { manuallyNamed: true } : {}),
     updatedAt: nextUpdatedAt(scope),
     ...(iconColor !== undefined ? { iconColor } : {}),
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
@@ -210,4 +212,14 @@ export async function getTopicCreatorUserId(
   const state = getTopicStoreState(scope);
   await hydrateTopicStoreState(state);
   return state.store.get(cacheKey(chatId, threadId))?.creatorUserId;
+}
+
+export async function isTopicManuallyNamed(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<boolean> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  return state.store.get(cacheKey(chatId, threadId))?.manuallyNamed === true;
 }
