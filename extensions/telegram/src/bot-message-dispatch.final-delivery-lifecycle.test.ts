@@ -291,14 +291,16 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     const actual = await vi.importActual<typeof SendEditModule>("./send-edit.js");
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    editMessageTelegram.mockImplementation(async (...args) => {
-      const result = await actual.editMessageTelegram(...args);
-      if (args[2].includes("expandable")) {
-        started.resolve();
-        await release.promise;
-      }
-      return result;
-    });
+    editMessageTelegram.mockImplementation(
+      async (...args: Parameters<typeof actual.editMessageTelegram>) => {
+        const result = await actual.editMessageTelegram(...args);
+        if (args[2].includes("expandable")) {
+          started.resolve();
+          await release.promise;
+        }
+        return result;
+      },
+    );
     let callbacks: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions, replyOptions }) => {
