@@ -85,7 +85,13 @@ function progressLineText(
 
 export function renderTelegramProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
-  options: { richMessages: boolean; maxLines: number; maxLineChars: number; toolProgress: boolean },
+  options: {
+    richMessages: boolean;
+    maxLines: number;
+    maxLineChars: number;
+    toolProgress: boolean;
+    collapseStatus?: boolean;
+  },
 ): TelegramDraftPreview {
   const { maxLines, maxLineChars } = options;
   const activity =
@@ -186,11 +192,20 @@ export function renderTelegramProgressDraftPreview(
       html.push("────────");
     }
     const text = compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars);
-    addParagraph(
+    const status =
       snapshot.statusHeadlineFormat === "plain"
-        ? literalProgressText(`📌 ${text}`)
-        : markdownProgressText(`📌 ${text}`),
-    );
+        ? literalProgressText(`🏷 ${text}`)
+        : markdownProgressText(`🏷 ${text}`);
+    if (options.collapseStatus && !activity.some(isPriorityLine)) {
+      blocks.push({
+        type: "details",
+        summary: "🏷",
+        blocks: [{ type: "paragraph", text: status.rich }],
+      });
+      html.push(`<blockquote expandable>${status.html}</blockquote>`);
+    } else {
+      addParagraph(status);
+    }
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages

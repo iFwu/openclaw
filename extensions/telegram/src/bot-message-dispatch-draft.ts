@@ -1,7 +1,10 @@
 import {
   resolveChannelDraftStreamingChunking,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -19,10 +22,13 @@ import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdownPlan, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { reportTelegramProviderDelivery } from "./send-outbound.js";
+import { editMessageTelegram } from "./send.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
@@ -649,6 +655,7 @@ export function isQueuedAnswerBlock(
 
 export function beginDraftQueuedFollowup(turn: Turn): void {
   turn.progressContinuationAdopted = false;
+  turn.agentRunFailed = undefined;
   for (const lane of [turn.progressLane, ...Object.values(turn.lanes)]) {
     if (!lane.stream) {
       continue;
@@ -659,7 +666,73 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
+  const failed = superseded || turn.dispatchError != null || turn.agentRunFailed;
   await turn.previewLifecycle.cleanup({
-    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
+    failed,
   });
+  const lane = turn.progressLane;
+  const messageId = lane.stream?.messageId();
+  if (
+    failed ||
+    turn.agentRunFailed !== false ||
+    turn.isSuperseded() ||
+    !turn.previewLifecycle.finalSucceeded ||
+    turn.progressContinuationAdopted ||
+    turn.streamMode !== "progress" ||
+    turn.telegramCfg.streaming?.progress?.persist !== true ||
+    lane.finalized ||
+    typeof messageId !== "number" ||
+    !turn.progressCompositor.hasStatusHeadline
+  ) {
+    return;
+  }
+  // Final acceptance can stop the stream before the run settles. Edit its existing
+  // message only after both facts are known; never reopen the preview producer.
+  const preview = renderTelegramProgressDraftPreview(turn.progressCompositor.getSnapshot(), {
+    richMessages: turn.richMessages,
+    toolProgress: turn.progressCompositor.previewToolProgressEnabled,
+    maxLines: resolveChannelProgressDraftMaxLines(turn.telegramCfg),
+    maxLineChars: resolveChannelProgressDraftMaxLineChars(turn.telegramCfg),
+    collapseStatus: true,
+  });
+  // Progress streaming owns the first planned page until final answer delivery
+  // stops it. Keep the same page projection, not a full-document single edit.
+  const page = planTelegramTextDeliveryPages({
+    text: preview.text,
+    maxChars: Math.min(
+      turn.textLimit,
+      turn.richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
+    ),
+    richMessages: turn.richMessages,
+    richMessage: preview.richMessage,
+    ...(preview.parseMode === "HTML" ? { textMode: "html" as const } : {}),
+  })[0];
+  if (!page) {
+    return;
+  }
+  try {
+    await (turn.telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+      turn.context.chatId,
+      messageId,
+      page.sourceText,
+      {
+        api: turn.bot.api,
+        cfg: turn.cfg,
+        accountId: turn.context.route.accountId,
+        textMode: page.sourceTextMode,
+        richMessage: page.richMessage,
+        linkPreview: turn.telegramCfg.linkPreview,
+        assertPlatformSendAuthorized: () => {
+          if (turn.isSuperseded() || lane.stream?.messageId() !== messageId) {
+            throw new Error("Telegram progress message no longer belongs to this turn");
+          }
+        },
+      },
+    );
+    if (!turn.isSuperseded() && lane.stream?.messageId() === messageId) {
+      lane.finalized = true;
+    }
+  } catch (error) {
+    turn.runtime.error?.(`telegram progress summary collapse failed: ${formatErrorMessage(error)}`);
+  }
 }

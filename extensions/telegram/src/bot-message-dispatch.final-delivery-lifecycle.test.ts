@@ -114,6 +114,237 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     vi.useRealTimers();
   });
 
+  it.each([
+    "dispatcher",
+    "message-tool",
+    "error-final",
+    "cancelled",
+    "dispatch-failed",
+    "no-final",
+    "approval",
+    "unknown-outcome",
+    "long-summary",
+  ] as const)("collapses only the settled successful summary (%s)", async (outcome) => {
+    const { bot, messages, sendMessage, editMessageText } = await setupObservedProgressTransport();
+    const abortController = new AbortController();
+    const runtimeError = vi.fn();
+    let cardId: number | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          explanation:
+            "Verified <b>literal</b> & **plain**." +
+            (outcome === "long-summary" ? " tail".repeat(1200) : ""),
+          explanationFormat: "plain",
+          steps: outcome === "long-summary" ? [] : [{ step: "Verify", status: "completed" }],
+        });
+        if (outcome === "approval") {
+          await replyOptions?.onApprovalEvent?.({
+            phase: "requested",
+            approvalId: "summary-approval",
+            title: "Approve deploy",
+          });
+        }
+        cardId = [...messages.keys()][0];
+        expect(cardId).toBeTypeOf("number");
+        if (outcome !== "long-summary") {
+          expect(messages.get(cardId!)).toContain("[x] Verify");
+        }
+        expect(messages.get(cardId!)).toContain(
+          "🏷 Verified &lt;b&gt;literal&lt;/b&gt; &amp; **plain**.",
+        );
+        expect(messages.get(cardId!)).not.toContain("expandable");
+        if (outcome === "no-final") {
+          replyOptions?.onAgentRunTerminalOutcome?.("completed");
+          return { queuedFinal: false };
+        }
+        if (outcome === "message-tool") {
+          await bot.api.sendMessage(123, "Summary final");
+          await replyOptions?.onObservedReplyDelivery?.();
+        } else {
+          await dispatcherOptions.deliver(
+            { text: "Summary final", isError: outcome === "error-final" },
+            { kind: "final" },
+          );
+        }
+        // A delivery receipt alone is insufficient until the run settles.
+        expect(messages.get(cardId!)).not.toContain("expandable");
+        if (outcome === "cancelled") {
+          abortController.abort(new Error("summary turn cancelled"));
+        }
+        if (outcome === "dispatch-failed") {
+          replyOptions?.onAgentRunTerminalOutcome?.("failed");
+          throw new Error("run failed after final receipt");
+        }
+        if (outcome !== "unknown-outcome") {
+          replyOptions?.onAgentRunTerminalOutcome?.("completed");
+        }
+        return { queuedFinal: outcome !== "message-tool" };
+      },
+    );
+    await dispatchWithContext({
+      bot,
+      runtime: {
+        log: vi.fn(),
+        error: runtimeError,
+        exit: () => {
+          throw new Error("unexpected exit");
+        },
+      },
+      cfg: { channels: { telegram: { botToken: "synthetic-test-token", richMessages: false } } },
+      context: progressContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            toolProgress: true,
+            persist: true,
+            maxLineChars: false,
+            label: outcome === "long-summary" ? false : undefined,
+          },
+        },
+      },
+      turnAdoptionLifecycle: {
+        abortSignal: abortController.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const card = messages.get(cardId!)!;
+    if (["dispatcher", "message-tool", "long-summary"].includes(outcome)) {
+      expect(runtimeError.mock.calls).toEqual([]);
+    }
+    if (outcome !== "long-summary") {
+      expect(card).toContain("[x] Verify");
+    }
+    expect(card.includes("<blockquote expandable>")).toBe(
+      outcome === "dispatcher" || outcome === "message-tool" || outcome === "long-summary",
+    );
+    expect(card).toContain("&lt;b&gt;literal&lt;/b&gt;");
+    expect([...messages.values()].filter((text) => text === "Summary final")).toHaveLength(
+      outcome === "no-final" ? 0 : 1,
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(outcome === "no-final" ? 1 : 2);
+    if (outcome === "dispatcher" || outcome === "message-tool" || outcome === "long-summary") {
+      expect(card).not.toContain("&lt;br&gt;");
+      expect(editMessageText).toHaveBeenLastCalledWith(
+        "123",
+        cardId,
+        expect.stringContaining(
+          outcome === "long-summary"
+            ? "<blockquote expandable>🏷 Verified"
+            : "[x] Verify\n────────\n<blockquote expandable>",
+        ),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    }
+  });
+
+  it("uses each queued run's terminal outcome rather than the preceding final receipt", async () => {
+    const { bot, messages } = await setupObservedProgressTransport();
+    let callbacks: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions, replyOptions }) => {
+        callbacks = replyOptions;
+        await dispatcherOptions.deliver({ text: "Root final" }, { kind: "final" });
+        replyOptions?.onAgentRunTerminalOutcome?.("completed");
+        return { queuedFinal: true };
+      },
+    );
+    await dispatchWithContext({
+      bot,
+      cfg: { channels: { telegram: { botToken: "synthetic-test-token", richMessages: false } } },
+      context: progressContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { persist: true, toolProgress: true } },
+      },
+    });
+    for (const outcome of ["failed", "unknown", "completed"] as const) {
+      await callbacks?.onQueuedFollowupAdmitted?.();
+      await callbacks?.onPlanUpdate?.({
+        phase: "update",
+        explanation: `Queued ${outcome}`,
+        steps: [{ step: "Verify", status: "completed" }],
+      });
+      const cardId = [...messages.entries()].find(([, text]) =>
+        text.includes(`🏷 Queued ${outcome}`),
+      )?.[0];
+      expect(cardId).toBeTypeOf("number");
+      await bot.api.sendMessage(123, `Final ${outcome}`);
+      await callbacks?.onObservedReplyDelivery?.();
+      if (outcome !== "unknown") {
+        callbacks?.onAgentRunTerminalOutcome?.(outcome);
+      }
+      await callbacks?.onQueuedFollowupSettled?.();
+      expect(messages.get(cardId!)?.includes("expandable")).toBe(outcome === "completed");
+      expect(messages.get(cardId!)).toContain("[x] Verify");
+    }
+  });
+
+  it("does not finalize a new queued card when the preceding collapse edit returns", async () => {
+    const { bot, messages } = await setupObservedProgressTransport();
+    const actual = await vi.importActual<typeof SendEditModule>("./send-edit.js");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    editMessageTelegram.mockImplementation(async (...args) => {
+      const result = await actual.editMessageTelegram(...args);
+      if (args[2].includes("expandable")) {
+        started.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+    let callbacks: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions, replyOptions }) => {
+        callbacks = replyOptions;
+        await replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Old summary",
+          steps: [{ step: "Old work", status: "completed" }],
+        });
+        await dispatcherOptions.deliver({ text: "Old final" }, { kind: "final" });
+        replyOptions?.onAgentRunTerminalOutcome?.("completed");
+        return { queuedFinal: true };
+      },
+    );
+    const dispatch = dispatchWithContext({
+      bot,
+      cfg: { channels: { telegram: { botToken: "synthetic-test-token", richMessages: false } } },
+      context: progressContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { persist: true, toolProgress: true } },
+      },
+    });
+    await started.promise;
+    try {
+      await callbacks?.onQueuedFollowupAdmitted?.();
+      await callbacks?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "New queued work",
+        steps: [{ step: "Continue", status: "in_progress" }],
+      });
+    } finally {
+      release.resolve();
+    }
+    await dispatch;
+    await emitToolStart(callbacks, {
+      name: "read",
+      phase: "start",
+      toolCallId: "queued-after-edit",
+    });
+    const card = [...messages.values()].find((text) => text.includes("New queued work"));
+    expect(card).toContain("Read");
+    expect(card).toContain("Continue (in progress)");
+    expect(card).not.toContain("expandable");
+  });
+
   it("does not append late fast-mode progress after an accepted final", async () => {
     const { bot, messages, sendMessage } = await setupObservedProgressTransport();
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(

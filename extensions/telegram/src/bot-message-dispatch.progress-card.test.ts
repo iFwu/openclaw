@@ -55,12 +55,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         expect(preview.text).toContain("Inspect");
         expect(preview.text).toContain("Repair");
         expect(preview.text).toContain("Verify");
-        expect(preview.text).toContain("📌 Deployment verified; configuration unchanged.");
+        expect(preview.text).toContain("🏷 Deployment verified; configuration unchanged.");
         expect(preview.text).not.toContain("3/3 complete");
         if (richMessages) {
           expect(preview.richMessage?.blocks.at(-1)).toEqual({
             type: "paragraph",
-            text: "📌 Deployment verified; configuration unchanged.",
+            text: "🏷 Deployment verified; configuration unchanged.",
           });
         }
         const checklistOnly = projectProgressCardChannelUpdate({ plan })!;
@@ -69,7 +69,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         expect(cleared.text).toContain("Inspect");
         expect(cleared.text).toContain("Repair");
         expect(cleared.text).toContain("Verify");
-        expect(cleared.text).not.toContain("📌");
+        expect(cleared.text).not.toContain("🏷");
         expect(cleared.text).not.toContain("Deployment verified");
       } finally {
         progress.cancel();
@@ -159,7 +159,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
   );
 
   it.each([false, true])(
-    "keeps the latest status below commentary and diff stats without folding it after final delivery (rich: %s)",
+    "keeps the latest status below commentary and diff stats without treating final markers as a renderer collapse signal (rich: %s)",
     async (richMessages) => {
       const progress = createChannelProgressDraftCompositor({
         preparedItems: true,
@@ -205,18 +205,42 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         expect(text.indexOf("Routes saved; checking the outer fallback.")).toBeLessThan(
           text.indexOf("📝 2 files +13 −5"),
         );
-        expect(text.indexOf("📝 2 files +13 −5")).toBeLessThan(text.indexOf(`📌 ${status}`));
+        expect(text.indexOf("📝 2 files +13 −5")).toBeLessThan(text.indexOf(`🏷 ${status}`));
         if (richMessages) {
           expect(preview.richMessage?.blocks.slice(-2)).toEqual([
             { type: "divider" },
-            { type: "paragraph", text: `📌 ${status}` },
+            { type: "paragraph", text: `🏷 ${status}` },
           ]);
         } else {
-          expect(text.endsWith(`────────<br>📌 ${status}`)).toBe(true);
+          expect(text.endsWith(`────────<br>🏷 ${status}`)).toBe(true);
         }
         progress.markFinalReplyStarted();
         progress.markFinalReplyDelivered();
         expect(render()).toEqual(preview);
+        const collapsed = renderTelegramProgressDraftPreview(
+          { ...progress.getSnapshot(), diffStat: { files: 2, added: 13, removed: 5 } },
+          {
+            richMessages,
+            toolProgress: true,
+            maxLines: 4,
+            maxLineChars: 300,
+            collapseStatus: true,
+          },
+        );
+        if (richMessages) {
+          expect(collapsed.richMessage?.blocks.slice(0, -1)).toEqual(
+            preview.richMessage?.blocks.slice(0, -1),
+          );
+          expect(collapsed.richMessage?.blocks.at(-1)).toEqual({
+            type: "details",
+            summary: "🏷",
+            blocks: [{ type: "paragraph", text: `🏷 ${status}` }],
+          });
+        } else {
+          expect(collapsed.text).toBe(
+            text.replace(`🏷 ${status}`, `<blockquote expandable>🏷 ${status}</blockquote>`),
+          );
+        }
       } finally {
         progress.cancel();
       }
@@ -384,7 +408,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             });
             await draft?.flush();
             expect(send).toHaveBeenCalledTimes(2);
-            expect([...visible.values()][0]).toContain("📌 Resumed");
+            expect([...visible.values()][0]).toContain("🏷 Resumed");
             expect([...visible.values()][0]).toContain("Resume work (in progress)");
 
             await replyOptions?.onAssistantMessageStart?.();

@@ -291,6 +291,9 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   return queued.then(() => false);
                 }
               : () => false,
+            onAgentRunTerminalOutcome: (outcome) => {
+              turn.agentRunFailed = turn.agentRunFailed === true || outcome === "failed";
+            },
             onQueuedFollowupAdmitted: async () => {
               await turn.draftEventQueue;
               await turn.materializeAnswerLaneBeforeRotation();
@@ -367,7 +370,10 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     turn.finalDispatchClaimed ||=
       turnResult.dispatchResult.queuedFinal ||
       (turnResult.dispatchResult.settledReceipt?.counts.final.failedAfterSend ?? 0) > 0;
-    turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
+    const runOutcome = readAgentRunTerminalOutcome(turnResult.dispatchResult);
+    if (runOutcome) {
+      turn.agentRunFailed = turn.agentRunFailed === true || runOutcome === "failed";
+    }
     turn.sendPolicyDenied = turnResult.dispatchResult.sendPolicyDenied === true;
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
