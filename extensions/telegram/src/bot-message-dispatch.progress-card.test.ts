@@ -104,6 +104,71 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
     },
   );
 
+  it.each([false, true])(
+    "keeps the latest status below commentary and diff stats without folding it after final delivery (rich: %s)",
+    async (richMessages) => {
+      const progress = createChannelProgressDraftCompositor({
+        preparedItems: true,
+        entry: { streaming: { progress: { commentary: true, label: false } } },
+        mode: "progress",
+        active: true,
+        seed: "status-footer",
+        commentaryItalics: false,
+        commentaryLinePrefix: "💬 ",
+      });
+      const render = () =>
+        renderTelegramProgressDraftPreview(
+          { ...progress.getSnapshot(), diffStat: { files: 2, added: 13, removed: 5 } },
+          { richMessages, toolProgress: true, maxLines: 4, maxLineChars: 300 },
+        );
+      try {
+        await progress.pushItemEvent({
+          kind: "preamble",
+          itemId: "inspect",
+          phase: "end",
+          progressText: "Checking the existing routes.",
+        });
+        await progress.pushPlanProgress([], {
+          explanation: "Inspecting configuration.",
+          explanationFormat: "plain",
+        });
+        expect(render().text).toContain("Inspecting configuration.");
+        await progress.pushItemEvent({
+          kind: "preamble",
+          itemId: "verify",
+          phase: "end",
+          progressText: "Routes saved; checking the outer fallback.",
+        });
+        const status = "Configuration verified; waiting for restart authorization.";
+        await progress.pushPlanProgress([], { explanation: status, explanationFormat: "plain" });
+        const preview = render();
+        const text = preview.text;
+        expect(text).not.toContain("Inspecting configuration.");
+        expect(text).toContain("Checking the existing routes.");
+        expect(text.indexOf("Checking the existing routes.")).toBeLessThan(
+          text.indexOf("Routes saved; checking the outer fallback."),
+        );
+        expect(text.indexOf("Routes saved; checking the outer fallback.")).toBeLessThan(
+          text.indexOf("📝 2 files +13 −5"),
+        );
+        expect(text.indexOf("📝 2 files +13 −5")).toBeLessThan(text.indexOf(`📌 ${status}`));
+        if (richMessages) {
+          expect(preview.richMessage?.blocks.slice(-2)).toEqual([
+            { type: "divider" },
+            { type: "paragraph", text: `📌 ${status}` },
+          ]);
+        } else {
+          expect(text.endsWith(`────────<br>📌 ${status}`)).toBe(true);
+        }
+        progress.markFinalReplyStarted();
+        progress.markFinalReplyDelivered();
+        expect(render()).toEqual(preview);
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
   it("characterizes the original two-commentary/two-exit-1 card at native capacity", async () => {
     const progress = createChannelProgressDraftCompositor({
       preparedItems: true,
@@ -265,7 +330,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             });
             await draft?.flush();
             expect(send).toHaveBeenCalledTimes(2);
-            expect([...visible.values()][0]).toContain("<b>Resumed</b>");
+            expect([...visible.values()][0]).toContain("📌 Resumed");
             expect([...visible.values()][0]).toContain("Resume work (in progress)");
 
             await replyOptions?.onAssistantMessageStart?.();

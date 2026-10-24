@@ -181,7 +181,6 @@ it.each([false, true])(
           skip_entity_detection: true,
           blocks: [
             { type: "paragraph", text: { type: "bold", text: "Working" } },
-            { type: "paragraph", text: { type: "code", text: command } },
             {
               type: "list",
               items: [
@@ -201,13 +200,15 @@ it.each([false, true])(
                 },
               ],
             },
+            { type: "divider" },
+            { type: "paragraph", text: `📌 ${command}` },
           ],
         });
       } else {
         expect(fields.rich_message).toBeUndefined();
         expect(fields.parse_mode).toBe("HTML");
         expect(fields.text).toContain(
-          "<code>printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"</code>",
+          "📌 printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"",
         );
         expect(fields.text).toContain("[x] Inspect &lt;source&gt; &amp; config");
         expect(fields.text).toContain("[ ] <b>Verify the result (in progress)</b>");

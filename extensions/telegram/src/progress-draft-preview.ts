@@ -35,13 +35,12 @@ function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine
 // Each row has one content decision; both Telegram transports use that row.
 type ProgressText = { html: string; rich: RichText };
 
-function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
+function literalProgressText(text: string, style?: "bold" | "italic"): ProgressText {
   const escaped = escapeTelegramHtml(text);
   if (!style) {
     return { html: escaped, rich: text };
   }
-  // Code entities keep prepared notes inert, including bare URLs.
-  const tag = { bold: "b", italic: "i", code: "code" }[style];
+  const tag = { bold: "b", italic: "i" }[style];
   return { html: `<${tag}>${escaped}</${tag}>`, rich: { type: style, text } };
 }
 
@@ -143,19 +142,6 @@ export function renderTelegramProgressDraftPreview(
   if (label) {
     addParagraph(literalProgressText(compactChannelProgressDraftLine(label, maxLineChars), "bold"));
   }
-  if (snapshot.statusHeadline) {
-    const text = compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars);
-    const plain = snapshot.statusHeadlineFormat === "plain";
-    const status = plain ? literalProgressText(text, "code") : markdownProgressText(text);
-    addParagraph(
-      label || plain
-        ? status
-        : {
-            html: `<b>${status.html}</b>`,
-            rich: { type: "bold", text: status.rich },
-          },
-    );
-  }
   if (visibleLines.length) {
     addParagraph(
       joinProgressText(
@@ -193,6 +179,18 @@ export function renderTelegramProgressDraftPreview(
   }
   if (diffStat) {
     addParagraph(literalProgressText(compactChannelProgressDraftLine(diffStat, maxLineChars)));
+  }
+  if (snapshot.statusHeadline) {
+    if (blocks.length) {
+      blocks.push({ type: "divider" });
+      html.push("────────");
+    }
+    const text = compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars);
+    addParagraph(
+      snapshot.statusHeadlineFormat === "plain"
+        ? literalProgressText(`📌 ${text}`)
+        : markdownProgressText(`📌 ${text}`),
+    );
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages
