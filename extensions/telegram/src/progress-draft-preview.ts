@@ -187,10 +187,6 @@ export function renderTelegramProgressDraftPreview(
     addParagraph(literalProgressText(compactChannelProgressDraftLine(diffStat, maxLineChars)));
   }
   if (snapshot.statusHeadline) {
-    if (blocks.length) {
-      blocks.push({ type: "divider" });
-      html.push("────────");
-    }
     const text = compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars);
     const status =
       snapshot.statusHeadlineFormat === "plain"

@@ -200,15 +200,14 @@ it.each([false, true])(
                 },
               ],
             },
-            { type: "divider" },
-            { type: "paragraph", text: `📌 ${command}` },
+            { type: "paragraph", text: `🏷 ${command}` },
           ],
         });
       } else {
         expect(fields.rich_message).toBeUndefined();
         expect(fields.parse_mode).toBe("HTML");
         expect(fields.text).toContain(
-          "📌 printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"",
+          "🏷 printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"",
         );
         expect(fields.text).toContain("[x] Inspect &lt;source&gt; &amp; config");
         expect(fields.text).toContain("[ ] <b>Verify the result (in progress)</b>");

@@ -237,7 +237,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         expect.stringContaining(
           outcome === "long-summary"
             ? "<blockquote expandable>🏷 Verified"
-            : "[x] Verify\n────────\n<blockquote expandable>",
+            : "[x] Verify\n<blockquote expandable>",
         ),
         expect.objectContaining({ parse_mode: "HTML" }),
       );

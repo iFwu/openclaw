@@ -207,12 +207,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
         );
         expect(text.indexOf("📝 2 files +13 −5")).toBeLessThan(text.indexOf(`🏷 ${status}`));
         if (richMessages) {
-          expect(preview.richMessage?.blocks.slice(-2)).toEqual([
-            { type: "divider" },
-            { type: "paragraph", text: `🏷 ${status}` },
-          ]);
+          expect(preview.richMessage?.blocks.at(-1)).toEqual({
+            type: "paragraph",
+            text: `🏷 ${status}`,
+          });
         } else {
-          expect(text.endsWith(`────────<br>🏷 ${status}`)).toBe(true);
+          expect(text.endsWith(`<br>🏷 ${status}`)).toBe(true);
         }
         progress.markFinalReplyStarted();
         progress.markFinalReplyDelivered();
