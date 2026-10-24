@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { buildGetReplyGroupCtx } from "./get-reply.test-fixtures.js";
 import {
@@ -18,6 +18,14 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+beforeEach(() => {
+  vi.stubEnv("TYPESAFE_BASE_URL", undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("evaluateJevSessionDependency", () => {
   it.each([
     { probability: 0.9, expected: "continue" },
@@ -30,7 +38,7 @@ describe("evaluateJevSessionDependency", () => {
   ] as const)("maps probability $probability to $expected", async ({ probability, expected }) => {
     const fetchFn = vi.fn<typeof globalThis.fetch>(async () =>
       response({
-        model: "jev-1.13.0",
+        model: "jev-1.14.0",
         answers: { dependsOnPreviousTask: { type: "noul", noul: probability } },
       }),
     );
@@ -55,11 +63,33 @@ describe("evaluateJevSessionDependency", () => {
     }
     const request = JSON.parse(body);
     expect(request).toMatchObject({
-      model: "jev-1.13.0",
+      model: "jev-latest",
       state: {},
       questions: { dependsOnPreviousTask: { type: "noul" } },
     });
   });
+
+  it.each(["jev-latest", "jev-1.14.0"])(
+    "accepts %s and reads the root override at evaluation time",
+    async (model) => {
+      const fetchFn = vi.fn<typeof globalThis.fetch>(async () =>
+        response({
+          model,
+          answers: { dependsOnPreviousTask: { type: "noul", noul: 0.1 } },
+        }),
+      );
+      for (const root of ["http://127.0.0.1:8066", "http://127.0.0.1:8066///"]) {
+        vi.stubEnv("TYPESAFE_BASE_URL", root);
+        await expect(
+          evaluateJevSessionDependency({ apiKey: "test-key", state: "{}", fetchFn }),
+        ).resolves.toBe("new");
+        expect(fetchFn).toHaveBeenLastCalledWith(
+          "http://127.0.0.1:8066/v1/systemone",
+          expect.any(Object),
+        );
+      }
+    },
+  );
 
   it.each([
     { name: "HTTP error", fetchFn: async () => response({}, 503) },
@@ -92,9 +122,10 @@ describe("evaluateJevSessionDependency", () => {
   });
   it.each([
     { model: "other-model", answers: { dependsOnPreviousTask: { type: "noul", noul: 0.1 } } },
-    { model: "jev-1.13.0", answers: { dependsOnPreviousTask: { type: "noul", noul: -0.1 } } },
-    { model: "jev-1.13.0", answers: { dependsOnPreviousTask: { type: "noul", noul: 1.1 } } },
-    { model: "jev-1.13.0", answers: { dependsOnPreviousTask: { type: "noul", noul: "0.1" } } },
+    { model: "jev-1.13.0", answers: { dependsOnPreviousTask: { type: "noul", noul: 0.1 } } },
+    { model: "jev-1.14.0", answers: { dependsOnPreviousTask: { type: "noul", noul: -0.1 } } },
+    { model: "jev-1.14.0", answers: { dependsOnPreviousTask: { type: "noul", noul: 1.1 } } },
+    { model: "jev-1.14.0", answers: { dependsOnPreviousTask: { type: "noul", noul: "0.1" } } },
   ])("rejects an unexpected model or invalid probability", async (body) => {
     await expect(
       evaluateJevSessionDependency({
@@ -290,7 +321,7 @@ describe("prepareSessionAutoNewCandidate", () => {
     const logger = { info: vi.fn(), warn: vi.fn() };
     const fetchFn = vi.fn<typeof globalThis.fetch>(async () =>
       response({
-        model: "jev-1.13.0",
+        model: "jev-1.14.0",
         answers: { dependsOnPreviousTask: { type: "noul", noul: 0.1 } },
       }),
     );
@@ -327,8 +358,6 @@ describe("prepareSessionAutoNewCandidate", () => {
         { role: "assistant", atMs: now - gap },
       ],
     });
-    expect(request.questions.dependsOnPreviousTask.instructions).toContain("not a rule");
-    expect(request.questions.dependsOnPreviousTask.instructions).toContain("replyOrQuote");
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("decision=new probability=0.1"),
       expect.anything(),

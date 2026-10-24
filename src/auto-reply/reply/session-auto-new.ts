@@ -10,8 +10,7 @@ import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
-const JEV_EVALUATE_URL = "https://api.typesafe.ai/v1/systemone";
-const JEV_MODEL = "jev-1.13.0";
+const JEV_MODEL = "jev-latest";
 const JEV_TIMEOUT_MS = 4_000;
 const JEV_CONTINUE_THRESHOLD = 0.8;
 // Calibrated on 2026-10-12 replay of labeled Telegram turns; see docs.
@@ -387,7 +386,11 @@ async function evaluateJevSessionDependency(params: {
   try {
     timeoutSignal = AbortSignal.timeout(JEV_TIMEOUT_MS);
     const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
-    const response = await (params.fetchFn ?? globalThis.fetch)(JEV_EVALUATE_URL, {
+    const baseUrl = (process.env.TYPESAFE_BASE_URL?.trim() || "https://api.typesafe.ai").replace(
+      /\/+$/u,
+      "",
+    );
+    const response = await (params.fetchFn ?? globalThis.fetch)(`${baseUrl}/v1/systemone`, {
       method: "POST",
       redirect: "error",
       headers: {
@@ -449,7 +452,7 @@ async function evaluateJevSessionDependency(params: {
     }
     const answer = parsed.answers?.dependsOnPreviousTask;
     const probability = answer?.noul;
-    if (parsed.model !== JEV_MODEL || answer?.type !== "noul") {
+    if ((parsed.model !== JEV_MODEL && parsed.model !== "jev-1.14.0") || answer?.type !== "noul") {
       emit("warn", "malformed_response", {
         reason: "schema_mismatch",
         latencyMs: Date.now() - startedAtMs,

@@ -116,9 +116,13 @@ depending on the task history, so a short instruction aimed at a quoted
 notification can start a new task. Shared vocabulary or a long time gap alone
 does not imply a new task.
 
-The evaluator uses `https://api.typesafe.ai/v1/systemone`, model `jev-1.13.0`,
-and `TYPESAFE_API_KEY_FILE` (preferred) or `TYPESAFE_API_KEY`. Opt-in sends this
-bounded conversation data to TypeSafe. A dependency probability at or below 0.35
+The evaluator requests model `jev-latest` and accepts `jev-latest` or the resolved
+`jev-1.14.0` response. It uses `https://api.typesafe.ai/v1/systemone` by default.
+Set `TYPESAFE_BASE_URL` to an alternate root URL (for example,
+`http://127.0.0.1:8066`); trailing slashes are removed before `/v1/systemone`
+is appended. Credentials come from `TYPESAFE_API_KEY_FILE` (preferred) or
+`TYPESAFE_API_KEY`. Opt-in sends this bounded conversation data to the configured
+TypeSafe endpoint. A dependency probability at or below 0.35
 starts a clear-context reset boundary; at or above 0.8 continues the task;
 intermediate scores keep the existing context. HTTP failure, malformed responses,
 missing credentials, and the four-second evaluator timeout keep the existing context.
