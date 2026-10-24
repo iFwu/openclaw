@@ -1,3 +1,4 @@
+import { projectProgressCardChannelUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
@@ -23,6 +24,59 @@ import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js"
 import type * as TelegramEditModule from "./send-edit.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it.each([false, true])(
+    "shows a card note beside its checklist and removes only the footer when the note is cleared (rich: %s)",
+    async (richMessages) => {
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { progress: { label: false } } },
+        mode: "progress",
+        active: true,
+        seed: "checklist-note",
+      });
+      const plan = [
+        { step: "Inspect", status: "completed" },
+        { step: "Repair", status: "completed" },
+        { step: "Verify", status: "completed" },
+      ];
+      const render = () =>
+        renderTelegramProgressDraftPreview(progress.getSnapshot(), {
+          richMessages,
+          toolProgress: false,
+          maxLines: 8,
+          maxLineChars: 300,
+        });
+      try {
+        const note = projectProgressCardChannelUpdate({
+          markdown: "**Deployment verified**; configuration unchanged.",
+          plan,
+        })!;
+        await progress.pushPlanProgress(note.steps, note);
+        const preview = render();
+        expect(preview.text).toContain("Inspect");
+        expect(preview.text).toContain("Repair");
+        expect(preview.text).toContain("Verify");
+        expect(preview.text).toContain("📌 Deployment verified; configuration unchanged.");
+        expect(preview.text).not.toContain("3/3 complete");
+        if (richMessages) {
+          expect(preview.richMessage?.blocks.at(-1)).toEqual({
+            type: "paragraph",
+            text: "📌 Deployment verified; configuration unchanged.",
+          });
+        }
+        const checklistOnly = projectProgressCardChannelUpdate({ plan })!;
+        await progress.pushPlanProgress(checklistOnly.steps, checklistOnly);
+        const cleared = render();
+        expect(cleared.text).toContain("Inspect");
+        expect(cleared.text).toContain("Repair");
+        expect(cleared.text).toContain("Verify");
+        expect(cleared.text).not.toContain("📌");
+        expect(cleared.text).not.toContain("Deployment verified");
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps a full plan and recent activity after failed named tool items (rich: %s)",
     (richMessages) => {

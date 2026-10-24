@@ -8,7 +8,6 @@ describe("projectProgressCardChannelUpdate", () => {
       input: { plan: [{ step: "Ship", status: "completed" }] },
       expected: {
         steps: [{ step: "Ship", status: "completed" }],
-        explanation: "1/1 complete",
       },
     },
     {
@@ -35,17 +34,18 @@ describe("projectProgressCardChannelUpdate", () => {
     {
       name: "markup without visible text",
       input: { markdown: '<progress value="1" max="2"></progress>' },
-      expected: { steps: [], explanation: "Progress updated", explanationFormat: "plain" },
+      expected: { steps: [] },
     },
     {
       name: "checklist with a note",
       input: {
-        markdown: "Checking the next task.",
+        markdown: "**Verified** [deployment](https://example.com).",
         plan: [{ step: "Ship", status: "completed" }],
       },
       expected: {
         steps: [{ step: "Ship", status: "completed" }],
-        explanation: "1/1 complete",
+        explanation: "Verified deployment.",
+        explanationFormat: "plain",
       },
     },
     { name: "clear", input: {}, expected: { steps: [] } },

@@ -2,7 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { normalizeProgressCardInput, ProgressCardInputError } from "./progress-card-input.js";
 
-/** Projects checklist counts or readable notes through the shared Markdown owner. */
+/** Projects readable notes and checklists independently through the shared Markdown owner. */
 export function projectProgressCardChannelUpdate(input: unknown) {
   const record = asOptionalRecord(input);
   if (!record) {
@@ -11,18 +11,14 @@ export function projectProgressCardChannelUpdate(input: unknown) {
   try {
     const normalized = normalizeProgressCardInput(record);
     const steps = normalized.steps ?? [];
-    const completed = steps.filter((step) => step.status === "completed").length;
-    const explanation = steps.length
-      ? `${completed}/${steps.length} complete`
-      : normalized.markdown
-        ? stripMarkdown(normalized.markdown, { linkStyle: "label", stripHtml: true })
-            .replace(/\s+/g, " ")
-            .trim() || "Progress updated"
-        : undefined;
+    const explanation = normalized.markdown
+      ? stripMarkdown(normalized.markdown, { linkStyle: "label", stripHtml: true })
+          .replace(/\s+/g, " ")
+          .trim()
+      : undefined;
     return {
       steps,
-      ...(explanation ? { explanation } : {}),
-      ...(!steps.length && explanation ? { explanationFormat: "plain" as const } : {}),
+      ...(explanation ? { explanation, explanationFormat: "plain" as const } : {}),
     };
   } catch (error) {
     if (error instanceof ProgressCardInputError) {

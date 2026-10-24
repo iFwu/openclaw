@@ -638,7 +638,6 @@ describe("CLI progress-card plan projection", () => {
           phase: "update",
           title: "Plan updated",
           source: "openclaw",
-          explanation: "1/2 complete",
           steps: [
             { step: "Inspect", status: "completed" },
             { step: "Repair", status: "in_progress" },
@@ -884,7 +883,6 @@ describe("CLI plan channel bridge", () => {
           expect(onPlanUpdate).toHaveBeenCalledWith({
             phase: "update",
             title: "Plan updated",
-            explanation: "2/2 complete",
             source: "openclaw",
             steps: [
               { step: "Inspect", status: "completed" },
@@ -897,7 +895,7 @@ describe("CLI plan channel bridge", () => {
           expect(deleteCurrent).not.toHaveBeenCalled();
         } else {
           expect(render).toHaveBeenCalledWith(
-            expect.stringContaining("2/2 complete"),
+            expect.stringContaining("Inspect"),
             expect.objectContaining({
               snapshot: expect.objectContaining({
                 plan: [
@@ -907,6 +905,7 @@ describe("CLI plan channel bridge", () => {
               }),
             }),
           );
+          expect(render.mock.calls.map(([text]) => text).join("\n")).not.toContain("2/2 complete");
           const rendered = render.mock.calls.at(-1)?.[0];
           if (clearCard) {
             expect(onPlanUpdate).toHaveBeenNthCalledWith(2, {

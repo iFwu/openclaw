@@ -202,7 +202,8 @@ describe("progress_card compatibility plan events", () => {
           phase: "update",
           title: "Plan updated",
           source: "openclaw",
-          explanation: "1/2 complete",
+          explanation: "Implementation underway",
+          explanationFormat: "plain",
           steps: [
             { step: "Inspect", status: "completed" },
             { step: "Patch", status: "in_progress" },
