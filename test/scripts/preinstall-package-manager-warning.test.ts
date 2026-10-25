@@ -245,11 +245,9 @@ describe("install runtime enforcement", () => {
         accepted: false,
         error: "detected Node missing",
       },
-    ].map((testCase) => ({
-      shimDirectory: "bun-node-ddfce5d01",
-      shimMatchesBun: true,
-      ...testCase,
-    })),
+    ].map((testCase) =>
+      Object.assign({ shimDirectory: "bun-node-ddfce5d01", shimMatchesBun: true }, testCase),
+    ),
   )(
     "enforces the explicit Bun launcher contract: $name",
     ({ launcher, bun, persistent, shimDirectory, shimMatchesBun, accepted, error }) => {

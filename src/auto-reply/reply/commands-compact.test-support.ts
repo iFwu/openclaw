@@ -68,11 +68,18 @@ export function buildCompactParams(
 
 export function resetCompactCommandMocks() {
   vi.clearAllMocks();
-  vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-  vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) => ({
-    updatedAt: 1,
-    ...expected,
-  }));
+  // Rejected commands can leave one-shot behavior queued for the next test.
+  vi.mocked(abortEmbeddedAgentRun).mockReset();
+  vi.mocked(compactEmbeddedAgentSession).mockReset();
+  vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReset().mockReturnValue(false);
+  vi.mocked(waitForEmbeddedAgentRunEnd).mockReset().mockResolvedValue(true);
+  vi.mocked(incrementCompactionCount).mockReset().mockResolvedValue(1);
+  vi.mocked(resolveCurrentSessionEntry)
+    .mockReset()
+    .mockImplementation(({ expected }) => ({
+      updatedAt: 1,
+      ...expected,
+    }));
   resolveAgentDirMock.mockImplementation(
     (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
   );
