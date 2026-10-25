@@ -900,7 +900,10 @@ function getWebSocketConnectionIdentity(
       url,
       model.provider,
       model.id,
-      [...headers].toSorted(([a], [b]) => a.localeCompare(b)),
+      // Per-request tracing does not change connection authentication or routing.
+      [...headers]
+        .filter(([name]) => name !== "traceparent")
+        .toSorted(([a], [b]) => a.localeCompare(b)),
     ]),
   );
 }

@@ -160,11 +160,12 @@ describe("ChatGPT Responses explicit proxy mode", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses the same proxy contract over cached WS and sends only matching history delta", async () => {
+  it("keeps cached WS continuation when request traceparent changes", async () => {
     const { sockets, requests } = installSocket();
     const first = await streamSimpleOpenAICodexResponses(model, context, {
       ...options,
       transport: "websocket-cached",
+      headers: { traceparent: "00-11111111111111111111111111111111-2222222222222222-01" },
     }).result();
     expect(first.stopReason).toBe("stop");
     const second = await streamSimpleOpenAICodexResponses(
@@ -173,7 +174,11 @@ describe("ChatGPT Responses explicit proxy mode", () => {
         ...context,
         messages: [...context.messages, first, { role: "user", content: "next", timestamp: 2 }],
       },
-      { ...options, transport: "websocket-cached" },
+      {
+        ...options,
+        transport: "websocket-cached",
+        headers: { Traceparent: "00-11111111111111111111111111111111-3333333333333333-01" },
+      },
     ).result();
     expect(second.stopReason).toBe("stop");
     expect(sockets).toHaveLength(1);
@@ -287,12 +292,21 @@ describe("ChatGPT Responses explicit proxy mode", () => {
   it("scopes sticky SSE fallback to the connection identity", async () => {
     const fetchMock = installFetch();
     const { requests } = installSocket(undefined, 1);
-    const requestOptions = { ...options, transport: "auto" as const };
+    const requestOptions = {
+      ...options,
+      transport: "auto" as const,
+      headers: { traceparent: "00-11111111111111111111111111111111-2222222222222222-01" },
+    };
     expect(
       (await streamSimpleOpenAICodexResponses(model, context, requestOptions).result()).stopReason,
     ).toBe("stop");
     expect(
-      (await streamSimpleOpenAICodexResponses(model, context, requestOptions).result()).stopReason,
+      (
+        await streamSimpleOpenAICodexResponses(model, context, {
+          ...requestOptions,
+          headers: { traceparent: "00-11111111111111111111111111111111-3333333333333333-01" },
+        }).result()
+      ).stopReason,
     ).toBe("stop");
     expect(requests).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);

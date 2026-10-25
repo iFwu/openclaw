@@ -431,9 +431,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `websocket-cached`, or `auto`. This controls only OpenClaw's connection to
     the proxy, not the proxy's upstream transport. Cached connections and
     continuation state are isolated by session, endpoint, credentials, model,
-    and handshake headers. In proxy `auto` mode, SSE fallback is allowed
-    before WebSocket dispatch, not after an unacknowledged request has been
-    sent. Abort and provider errors are not blindly replayed.
+    and handshake headers other than the request-scoped `traceparent`. Changes
+    to that tracing header do not reset cached continuation or sticky SSE
+    fallback. In proxy `auto` mode, SSE fallback is allowed before WebSocket
+    dispatch, not after an unacknowledged request has been sent. Abort and
+    provider errors are not blindly replayed.
 
     Use this only with a proxy that implements the Codex Responses event and
     tool-result contracts. A generic Responses endpoint is not sufficient
