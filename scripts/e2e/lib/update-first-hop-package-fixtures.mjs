@@ -370,30 +370,38 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
   };
 }
 
-function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0) {
+function packFuturePluginFixture(candidateTarball, outputTarball, sequence = 0, expectedName = "") {
   const version = futureFixtureVersion(sequence);
+  const receipt = packTransformedFixture(candidateTarball, outputTarball, (root) => {
+    const manifestPath = path.join(root, "package.json");
+    const manifest = readJson(manifestPath);
+    if (
+      typeof manifest.name !== "string" ||
+      !manifest.name.startsWith("@openclaw/") ||
+      (expectedName && manifest.name !== expectedName)
+    ) {
+      throw new Error("future plugin fixture requires " + (expectedName || "an @openclaw package"));
+    }
+    if (
+      typeof manifest.version !== "string" ||
+      !/^\d{4}\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.test(
+        manifest.version,
+      ) ||
+      manifest.openclaw?.build?.openclawVersion !== manifest.version
+    ) {
+      throw new Error("plugin package version and OpenClaw build cohort must match");
+    }
+    manifest.version = version;
+    manifest.openclaw.build.openclawVersion = version;
+    writeJson(manifestPath, manifest);
+    return { name: manifest.name };
+  });
   return {
-    method: "candidate-same-schema-runtime-fixture",
-    name: "@openclaw/codex",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      const manifestPath = path.join(root, "package.json");
-      const manifest = readJson(manifestPath);
-      if (manifest.name !== "@openclaw/codex") {
-        throw new Error("future runtime fixture requires the @openclaw/codex package");
-      }
-      if (
-        typeof manifest.version !== "string" ||
-        !/^\d{4}\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.test(
-          manifest.version,
-        ) ||
-        manifest.openclaw?.build?.openclawVersion !== manifest.version
-      ) {
-        throw new Error("runtime package version and OpenClaw build cohort must match");
-      }
-      manifest.version = version;
-      manifest.openclaw.build.openclawVersion = version;
-      writeJson(manifestPath, manifest);
-    }),
+    method:
+      receipt.name === "@openclaw/codex"
+        ? "candidate-same-schema-runtime-fixture"
+        : "candidate-same-schema-plugin-fixture",
+    ...receipt,
   };
 }
 
@@ -418,22 +426,19 @@ function main() {
     );
     return;
   }
-  if (
-    (mode === "first-hop-tarball" ||
-      mode === "negative-tarball" ||
-      mode === "future-tarball" ||
-      mode === "unsupported-admission-tarball" ||
-      mode === "future-runtime-tarball") &&
-    packageRoot &&
-    outputTarball
-  ) {
-    const pack = {
-      "first-hop-tarball": packFirstHopUpdateFixture,
-      "negative-tarball": packNegativeUpdateFixture,
-      "future-tarball": packFutureUpdateFixture,
-      "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
-      "future-runtime-tarball": packFutureRuntimeFixture,
-    }[mode];
+  const packers = {
+    "first-hop-tarball": packFirstHopUpdateFixture,
+    "negative-tarball": packNegativeUpdateFixture,
+    "future-tarball": packFutureUpdateFixture,
+    "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
+    "future-plugin-tarball": packFuturePluginFixture,
+    // Frozen extended-stable survivors call this mode against trusted tooling.
+    // Retire the alias with those lanes, retaining its Codex-only identity check.
+    "future-runtime-tarball": (source, output, fixtureSequence) =>
+      packFuturePluginFixture(source, output, fixtureSequence, "@openclaw/codex"),
+  };
+  if (Object.hasOwn(packers, mode) && packageRoot && outputTarball) {
+    const pack = packers[mode];
     const fixtureArg =
       mode === "negative-tarball"
         ? (sequence ?? "")
@@ -447,7 +452,7 @@ function main() {
   }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
-      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
+      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-plugin-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
     );
   }
   if (mode === "negative") {

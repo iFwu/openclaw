@@ -3659,6 +3659,79 @@ describe("prepareCliRunContext", () => {
     });
   });
 
+  it("keeps CLI session bindings when only caller-surface prompt tools change", async () => {
+    const { dir } = fixture.session;
+    let includeCallerSurface = true;
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const tool = (name: string) => ({
+      name,
+      label: name,
+      description: `${name} tool`,
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    });
+    const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+      agentId: "main",
+      tools: [
+        tool("read"),
+        ...(includeCallerSurface
+          ? [tool("screen"), tool("show_widget"), tool("suggest_task"), tool("dismiss_task")]
+          : []),
+      ],
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      resolveMcpLoopbackScopedTools,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "native-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+    const config = createCliBackendConfig({ bundleMcp: true });
+    const first = await fixture.prepare({
+      sessionKey: "agent:main:caller-surface",
+      prompt: "first ask",
+      provider: "native-cli",
+      config,
+    });
+    includeCallerSurface = false;
+    const second = await fixture.prepare({
+      sessionKey: "agent:main:caller-surface",
+      prompt: "second ask",
+      provider: "native-cli",
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: first.extraSystemPromptHash,
+        messageToolPolicyHash: first.messageToolPolicyHash,
+        promptToolNamesHash: first.promptToolNamesHash,
+        cwdHash: hashCliSessionText(dir),
+        mcpConfigHash: first.preparedBackend.mcpConfigHash,
+        mcpResumeHash: first.preparedBackend.mcpResumeHash,
+      },
+      config,
+    });
+
+    expect(first.promptToolNamesHash).toBe(hashCliSessionText(JSON.stringify(["read"])));
+    expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+    expect(second.systemPrompt).not.toBe(first.systemPrompt);
+    expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+  });
+
   it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
     await withAuthenticatedHistory("test-cli", async (prepare) => {
       fixture.appendTranscript({
@@ -6115,9 +6188,7 @@ describe("prepareCliRunContext", () => {
 
       expect(getLiveSessionGeneration).toHaveBeenCalledWith({
         backendId: "claude-cli",
-        agentAccountId: undefined,
         agentId: "main",
-        authProfileId: "history-test:account",
         sessionId: "session-test",
         sessionKey: "agent:main:main",
       });

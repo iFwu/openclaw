@@ -25,6 +25,7 @@ const suite = createControlUiE2eSuite({
       name: "control-ui-exact-stagger",
       config: {
         gateway: { controlUi: { enabled: true } },
+        agents: { defaults: { model: "openai/gpt-4.1" } },
         cron: {
           enabled: false,
           failureAlert: {
@@ -40,6 +41,16 @@ const suite = createControlUiE2eSuite({
     });
     instance = owner;
     try {
+      await owner.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:cron-duration-fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-cron-duration-inference-key",
+          },
+        },
+      });
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
@@ -69,6 +80,7 @@ const catalogSuite = createControlUiE2eSuite({
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
         gateway: { controlUi: { enabled: true } },
+        plugins: { enabled: false },
         cron: { enabled: false },
         agents: { defaults: { model: "fixture/anchor" } },
         models: {
@@ -185,16 +197,18 @@ catalogSuite.define(() => {
           await page.locator("#cron-payload-text").fill("Do not submit this draft");
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
           await publish("published");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="published"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
-          expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
+          ).toBe(0);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
           }
@@ -205,7 +219,9 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
-          expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/published"]').count(),
+          ).toBe(1);
           if (captureEnabled) {
             await page.screenshot({
               path: path.join(catalogSuite.artifactDir, "read-failure.png"),
@@ -215,7 +231,7 @@ catalogSuite.define(() => {
           rejectCatalogReplies = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="recovered"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
@@ -494,7 +510,6 @@ suite.define(() => {
       const jobId = cronJobId(job);
       await withCronJobPage(cliJson, jobId, async (evidence) => {
         const { page, servedDocumentSha256, servedAssets } = evidence;
-        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
         await page.locator("details.cron-advanced > summary").click();
         const timeout = page.locator("#cron-timeout-seconds");
         expect(await timeout.inputValue()).toBe("90");

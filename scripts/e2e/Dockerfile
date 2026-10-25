@@ -6,14 +6,15 @@
 
 ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
 
-FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS e2e-runner
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
-# routes. python3 covers package/plugin install paths that execute helper scripts.
+# routes. curl lets update survivors provision the target-owned private Node runtime.
+# python3 covers package/plugin install paths that execute helper scripts.
 # procps provides pgrep for E2E watchdogs that assert no package-manager work is
 # still running after Gateway readiness.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git openssl procps python3 \
+ && apt-get install -y --no-install-recommends ca-certificates curl git openssl procps python3 \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
@@ -63,7 +64,8 @@ CMD ["bash"]
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
 # Native dependencies without musl prebuilds must compile during real npm installs.
-RUN apk add --no-cache bash g++ make python3
+RUN apk add --no-cache --upgrade ca-certificates-bundle=20261020-r0 \
+ && apk add --no-cache bash g++ make python3
 COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 

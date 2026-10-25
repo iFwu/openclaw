@@ -172,6 +172,25 @@ describe("captured model decisions", () => {
     ).toEqual({ id: "openclaw", source: "model" });
   });
 
+  it("honors an invalid configured primary account pin over native login", async () => {
+    const cfg: OpenClawConfig = {
+      ...config,
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4@openai:missing" },
+          models: config.agents?.defaults?.models,
+        },
+      },
+    };
+    const owner = nativeOwner(true, true, () => true, cfg);
+
+    expect(await owner.evaluateEntry(entry)).toMatchObject({
+      availability: false,
+      unavailableReason: "auth-failed",
+    });
+    expect(await owner.runtimeChoices(entry)).toEqual([]);
+  });
+
   it("keeps ordinary host authentication distinct from native login", async () => {
     const cfg: OpenClawConfig = {
       models: {

@@ -23946,6 +23946,16 @@ public struct TtsSpeakResult: Codable, Sendable {
     }
 }
 
+public struct UiAgentGitHubSettingsCommand: Codable, Sendable {
+    public let kind: String
+
+    public init(
+        kind: String)
+    {
+        self.kind = kind
+    }
+}
+
 public struct UiClosePaneCommand: Codable, Sendable {
     public let kind: String
     public let sessionkey: String
@@ -31434,6 +31444,7 @@ public enum UiCommand: Codable, Sendable {
     case sidebar(UiSidebarCommand)
     case panel(UiPanelCommand)
     case navigate(UiNavigateCommand)
+    case agentGithubSettings(UiAgentGitHubSettingsCommand)
 
     private enum CodingKeys: String, CodingKey {
         case discriminator = "kind"
@@ -31449,6 +31460,7 @@ public enum UiCommand: Codable, Sendable {
         case "sidebar": self = try .sidebar(UiSidebarCommand(from: decoder))
         case "panel": self = try .panel(UiPanelCommand(from: decoder))
         case "navigate": self = try .navigate(UiNavigateCommand(from: decoder))
+        case "agent-github-settings": self = try .agentGithubSettings(UiAgentGitHubSettingsCommand(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -31466,6 +31478,7 @@ public enum UiCommand: Codable, Sendable {
         case .sidebar(let value): try value.encode(to: encoder)
         case .panel(let value): try value.encode(to: encoder)
         case .navigate(let value): try value.encode(to: encoder)
+        case .agentGithubSettings(let value): try value.encode(to: encoder)
         }
     }
 }

@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
-} from "../../agents/run-termination.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   interruptReplyRunTarget,
   isReplyRunAbortableForSignal,
@@ -386,7 +383,7 @@ export async function admitChatSend(
       },
       revalidateAllowed: commitChatWorkAdmission,
       onInterrupt: (reason) => {
-        const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
+        const stopReason = isAgentRunRestartAbortReason(reason) ? "restart" : "rpc";
         if (!admittedRunAbort) {
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             writePreRegisteredChatAbort({
@@ -401,9 +398,7 @@ export async function admitChatSend(
           if (admittedRunAbort.entry) {
             admittedRunAbort.entry.abortStopReason = stopReason;
           }
-          admittedRunAbort.controller.abort(
-            stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
-          );
+          admittedRunAbort.controller.abort(reason);
         }
       },
     });

@@ -471,7 +471,9 @@ export function createOpenClawCodingToolsInternal(
         }),
     options?.clientCaps,
   );
-  const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
+  // Neither memory-flush arm may regain execution tools outside its persistence projection.
+  const ringZeroTools =
+    includeOpenClawTools && !isMemoryFlushRun ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
       ? createToolSearchTools({

@@ -15,14 +15,17 @@ import { appendMemoryWikiLog } from "./log.js";
 import { forEachMarkdownCodeRange } from "./markdown-links.js";
 import {
   createWikiPageFilename,
+  HUMAN_END_MARKER,
+  HUMAN_START_MARKER,
   parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   slugifyWikiSegment,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
-import { writeGuardedVaultPage } from "./vault-page-write.js";
+import { readExistingWikiPage, writeGuardedVaultPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
@@ -365,6 +368,23 @@ function normalizeOkfRenderedPageForComparison(content: string): string {
   return `---\n${frontmatterBody}---\n${withoutRelated.slice(frontmatterMatch[0].length)}`.trimEnd();
 }
 
+function renderOkfBodyWithHumanNotes(producerBody: string): string {
+  const body = producerBody.trimEnd();
+  const notes = `## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+  const rendered = body + "\n\n" + notes;
+  const notesOffset = body.length + 2;
+  let closingFence = "";
+  forEachMarkdownCodeRange(rendered, (start, end) => {
+    if (start <= notesOffset && notesOffset < end) {
+      closingFence = /^ {0,3}(`{3,}|~{3,})/u.exec(rendered.slice(start))?.[1] ?? "";
+      if (!closingFence) {
+        throw new Error("Close the producer Markdown fence before importing this OKF concept.");
+      }
+    }
+  });
+  return closingFence ? body + "\n" + closingFence + "\n\n" + notes : rendered;
+}
+
 async function writeOkfConceptPage(params: {
   vaultRoot: string;
   pagePath: string;
@@ -380,18 +400,28 @@ async function writeOkfConceptPage(params: {
     }
     throw error;
   });
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
+  const existing = pageStat
+    ? await readExistingWikiPage(
+        () => vault.readText(params.pagePath),
+        (error) =>
+          error instanceof FsSafeError &&
+          (error.code === "not-found" || error.code === "path-alias"),
+      )
+    : "";
+  const nextRendered = preserveHumanNotesBlock(params.content, existing, {
+    producerMarkdown: true,
+  });
   if (
-    existing === params.content ||
+    existing === nextRendered ||
     normalizeOkfRenderedPageForComparison(existing) ===
-      normalizeOkfRenderedPageForComparison(params.content)
+      normalizeOkfRenderedPageForComparison(nextRendered)
   ) {
     return { changed: false, created: !pageStat };
   }
   await writeGuardedVaultPage({
     vault,
     pagePath: params.pagePath,
-    content: params.content,
+    content: nextRendered,
     pageStat,
     pageLabel: "OKF concept page",
   });
@@ -571,7 +601,7 @@ export async function importMemoryWikiOkfBundle(params: {
       pagePath: page.pagePath,
       content: renderWikiMarkdown({
         frontmatter,
-        body: rewritten.body,
+        body: renderOkfBodyWithHumanNotes(rewritten.body),
       }),
     });
     if (!writeResult.created && writeResult.changed) {

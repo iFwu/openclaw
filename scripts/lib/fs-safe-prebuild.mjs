@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -281,7 +282,13 @@ export function restoreFsSafePrebuild(packageRoot, env = process.env, log = cons
     // An exclusive directory reservation preserves any pre-existing package.
     mkdirSync(destination);
     installedRoot = destination;
-    cpSync(stagedPackage, destination, { recursive: true, force: false, errorOnExist: true });
+    for (const entry of readdirSync(stagedPackage)) {
+      cpSync(path.join(stagedPackage, entry), path.join(destination, entry), {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      });
+    }
     if (runProbe(packageRoot, env).status !== "ready") {
       throw new Error("the restored native binding could not be loaded or used");
     }

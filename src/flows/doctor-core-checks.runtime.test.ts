@@ -954,8 +954,8 @@ describe("doctor gateway runtime checks", () => {
     {
       version: "24.15.0",
       text: true,
-      severity: "info",
-      message: "unsupported version, capability probe passed",
+      severity: "error",
+      message: "openclaw requires Node >=24.22.1 <25, or >=26.12.1",
     },
   ])(
     "reports current Node $version probe outcome as $severity",
@@ -983,14 +983,12 @@ describe("doctor gateway runtime checks", () => {
   );
 
   it.each([
-    { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
-    { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },
+    { version: "26.8.1", text: false, status: "unsupported" as const },
+    { version: "24.22.1", text: true, status: "supported" as const },
   ])(
-    "reports recorded Node $version capabilities as $severity",
-    async ({ version, text, status, severity }) => {
-      const message = text
-        ? `Node ${version}: unsupported version, capability probe passed.`
-        : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
+    "reports only failing recorded Node $version capabilities",
+    async ({ version, text, status }) => {
+      const message = `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
       mocks.readGatewayServiceState.mockResolvedValueOnce({
         installed: true,
         loadState: { status: "loaded" },
@@ -1008,20 +1006,24 @@ describe("doctor gateway runtime checks", () => {
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
         nodeSharedSqlite: false,
-        ...(text ? { note: message } : { capabilityError: message }),
+        ...(!text ? { capabilityError: message } : {}),
       });
 
       await expect(
         collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          checkId: "core/doctor/gateway-daemon",
-          severity,
-          message,
-          target: "/opt/runtime/bin/node",
-          ...(severity === "warning" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
-        }),
-      ]);
+      ).resolves.toEqual(
+        text
+          ? []
+          : [
+              expect.objectContaining({
+                checkId: "core/doctor/gateway-daemon",
+                severity: "warning",
+                message,
+                target: "/opt/runtime/bin/node",
+                fixHint: expect.stringContaining("nvm install 26"),
+              }),
+            ],
+      );
     },
   );
 

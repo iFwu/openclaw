@@ -70,7 +70,7 @@ jobs:
           printf '### Changed-check source\n- Base: `%s`\n- Head: `%s`\n' "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/setup-node-env
         with:
-          node-version: "26.8.1"
+          node-version: "26.12.1"
           semantic-checks: "true"
           install-bun: "false"
           install-deps: "false"
@@ -111,7 +111,7 @@ jobs:
           filter: blob:none
       - uses: ./.github/actions/setup-node-env
         with:
-          node-version: "26.8.1"
+          node-version: "26.12.1"
           semantic-checks: "true"
           install-bun: "false"
           install-deps: "false"
@@ -164,7 +164,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-env
         with:
-          node-version: "26.8.1"
+          node-version: "26.12.1"
           semantic-checks: "false"
           install-bun: "false"
           install-deps: "false"
@@ -237,7 +237,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-env
         with:
-          node-version: "26.8.1"
+          node-version: "26.12.1"
           semantic-checks: "false"
           install-bun: "false"
           install-deps: "false"

@@ -3,10 +3,8 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-gateway.types.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
-import {
-  createLiveHookRegistryFacade,
-  hookRunnerGlobalState as state,
-} from "./hook-runner-global-state.js";
+import { ensureGlobalHookRunner } from "./hook-runner-global-internal.js";
+import { hookRunnerGlobalState as state } from "./hook-runner-global-state.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 
@@ -16,23 +14,14 @@ import { createHookRunner, type HookRunner } from "./hooks.js";
  * instance stays stable so references captured mid-run keep seeing current hooks.
  */
 export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
-  const log = createSubsystemLogger("plugins");
   state.registry = registry;
-  if (!state.hookRunner) {
-    state.hookRunner = createHookRunner(createLiveHookRegistryFacade(state), {
-      logger: log,
-      catchErrors: true,
-      failurePolicyByHook: {
-        before_agent_run: "fail-closed",
-        before_install: "fail-closed",
-        before_tool_call: "fail-closed",
-      },
-    });
-  }
+  ensureGlobalHookRunner();
 
   const hookCount = registry.hooks.length;
   if (hookCount > 0) {
-    log.debug(`hook runner initialized with ${hookCount} registered hooks`);
+    createSubsystemLogger("plugins").debug(
+      `hook runner initialized with ${hookCount} registered hooks`,
+    );
   }
 }
 

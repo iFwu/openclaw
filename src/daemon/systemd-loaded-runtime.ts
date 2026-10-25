@@ -3,6 +3,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  runServiceInspectionGuard,
+  type ServiceInspectionBudget,
+  withServiceInspectionBudget,
+} from "./service-inspection-budget.js";
+import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
 } from "./service-inspection-error.js";
@@ -40,11 +45,25 @@ export async function readLoadedSystemdServiceRuntime(
   binding?: SystemdServiceReadBinding,
   target?: SystemdServiceReadTarget,
 ): Promise<GatewayServiceRuntime> {
+  // Caller custody checks are accounted outside the manager deadline.
+  return await withServiceInspectionBudget((clock) =>
+    readLoadedSystemdServiceRuntimeWithinBudget(clock, env, timeoutMs, inspection, binding, target),
+  );
+}
+
+async function readLoadedSystemdServiceRuntimeWithinBudget(
+  clock: ServiceInspectionBudget,
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+  inspection?: GatewayServiceUnitInspection,
+  binding?: SystemdServiceReadBinding,
+  target?: SystemdServiceReadTarget,
+): Promise<GatewayServiceRuntime> {
   const unitName = target?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
   const scope = target?.scope ?? "user";
   const budget =
     timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000;
-  const deadline = performance.now() + budget;
+  const deadline = clock.now() + budget;
   let remainingQueries = 7;
   const unavailable = () =>
     new Error("Loaded systemd runtime could not be inspected without activation.");
@@ -53,8 +72,8 @@ export async function readLoadedSystemdServiceRuntime(
       args[0] === "call" && args[4] === "LoadUnit"
         ? inspection?.assertCurrent
         : (inspection?.assertReadCurrent ?? inspection?.assertCurrent);
-    assertCurrent?.();
-    const remaining = deadline - performance.now();
+    runServiceInspectionGuard(assertCurrent);
+    const remaining = deadline - clock.now();
     if (remaining <= 0) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
@@ -70,8 +89,8 @@ export async function readLoadedSystemdServiceRuntime(
       if (!values) {
         throw unavailable();
       }
-      assertCurrent?.();
-      if (performance.now() >= deadline) {
+      runServiceInspectionGuard(assertCurrent);
+      if (clock.now() >= deadline) {
         throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       return values;
@@ -82,8 +101,8 @@ export async function readLoadedSystemdServiceRuntime(
       scope === "system"
         ? await execBusctlSystem(queryArgs, callTimeout)
         : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
-    assertCurrent?.();
-    if (performance.now() >= deadline) {
+    runServiceInspectionGuard(assertCurrent);
+    if (clock.now() >= deadline) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
     if (result.code !== 0 || result.termination !== "exit") {

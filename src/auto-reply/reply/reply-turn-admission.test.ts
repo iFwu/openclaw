@@ -1,6 +1,7 @@
 // Tests reply turn admission decisions for active, queued, and aborted runs.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
@@ -788,7 +789,7 @@ describe("reply turn admission", () => {
     });
     expect(admission.operation.result).toEqual({
       kind: "aborted",
-      code: "aborted_for_restart",
+      code: "aborted_by_user",
     });
     expect(mutationRan).toBe(false);
     expect(replyRunRegistry.get(sessionKey)).toBe(admission.operation);
@@ -1288,63 +1289,72 @@ describe("reply turn admission", () => {
     active.complete();
   });
 
-  it("adopts a source-keyed command reservation into the target run slot", async () => {
-    const sourceSessionKey = "agent:main:telegram:slash:adopt-user";
-    const targetSessionKey = "agent:main:telegram:group:adopt-target";
-    const targetSessionId = "target-session-adopt";
-    const storePath = createSessionStore({
-      [targetSessionKey]: { sessionId: targetSessionId, updatedAt: Date.now() },
-    });
-    const reservation = createTestReplyOperation({
-      sessionKey: sourceSessionKey,
-      sessionId: "source-reservation-adopt",
-    });
+  it.for([false, true])(
+    "adopts a source-keyed command reservation and preserves restart=%s on interruption",
+    async (restart, { signal }) => {
+      const sourceSessionKey = "agent:main:telegram:slash:adopt-user";
+      const targetSessionKey = "agent:main:telegram:group:adopt-target";
+      const targetSessionId = "target-session-adopt";
+      const storePath = createSessionStore({
+        [targetSessionKey]: { sessionId: targetSessionId, updatedAt: Date.now() },
+      });
+      const reservation = createTestReplyOperation({
+        sessionKey: sourceSessionKey,
+        sessionId: "source-reservation-adopt",
+      });
 
-    const admission = await admitTestReplyTurn({
-      sessionKey: targetSessionKey,
-      sessionId: reservation.sessionId,
-      expectedSessionId: targetSessionId,
-      storePath,
-      waitForActive: false,
-      adoptOperation: reservation,
-    });
+      const admission = await admitTestReplyTurn({
+        sessionKey: targetSessionKey,
+        sessionId: reservation.sessionId,
+        expectedSessionId: targetSessionId,
+        storePath,
+        waitForActive: false,
+        adoptOperation: reservation,
+      });
 
-    expect(admission.status).toBe("owned");
-    if (admission.status !== "owned") {
-      return;
-    }
-    expect(admission.operation).toBe(reservation);
-    expect(reservation.key).toBe(targetSessionKey);
-    expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
-    expect(replyRunRegistry.get(targetSessionKey)).toBe(reservation);
+      expect(admission.status).toBe("owned");
+      if (admission.status !== "owned") {
+        return;
+      }
+      expect(admission.operation).toBe(reservation);
+      expect(reservation.key).toBe(targetSessionKey);
+      expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
+      expect(replyRunRegistry.get(targetSessionKey)).toBe(reservation);
 
-    // Target lifecycle interrupts must reach the adopted operation: reset or
-    // delete on the target session interlocks with the continuation run.
-    reservation.setPhase("running");
-    let mutationRan = false;
-    const mutation = runExclusiveSessionLifecycleMutation({
-      scope: storePath,
-      identities: [targetSessionKey, targetSessionId],
-      prepare: async () => {
-        await interruptSessionWorkAdmissions({
-          scope: storePath,
-          identities: [targetSessionKey, targetSessionId],
+      // Target lifecycle interrupts must reach the adopted operation: reset or
+      // delete on the target session interlocks with the continuation run.
+      reservation.setPhase("running");
+      const aborted = createDeferred();
+      reservation.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+      let mutationRan = false;
+      const mutation = runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: [targetSessionKey, targetSessionId],
+        prepare: async () => {
+          await interruptSessionWorkAdmissions({
+            scope: storePath,
+            identities: [targetSessionKey, targetSessionId],
+            reason: restart ? createAgentRunRestartAbortError() : undefined,
+          });
+        },
+        run: async () => {
+          mutationRan = true;
+        },
+      });
+      try {
+        await withinTest(aborted.promise, signal);
+        expect(reservation.result).toEqual({
+          kind: "aborted",
+          code: restart ? "aborted_for_restart" : "aborted_by_user",
         });
-      },
-      run: async () => {
-        mutationRan = true;
-      },
-    });
-    await vi.waitFor(() => {
-      expect(reservation.abortSignal.aborted).toBe(true);
-    });
-    expect(reservation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(mutationRan).toBe(false);
-
-    reservation.complete();
-    await mutation;
-    expect(mutationRan).toBe(true);
-  });
+        expect(mutationRan).toBe(false);
+      } finally {
+        reservation.complete();
+        await mutation;
+      }
+      expect(mutationRan).toBe(true);
+    },
+  );
 
   it("skips adoption without waiting when the target run slot is owned", async () => {
     const sourceSessionKey = "agent:main:telegram:slash:busy-user";

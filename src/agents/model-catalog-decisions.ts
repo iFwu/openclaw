@@ -11,7 +11,11 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../state/user-model-accounts.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveNativeModelPrimary,
+} from "./agent-scope.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
 import { materializePersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
@@ -29,6 +33,8 @@ import {
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
 import {
   createOpenAIModelRoutesResolver,
@@ -105,6 +111,7 @@ function createModelsListEntryEvaluator(params: {
   profileProvider?: string;
   runtimeOverride?: string;
   normalizeAuthProvider: (provider: string) => string;
+  configuredPinForEntry?: (entry: Pick<ModelCatalogEntry, "provider" | "id">) => string | undefined;
 }): (
   entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
   routeVariants?: readonly ModelCatalogEntry[],
@@ -137,7 +144,9 @@ function createModelsListEntryEvaluator(params: {
         (sameProvider ? params.preferredProfileId : undefined) ?? defaultProfileId;
       // New sessions capture personal defaults with the same strength as explicit account pins.
       const pinnedProfileId =
-        (sameProvider ? params.pinnedProfileId : undefined) ?? defaultProfileId;
+        (sameProvider ? params.pinnedProfileId : undefined) ??
+        defaultProfileId ??
+        params.configuredPinForEntry?.(entry);
       const requestedRuntimeId =
         runtimeId ?? (sameProvider && params.profileProvider ? params.runtimeOverride : undefined);
       const resolved = {
@@ -207,6 +216,20 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     params.workspaceDir ??
     resolveAgentWorkspaceDir(params.cfg, params.agentId) ??
     resolveDefaultAgentWorkspaceDir();
+  const configuredProfileId = splitTrailingAuthProfile(
+    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
+  ).profile;
+  const primary = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    manifestPlugins: metadataSnapshot,
+  });
+  const primaryKey = resolveModelCatalogIdentityKey({
+    provider: primary.provider,
+    id: primary.model,
+  });
+  const configuredPinForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+    resolveModelCatalogIdentityKey(entry) === primaryKey ? configuredProfileId : undefined;
   let authStore = params.preparedAuthStore;
   const preferredProfilesByProvider = new Map<string, string>();
   const personalProviders = new Set<string>();
@@ -287,7 +310,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
   const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) =>
-    preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
+    preferredProfilesByProvider.has(normalizeProviderId(entry.provider)) ||
+    configuredPinForEntry(entry)
       ? host
       : nativeEvaluator(entry, host, runtimeId);
   // Store revisions do not advance when a token or failure window expires.
@@ -322,6 +346,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     providerOutcomes: params.snapshot.providerOutcomes,
     preferredProfilesByProvider,
     runtimeOverride: params.runtimeOverride,
+    configuredPinForEntry,
     normalizeAuthProvider: (provider) =>
       resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot }),
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),

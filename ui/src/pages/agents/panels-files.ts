@@ -219,7 +219,12 @@ export function renderAgentFiles(params: {
                               </button>
                               <button
                                 class="btn btn--sm primary"
-                                ?disabled=${!params.canWrite || !hasContent || params.agentFileSaving || !isDirty}
+                                ?disabled=${
+                                  !params.canWrite ||
+                                  !hasContent ||
+                                  params.agentFileSaving ||
+                                  !isDirty
+                                }
                                 @click=${() => params.onFileSave(activeEntry.name)}
                               >
                                 ${params.agentFileSaving ? t("common.saving") : t("common.save")}

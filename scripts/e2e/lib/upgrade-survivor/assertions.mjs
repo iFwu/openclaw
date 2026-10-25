@@ -1388,6 +1388,7 @@ function assertNpmPluginInstall([
   observationRoot,
   baselineVersion,
   publishedCompanionTarball,
+  expectedRegistryVersion = expectedVersion,
 ]) {
   assert(
     pluginId && packageName && expectedVersion,
@@ -1425,7 +1426,7 @@ function assertNpmPluginInstall([
   const { manifest } = validatePrepublishPluginRegistryArtifact({
     artifactDir,
     expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
-    expectedCandidateVersion: expectedVersion,
+    expectedCandidateVersion: expectedRegistryVersion,
     expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
     requiredPackages: [packageName],
   });

@@ -369,14 +369,14 @@ describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
       makeIsolatedAgentParamsFixture({
         executionRoot,
         skillsSnapshot,
-        job: {
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: SKILL_WORKSHOP_MAINTENANCE_PROMPT,
             toolsAllow: [...SKILL_WORKSHOP_MAINTENANCE_TOOLS],
           },
           delivery: { mode: "none" },
-        },
+        }),
         cfg: {
           agents: {
             defaults: {

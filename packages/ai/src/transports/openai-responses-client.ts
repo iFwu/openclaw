@@ -256,8 +256,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             params.multi_agent?.enabled !== true &&
             params.tools
           ) {
+            const sync = new Set(context.tools?.flatMap((t) => (t.async === false ? t.name : [])));
             params.tools = params.tools.map((tool) =>
-              tool.type === "function" ? { ...tool, async: true } : tool,
+              tool.type === "function" && !sync.has(tool.name) ? { ...tool, async: true } : tool,
             );
           }
           return params;

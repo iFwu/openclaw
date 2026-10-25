@@ -644,4 +644,40 @@ private body
       path: "tables/private.md",
     });
   });
+
+  it("preserves marked human Notes when an OKF concept is re-imported", async () => {
+    const rootDir = await createTempDir("memory-wiki-okf-notes-");
+    const bundlePath = path.join(rootDir, "notes-okf");
+    await fs.mkdir(bundlePath, { recursive: true });
+    const conceptPath = path.join(bundlePath, "customers.md");
+    await fs.writeFile(
+      conceptPath,
+      "---\ntype: Concept\ntitle: Customers\n---\nOriginal body.\n",
+      "utf8",
+    );
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+    const first = await importMemoryWikiOkfBundle({ config, bundlePath });
+    const pagePath = path.join(config.vault.path, getOnlyPagePath(first.pagePaths));
+    const emptyNotes = "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
+    const humanNotes =
+      "<!-- openclaw:human:start -->\nKeep café 🦞 and $& exactly.\n<!-- openclaw:human:end -->";
+    const original = await fs.readFile(pagePath, "utf8");
+    await fs.writeFile(
+      pagePath,
+      original.replace(emptyNotes, () => humanNotes),
+      "utf8",
+    );
+    await fs.writeFile(
+      conceptPath,
+      "---\ntype: Concept\ntitle: Customers\n---\nUpdated body.\n",
+      "utf8",
+    );
+
+    await importMemoryWikiOkfBundle({ config, bundlePath });
+
+    const refreshed = await fs.readFile(pagePath, "utf8");
+    expect(refreshed).toContain("Updated body.");
+    expect(refreshed).not.toContain("Original body.");
+    expect(refreshed).toContain(humanNotes);
+  });
 });

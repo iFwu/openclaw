@@ -1,9 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  isGoogleGemini3FlashModel,
-  isGoogleGemini3ProModel,
-} from "../internal/google-model-family.js";
+import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -21,7 +18,7 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 }
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
+  return isGoogleGemini3ThinkingLevelModel(model.id);
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;

@@ -37,7 +37,7 @@ they are intentionally not part of the public Git tree.
 `.github/workflows/fork-ci-artifacts.yml` runs on pushes to `ifwu-fork` in this
 GitHub fork and can also be manually dispatched. It uses standard `ubuntu-24.04`
 GitHub-hosted runners, not a third-party or larger runner, with no production
-secrets or live model tests. Node is pinned to 26.8.1; `package.json` owns pnpm.
+secrets or live model tests. Node is pinned to 26.12.1; `package.json` owns pnpm.
 
 The workflow starts `build` and `check-plan` independently at the same immutable
 SHA. It reuses `setup-node-env` for the toolchain and enables semantic-check

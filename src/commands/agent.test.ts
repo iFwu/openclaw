@@ -1473,15 +1473,17 @@ describe("agentCommand", () => {
             reason,
           });
           const commandResult = await command;
-          if (interruption === "terminal Stop") {
+          if (reason) {
             expect(observedAbortReason).toBe(reason);
-            expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(true);
           }
+          expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(
+            interruption === "terminal Stop",
+          );
           expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(
-            interruption !== "terminal Stop",
+            interruption === "explicit restart",
           );
           expect(isAgentRunRestartAbortReason(commandResult)).toBe(
-            interruption !== "terminal Stop",
+            interruption === "explicit restart",
           );
         } finally {
           cleanup.abort(createAgentRunDirectAbortError());

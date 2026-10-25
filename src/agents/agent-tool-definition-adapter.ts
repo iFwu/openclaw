@@ -353,6 +353,7 @@ export function toToolDefinitions(
       ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
       description: tool.description ?? "",
       parameters: tool.parameters,
+      ...(tool.async === false ? { async: false as const } : {}),
       prepareArguments: tool.prepareArguments,
       executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {

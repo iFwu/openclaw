@@ -176,6 +176,13 @@ import {
   type RunCliAgentParams,
 } from "./types.js";
 
+const CALLER_SURFACE_TOOL_NAMES = new Set([
+  "screen",
+  "show_widget",
+  "suggest_task",
+  "dismiss_task",
+]);
+
 type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
@@ -1603,9 +1610,17 @@ async function prepareCliRunContextWithinReadFence(
       backendId: backendResolved.id,
       execute: preparedExecution?.execute,
     });
+    // These tools follow the turn's caller surface. Completion and channel turns can drop
+    // them even though the same native conversation remains authoritative. Their changes
+    // still alter the system prompt and restart a warm process; exclude only the persisted
+    // session fingerprint so the resumed CLI retains its native context.
+    const sessionPromptToolNames = promptTools
+      .map((tool) => tool.name)
+      .filter((name) => !CALLER_SURFACE_TOOL_NAMES.has(name))
+      .toSorted();
     const promptToolNamesHash =
       bundleMcpEnabled && mcpLoopbackRuntime
-        ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+        ? hashCliSessionText(JSON.stringify(sessionPromptToolNames))
         : undefined;
     // `sessionMode: none` may still use a live transport in-process, but neither a
     // returned nor previously stored id is authority for cross-process continuity.
@@ -1665,9 +1680,7 @@ async function prepareCliRunContextWithinReadFence(
       preparedBackendFinal.backend.input === "stdin" &&
       prepareDeps.getCliLiveSessionGeneration({
         backendId: backendResolved.id,
-        agentAccountId: params.agentAccountId,
         agentId: workspaceResolution.agentId,
-        authProfileId: effectiveAuthProfileId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       });

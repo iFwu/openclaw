@@ -14,6 +14,10 @@ normally needs no manual intervention. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Before accepting another message, the Gateway retires leftover recovery records
+whose runs are all recorded terminal and have no remaining execution or delivery
+owner. This lets a stopped conversation continue without resetting its history.
+
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a human Control UI or channel source claim, recovery uses the claim
 rather than treating the latest steering message as a new delegated request.
@@ -23,6 +27,9 @@ message alone cannot restore missing sender authority.
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
 provider reports an error and the turn settles before shutdown discovers it.
+The next visible message preserves an interrupted turn's recovery claim even
+when its saved status is failed, timed out, or killed. Recovery resumes the
+interrupted work before the new message takes foreground ownership.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.

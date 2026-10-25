@@ -53,6 +53,7 @@ describe("gateway startup model runtime publication", () => {
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      joinSupersedingPublication: true,
       startup: true,
       catalogMode: "static",
     });
@@ -90,6 +91,7 @@ describe("gateway startup model runtime publication", () => {
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      joinSupersedingPublication: true,
       startup: true,
       catalogMode: "static",
     });
@@ -110,6 +112,7 @@ describe("gateway startup model runtime publication", () => {
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      joinSupersedingPublication: true,
       startup: true,
       catalogMode: "static",
     });
@@ -125,6 +128,7 @@ describe("gateway startup model runtime publication", () => {
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      joinSupersedingPublication: true,
       startup: true,
       catalogMode: "static",
       defaultWorkspaceDir: "/tmp/explicit-workspace",

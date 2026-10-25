@@ -114,6 +114,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (pluginInstallConfigImport?.pluginInventoryChanged) {
     const { readConfigPreflightSnapshot } = await import("./config-preflight-snapshot.js");
     const refreshed = await readConfigPreflightSnapshot({
+      purpose: "doctor",
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
       preparePluginMetadataSnapshot: true,
@@ -142,15 +143,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
   });
   preparingResources.use(pluginMetadataSnapshotScope);
-  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
-  const invalidatePluginMetadataSnapshot = () => {
-    // Filesystem/install repairs replace the authoritative plugin generation.
-    pluginMetadataSnapshotState.current = undefined;
-    pluginMetadataSnapshotScope.invalidate();
-  };
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
     const soleAgentId = tryResolveSoleAgentId(config);
-    return runWithPluginMetadataSnapshot(
+    return pluginMetadataSnapshotScope.run(
       {
         config,
         workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
@@ -171,7 +166,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
-  const configRepairWarnings: string[] = [];
+  const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
@@ -537,7 +532,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       env: process.env,
       blockedCodexProviderPlan,
       pluginMetadataSnapshotState,
-      runWithPluginMetadataSnapshot,
+      runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
       ...(prompter
         ? {
             onCapabilityConsent: createPluginCapabilityConsentPrompter({
@@ -552,6 +547,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         : {}),
     });
     state = repairSequence.state;
+    configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -734,7 +730,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
     ...migrationResult,
-    runWithPluginMetadataSnapshot,
-    invalidatePluginMetadataSnapshot,
+    runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
+    invalidatePluginMetadataSnapshot: () => {
+      pluginMetadataSnapshotState.current = undefined;
+      pluginMetadataSnapshotScope.invalidate();
+    },
   };
 }

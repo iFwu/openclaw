@@ -188,7 +188,12 @@ it.each(["observe", "persist"] as const)(
 );
 
 it.each([
-  { stopReason: "restart", status: "running", recovery: "recoverable", timeoutPhase: undefined },
+  {
+    stopReason: "restart",
+    status: "interrupted",
+    recovery: "recoverable",
+    timeoutPhase: undefined,
+  },
   { stopReason: "aborted", status: "killed", recovery: "inactive", timeoutPhase: undefined },
   { stopReason: "restart", status: "timeout", recovery: "inactive", timeoutPhase: "provider" },
 ])(

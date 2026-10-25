@@ -367,6 +367,8 @@ export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arg
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
+  /** Host-generated context projected as a user message, not a human-authored turn. */
+  synthetic?: true;
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
   /**
@@ -377,6 +379,8 @@ export interface UserMessage {
   runtimeContextCarrier?: boolean;
   /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
   runtimeContextCarrierRetained?: boolean;
+  /** Operator-authored text projected to system authority on capable routes. */
+  operatorMessage?: { turnScoped: boolean };
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -467,6 +471,11 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   name: string;
   description: string;
   parameters: TParameters;
+  /**
+   * `false` keeps calls synchronous where the provider can keep generating after a call
+   * (OpenAI async tools): the response pauses until earlier results are delivered.
+   */
+  async?: false;
 }
 
 /** Text-model request context shared by provider adapters. */

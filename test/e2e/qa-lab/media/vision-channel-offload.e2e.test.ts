@@ -210,6 +210,9 @@ describe("QA-channel vision offload", () => {
     expect(imageRequest.cursor, requestDiagnostics).toBeLessThan(activeModelRequest.cursor);
     expect(imageRequest.allInputText, requestDiagnostics).toContain(IMAGE_PROMPT);
     expect(activeModelRequest.allInputText, requestDiagnostics).toContain(PROVIDER_SUMMARY);
+    expect(activeModelRequest.allInputText, requestDiagnostics).toContain(
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
 
     const visibleOutbound = state
       .getSnapshot()

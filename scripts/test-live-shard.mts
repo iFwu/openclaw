@@ -57,6 +57,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
   ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  ["test/gateway-agentsapi.live.test.ts", ["OPENCLAW_LIVE_AGENTS_API"]],
   [
     "src/agents/subagents/announce/subagent-continuation.live.test.ts",
     ["OPENCLAW_LIVE_SUBAGENT_E2E"],
@@ -344,8 +345,9 @@ const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
       "src/agents/google-gemini-switch.live.test.ts",
     ]),
   ],
-  // Extended-stable 2026.9.33 is cut from the 2026.9.9 line with the same skips.
+  // Extended-stable 2026.9.33 and 2026.9.34 are cut from the 2026.9.9 line with the same skips.
   ["2026.9.33", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
+  ["2026.9.34", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
 ]);
 
 export function withoutReleaseWaivedLiveFiles(
